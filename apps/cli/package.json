@@ -1,0 +1,27 @@
+{
+  "name": "@supercomment/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "supercomment": "./dist/bin/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx src/bin/index.ts",
+    "build": "tsup",
+    "start": "node dist/bin/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supercomment/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.1",
+    "tsup": "8.5.1",
+    "tsx": "4.22.3",
+    "typescript": "5.9.3"
+  }
+}
