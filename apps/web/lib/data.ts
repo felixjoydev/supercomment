@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
 import type { AccessMode } from '@/lib/link';
 import type { PreviewDbStatus } from '@/lib/status';
+import { toCommentView } from '@/lib/comments/transform';
+import type { CommentView, CommentRow } from '@/lib/comments/types';
 
 /**
  * Server-side data access for the dashboard. Every read/write goes through the
@@ -107,6 +109,35 @@ export async function createTeam(name: string): Promise<TeamRow> {
   const { data, error } = await supabase.rpc('create_team', { p_name: name });
   if (error) throw error;
   return data as TeamRow;
+}
+
+/**
+ * Initial RLS-scoped comment list for a preview's review dashboard. The browser
+ * client then keeps it live via the private broadcast channel (U9 realtime).
+ * Joins the authoring participant for a display name. Returns the full set
+ * (open + history); the client picks the default view via selectDefaultView.
+ */
+export async function getCommentsForPreview(previewId: string): Promise<CommentView[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from('comments')
+    .select(
+      'id, preview_id, number, author_participant, trust_level, intent, severity, note, status, fidelity, context, path, resolved_summary, created_at, participants:author_participant(display_name)',
+    )
+    .eq('preview_id', previewId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  return (data ?? []).map((row) => {
+    const raw = row as Record<string, unknown>;
+    const participant = Array.isArray(raw.participants)
+      ? (raw.participants as { display_name?: string | null }[])[0]
+      : (raw.participants as { display_name?: string | null } | null);
+    const authorName = participant?.display_name ?? null;
+    return toCommentView(row as unknown as CommentRow, authorName);
+  });
 }
 
 /** Create a project under a team (RLS: must be a team member). */

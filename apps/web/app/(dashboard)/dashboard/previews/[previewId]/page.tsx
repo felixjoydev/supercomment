@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getPreview, getProject } from '@/lib/data';
+import { getPreview, getProject, getCommentsForPreview } from '@/lib/data';
 import { deriveStatus } from '@/lib/status';
 import { buildGuestUrl, type AccessMode } from '@/lib/link';
 import { StatusBadge } from '../../status-badge';
 import { LinkManager } from './link-manager';
+import { CommentBoard } from './comments/comment-board';
 
 /**
  * Preview detail / settings page: live/offline status + full link management
@@ -40,6 +41,13 @@ export default async function PreviewPage({
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? '';
   const guestUrl = baseUrl ? buildGuestUrl(baseUrl, preview.slug, linkState) : null;
 
+  // Initial RLS-scoped comment list; CommentBoard keeps it live via the private
+  // broadcast channel. Reaching this page already implies team membership (RLS
+  // notFound otherwise), and the resolve/dismiss RPCs re-check membership, so
+  // any member who can view may also act on comments.
+  const initialComments = await getCommentsForPreview(previewId).catch(() => []);
+  const canMutate = true;
+
   return (
     <div>
       <div className="page-head">
@@ -69,6 +77,17 @@ export default async function PreviewPage({
         expiresAt={preview.expires_at}
         guestUrl={guestUrl}
       />
+
+      <section className="comments-section" style={{ marginTop: '2rem' }}>
+        <h2 className="page-title" style={{ fontSize: '1.125rem' }}>
+          Comments
+        </h2>
+        <CommentBoard
+          previewId={preview.id}
+          initialComments={initialComments}
+          canMutate={canMutate}
+        />
+      </section>
     </div>
   );
 }
