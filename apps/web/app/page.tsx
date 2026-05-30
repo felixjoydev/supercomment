@@ -1,9 +1,13 @@
-export default function HomePage() {
-  return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "3rem" }}>
-      <h1>SuperComment</h1>
-      <p>Team visual feedback for AI-driven development.</p>
-      <p>Backend + dashboard scaffold. Implementation in progress.</p>
-    </main>
-  );
+import { redirect } from 'next/navigation';
+import { getVerifiedClaims } from '@/lib/server-auth';
+
+/**
+ * Root: send signed-in members to the dashboard, everyone else to login.
+ */
+export default async function HomePage() {
+  const claims = await getVerifiedClaims();
+  if (claims && claims.is_anonymous !== true) {
+    redirect('/dashboard');
+  }
+  redirect('/login');
 }
