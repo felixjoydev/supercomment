@@ -1,19 +1,22 @@
 /**
- * SuperComment injected annotation overlay — entry point (U6).
+ * SuperComment injected annotation overlay — entry point.
  *
  * The proxy (U3) injects this built IIFE into every served HTML page. On load
  * we mount the shadow-DOM-isolated overlay UI: a mode-switching toolbar, the
  * four selection modes, the comment form, guest-name entry, and numbered
  * markers (R2, R5, R9, R10, R13 display).
  *
- * Seams left for later units:
- *   - U7 (context capture) replaces the `StubContextCapturer`.
- *   - U5/U9 (submission) replaces the `StubCommentSubmitter`.
+ * Seams:
+ *   - U7 (context capture) — the default capturer is now the REAL
+ *     `RealContextCapturer` (generic + React + screenshot), replacing the U6
+ *     `StubContextCapturer`. A caller may still override `config.capturer`.
+ *   - U5/U9 (submission) replaces the `StubCommentSubmitter` (still a stub).
  * Both are wired through the typed `ContextCapturer` / `CommentSubmitter`
- * interfaces (see `core/types.ts`); U6 ships clearly-marked stubs only.
+ * interfaces (see `core/types.ts`).
  */
 import { OverlayController } from "./controller.js";
-import { StubContextCapturer, StubCommentSubmitter } from "./core/stubs.js";
+import { StubCommentSubmitter } from "./core/stubs.js";
+import { RealContextCapturer } from "./capture/index.js";
 import type { OverlayConfig } from "./core/types.js";
 
 /** Global config the proxy can set on the page before the bundle runs. */
@@ -50,7 +53,7 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
   const config: OverlayConfig = {
     previewId,
     previewKey,
-    capturer: overrides.capturer ?? new StubContextCapturer(),
+    capturer: overrides.capturer ?? new RealContextCapturer(),
     submitter: overrides.submitter ?? new StubCommentSubmitter(),
     doc: overrides.doc,
     storage: overrides.storage,
