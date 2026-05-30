@@ -1,88 +1,64 @@
 /**
- * Secret + form-value masking for snapshots (U10).
+ * Secret/PII masking for snapshots (U10), consolidated under U13.
  *
- * Snapshots can capture whatever the reviewer's page is showing — including
- * a half-filled login form or an API token rendered into the DOM. We strip the
- * obvious cases before the payload ever leaves the browser.
+ * Two jobs:
+ *  1. Mask user-entered values in form controls (input/textarea/select) — a
+ *     reviewer may have typed credentials or PII that must never be uploaded.
+ *  2. Redact secret-SHAPED strings in serialized text/attributes (tokens, keys,
+ *     PII) regardless of origin.
  *
- * U13 consolidation: the secret-shaped patterns now come from the canonical
- * `@supercomment/shared` redaction module (the single source reused by context
- * capture and any server-side pass). This file keeps the snapshot-specific DOM
- * walking + form-control masking on top of those shared patterns.
- *
- * Best-effort by design: regex/DOM heuristics never catch everything.
+ * U13 change: the secret-pattern definitions + free-text redaction now live in
+ * the canonical shared module (`@supercomment/shared` → redaction.ts). This file
+ * DELEGATES job (2) by re-exporting those symbols (single source of truth, no
+ * drifting copy) and keeps the snapshot-specific form-control masking (job 1).
  */
-import { REDACTION_PATTERNS } from "@supercomment/shared";
 
-/** Replace secret-shaped substrings in free text. */
-export function maskText(text: string): string {
-  let out = text;
-  for (const re of REDACTION_PATTERNS) {
-    re.lastIndex = 0;
-    out = out.replace(re, "[redacted]");
-    re.lastIndex = 0;
-  }
-  return out;
+export {
+  redactSecrets,
+  containsSecret,
+  SECRET_PATTERNS,
+  REDACTION_PLACEHOLDER,
+  type SecretPattern,
+} from "@supercomment/shared";
+
+/** Placeholder used for masked form-control values (distinct from redaction). */
+export const MASKED_VALUE = "••••••";
+
+/** Tag names whose entered values we mask. */
+const VALUE_BEARING_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+export interface MaskFieldInput {
+  tag: string;
+  /** Element attributes already collected by the serializer. A copy is returned. */
+  attributes: Record<string, string>;
 }
-
-const SENSITIVE_INPUT_TYPES = new Set([
-  "password",
-  "email",
-  "tel",
-  "hidden",
-  "number",
-]);
-
-const SENSITIVE_ATTRS = ["value", "data-value"];
 
 /**
- * Mask a single serialized node in place: form-control values and any
- * secret-shaped text in attributes or text content.
+ * Given a serialized element's tag + attributes, return a masked attribute map
+ * for form controls. Password fields and every other value-bearing control have
+ * their `value` (and any mirrored value attribute) masked — a reviewer may have
+ * typed PII into a plain text input. Non-value-bearing elements pass through
+ * untouched. Pure.
  */
-export function maskNode(node: {
-  tag?: string;
-  attrs?: Record<string, string>;
-  text?: string;
-  type?: string;
-}): void {
-  // Mask sensitive form-control values.
-  if (node.tag && node.attrs) {
-    const type = (node.attrs["type"] ?? "").toLowerCase();
-    const isFormControl =
-      node.tag === "input" || node.tag === "textarea" || node.tag === "select";
-    if (isFormControl) {
-      const shouldMaskAll =
-        node.tag !== "input" || SENSITIVE_INPUT_TYPES.has(type) || type === "";
-      for (const attr of SENSITIVE_ATTRS) {
-        if (node.attrs[attr] !== undefined) {
-          node.attrs[attr] = shouldMaskAll
-            ? "[masked]"
-            : maskText(node.attrs[attr]);
-        }
-      }
-    } else {
-      for (const attr of Object.keys(node.attrs)) {
-        node.attrs[attr] = maskText(node.attrs[attr]);
-      }
+export function maskFieldAttributes(
+  input: MaskFieldInput,
+): Record<string, string> {
+  const tag = input.tag.toUpperCase();
+  if (!VALUE_BEARING_TAGS.has(tag)) {
+    return input.attributes;
+  }
+  const attrs = { ...input.attributes };
+
+  if ("value" in attrs) {
+    attrs.value = MASKED_VALUE;
+  }
+  // Some frameworks mirror the value into data-value / defaultValue; mask those
+  // too. Placeholders are not user data and are preserved.
+  for (const key of Object.keys(attrs)) {
+    if (key === "placeholder") continue;
+    if (/^value$|defaultvalue/i.test(key)) {
+      attrs[key] = MASKED_VALUE;
     }
   }
-
-  if (node.text) {
-    node.text = maskText(node.text);
-  }
-}
-
-/** Recursively mask a serialized DOM tree in place. */
-export function maskTree(node: {
-  tag?: string;
-  attrs?: Record<string, string>;
-  text?: string;
-  children?: unknown[];
-}): void {
-  maskNode(node);
-  if (Array.isArray(node.children)) {
-    for (const child of node.children) {
-      maskTree(child as Parameters<typeof maskTree>[0]);
-    }
-  }
+  return attrs;
 }

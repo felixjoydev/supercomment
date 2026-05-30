@@ -109,6 +109,13 @@ describe('createProxy — content-type gating & injection', () => {
         res.end('<html><head></head><body></body></html>');
         return;
       }
+      if (url === '/.env' || url === '/app.js.map') {
+        // Upstream WOULD serve a secret here; the proxy must block it before
+        // ever forwarding the request, so this body should never reach a client.
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('SECRET_SHOULD_NOT_LEAK=topsecret');
+        return;
+      }
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('nf');
     });
@@ -228,6 +235,20 @@ describe('createProxy — content-type gating & injection', () => {
     const res = await get(`${proxyUrl}/missing`);
     expect(res.status).toBe(404);
     expect(res.body.toString()).toBe('nf');
+  });
+
+  it('blocks a sensitive .env path with 404 without proxying upstream', async () => {
+    const res = await get(`${proxyUrl}/.env`);
+    expect(res.status).toBe(404);
+    const body = res.body.toString('utf8');
+    expect(body).toBe('Not Found');
+    expect(body).not.toContain('SECRET_SHOULD_NOT_LEAK');
+  });
+
+  it('blocks a source-map path with 404 without proxying upstream', async () => {
+    const res = await get(`${proxyUrl}/app.js.map`);
+    expect(res.status).toBe(404);
+    expect(res.body.toString('utf8')).not.toContain('SECRET_SHOULD_NOT_LEAK');
   });
 
   it('returns 502 when the upstream is unreachable', async () => {
