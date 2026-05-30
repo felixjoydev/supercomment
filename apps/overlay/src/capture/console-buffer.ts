@@ -1,4 +1,4 @@
-import type { ConsoleError } from "@supercomment/shared";
+import { redactSecrets, type ConsoleError } from "@supercomment/shared";
 
 /**
  * Recent-console-error buffer (U7).
@@ -39,9 +39,12 @@ function record(level: ConsoleLevel, message: string): void {
   if (!message) {
     return;
   }
+  // U13: console output frequently contains logged tokens/keys/PII. Redact via
+  // the canonical shared module before buffering so secrets never reach a
+  // captured comment.
   state.entries.push({
     level,
-    message,
+    message: redactSecrets(message),
     timestamp: new Date().toISOString(),
   });
   const overflow = state.entries.length - state.capacity;

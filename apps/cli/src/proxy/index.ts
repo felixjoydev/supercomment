@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { URL } from 'node:url';
 import { InjectTransform, buildOverlayScriptTag } from './inject-transform.js';
 import { rewriteCsp, CSP_HEADER_NAMES } from './csp.js';
+import { isSensitivePath } from './sensitive-paths.js';
 
 /**
  * Reverse proxy with overlay injection (U3).
@@ -127,6 +128,16 @@ export function createProxy(config: ProxyConfig): Proxy {
 
   const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const reqUrl = req.url ?? '/';
+
+    // U13 / R26: refuse known secret/debug leak paths (.env, .git/, *.map,
+    // /__nextjs_*) BEFORE proxying upstream. Returns 404 (not 403) so we don't
+    // confirm the resource exists to a probing client.
+    if (isSensitivePath(reqUrl)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('Not Found');
+      return;
+    }
+
     const options: RequestOptions = {
       protocol: target.protocol,
       hostname: target.hostname,

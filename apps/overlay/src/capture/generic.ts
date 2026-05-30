@@ -5,6 +5,8 @@ import type {
   Viewport,
 } from "@supercomment/shared";
 
+import { redactSecrets } from "@supercomment/shared";
+
 import type { Rect, SelectionTarget } from "../core/types.js";
 import { captureAnchors, buildDomPath, cssEscape } from "./anchors.js";
 import { getRecentConsoleErrors } from "./console-buffer.js";
@@ -409,11 +411,15 @@ function surroundingHtmlFor(
   target: SelectionTarget,
   el: Element | null,
 ): string | undefined {
+  // U13: every captured-text path is redacted through the canonical shared
+  // module before it can leave the page — surrounding HTML can contain tokens,
+  // keys, or PII in attributes/text nodes.
   if (el) {
-    return readSurroundingHtml(el);
+    const html = readSurroundingHtml(el);
+    return html === undefined ? undefined : redactSecrets(html);
   }
   if (target.kind === "text") {
-    return target.quotedText.slice(0, MAX_SURROUNDING_HTML_LENGTH);
+    return redactSecrets(target.quotedText.slice(0, MAX_SURROUNDING_HTML_LENGTH));
   }
   return undefined;
 }
