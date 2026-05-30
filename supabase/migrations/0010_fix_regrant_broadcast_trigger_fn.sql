@@ -1,0 +1,17 @@
+-- 0010_fix_regrant_broadcast_trigger_fn.sql
+-- Second correction to 0008 (the first was 0009, which re-granted the RLS helper
+-- functions to `authenticated`).
+--
+-- 0008 also revoked EXECUTE on broadcast_comment_change() from anon/authenticated.
+-- That function is the AFTER INSERT/UPDATE TRIGGER on public.comments. In
+-- Postgres, firing a trigger requires the writing role to hold EXECUTE on the
+-- trigger function, so revoking it broke EVERY comment write — the guest path
+-- failed with "permission denied for function broadcast_comment_change" (caught
+-- live: create_guest_comment as the anon role threw SQLSTATE 42501).
+--
+-- Re-grant it. This is safe to leave REST-executable: the function reads TG_OP /
+-- NEW / OLD and is inert (errors / no-ops) when called directly outside a trigger
+-- context, so it is not a usable standalone RPC. The genuine hardening from 0008
+-- and 0009 — anon cannot execute the is_* RLS helpers, authenticated retains them
+-- for policy evaluation — is unaffected.
+grant execute on function public.broadcast_comment_change() to anon, authenticated;
