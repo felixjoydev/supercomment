@@ -195,7 +195,7 @@ describe('serializeDocument', () => {
       baseOpts,
     );
     expect(stylesheets).toHaveLength(1);
-    expect(stylesheets[0].css).toContain('url(https://app.example.com/bg.png)');
+    expect(stylesheets[0]!.css).toContain('url(https://app.example.com/bg.png)');
   });
 
   it('flags a cross-origin stylesheet as degraded without throwing', () => {
@@ -208,7 +208,7 @@ describe('serializeDocument', () => {
       );
     }).not.toThrow();
     expect(result.degraded).toHaveLength(1);
-    expect(result.degraded[0].kind).toBe('cross-origin-stylesheet');
+    expect(result.degraded[0]!.kind).toBe('cross-origin-stylesheet');
     expect(result.stylesheets).toHaveLength(0);
   });
 

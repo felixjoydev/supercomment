@@ -7,22 +7,29 @@
  * markers (R2, R5, R9, R10, R13 display).
  *
  * Seams:
- *   - U7 (context capture) — the default capturer is now the REAL
- *     `RealContextCapturer` (generic + React + screenshot), replacing the U6
- *     `StubContextCapturer`. A caller may still override `config.capturer`.
- *   - U5/U9 (submission) replaces the `StubCommentSubmitter` (still a stub).
+ *   - U7 (context capture) — the default capturer is the REAL
+ *     `RealContextCapturer` (generic + React + screenshot).
+ *   - U4 (submission) — the default submitter is now the REAL
+ *     `SupabaseCommentSubmitter` (guest `create_guest_comment` RPC) when the
+ *     proxy-injected boot config carries a link secret + supabase url/anon key;
+ *     otherwise it falls back to `StubCommentSubmitter` for standalone/dev use.
  * Both are wired through the typed `ContextCapturer` / `CommentSubmitter`
- * interfaces (see `core/types.ts`).
+ * interfaces (see `core/types.ts`) and remain overridable via `mount(config)`.
  */
 import { OverlayController } from "./controller.js";
 import { StubCommentSubmitter } from "./core/stubs.js";
 import { RealContextCapturer } from "./capture/index.js";
+import { submitterFromBootConfig } from "./submit/index.js";
 import type { OverlayConfig } from "./core/types.js";
 
 /** Global config the proxy can set on the page before the bundle runs. */
 interface InjectedBootConfig {
   previewId?: string;
   previewKey?: string;
+  /** Guest link secret for `create_guest_comment` (set by `supercomment start`). */
+  linkSecret?: string;
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
 }
 
 declare global {
@@ -50,11 +57,19 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
     boot.previewKey ??
     (typeof location !== "undefined" ? location.host : "preview");
 
+  // Prefer the real Supabase submitter when the proxy injected a complete boot
+  // config (link secret + supabase url/anon key); fall back to the stub so the
+  // bundle still runs standalone (e.g. local dev / the test page).
+  const submitter =
+    overrides.submitter ??
+    submitterFromBootConfig(boot) ??
+    new StubCommentSubmitter();
+
   const config: OverlayConfig = {
     previewId,
     previewKey,
     capturer: overrides.capturer ?? new RealContextCapturer(),
-    submitter: overrides.submitter ?? new StubCommentSubmitter(),
+    submitter,
     doc: overrides.doc,
     storage: overrides.storage,
   };
