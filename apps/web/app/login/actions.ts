@@ -39,6 +39,44 @@ export async function signInWithEmail(
   return { sent: true };
 }
 
+/**
+ * Dev-friendly email + password auth. Avoids the magic-link email path entirely
+ * (Supabase's built-in mailer is rate-limited and unreliable), so local dev and
+ * demos sign in instantly. Sign-up succeeds immediately when "Confirm email" is
+ * OFF in the Supabase dashboard; if it's ON, the user must confirm first.
+ */
+export async function signInWithPassword(
+  _prev: { error?: string; sent?: boolean } | undefined,
+  formData: FormData,
+): Promise<{ error?: string; sent?: boolean }> {
+  const email = String(formData.get('email') ?? '').trim();
+  const password = String(formData.get('password') ?? '');
+  if (!email || !password) return { error: 'Email and password are required' };
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return { error: error.message };
+  redirect('/dashboard');
+}
+
+export async function signUpWithPassword(
+  _prev: { error?: string; sent?: boolean } | undefined,
+  formData: FormData,
+): Promise<{ error?: string; sent?: boolean }> {
+  const email = String(formData.get('email') ?? '').trim();
+  const password = String(formData.get('password') ?? '');
+  if (!email || !password) return { error: 'Email and password are required' };
+  if (password.length < 6) return { error: 'Password must be at least 6 characters' };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) return { error: error.message };
+  // When "Confirm email" is OFF, a session is returned and we're signed in.
+  if (data.session) redirect('/dashboard');
+  // Otherwise the account exists but needs email confirmation.
+  return { sent: true };
+}
+
 export async function signInWithGitHub(): Promise<void> {
   const supabase = await createClient();
   const hdrs = await headers();
