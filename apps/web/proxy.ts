@@ -16,6 +16,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Run on everything except Next internals and static assets.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  // Run on everything except Next internals, static assets, AND the public
+  // shared-preview routes (/s/<slug>): those must be reachable by guests with
+  // no account, so the session-refresh/redirect layer must not touch them.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|s/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
 };

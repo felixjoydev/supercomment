@@ -52,6 +52,10 @@ export async function updateSession(request: NextRequest) {
   const isPublic =
     pathname.startsWith('/login') ||
     pathname.startsWith('/auth') ||
+    // Shared preview links are public by design: guests with the link (and no
+    // account) must reach them. Access control for /s/ is the slug + link
+    // secret + access_mode, NOT a dashboard login.
+    pathname.startsWith('/s/') ||
     pathname === '/';
 
   if (!claims && !isPublic) {
