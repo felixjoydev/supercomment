@@ -47,6 +47,13 @@ export interface ProxyConfig {
    */
   overlayScriptUrl: string;
   /**
+   * URL of a boot-config script to inject BEFORE the overlay bundle (U4). It
+   * sets `window.__SUPERCOMMENT__` (preview id, link secret, supabase url/anon
+   * key) so the overlay can construct its real comment submitter. Optional: when
+   * absent, only the overlay tag is injected (U3 behaviour).
+   */
+  bootScriptUrl?: string;
+  /**
    * Backend origin the overlay talks to (added to CSP connect-src). Optional.
    */
   backendOrigin?: string;
@@ -102,7 +109,13 @@ export function createProxy(config: ProxyConfig): Proxy {
   const target = new URL(config.target);
   const transport = chooseTransport(target);
   const nonce = config.nonce ?? randomBytes(16).toString('base64url');
-  const scriptTag = buildOverlayScriptTag({ src: config.overlayScriptUrl, nonce });
+  // Inject the boot-config script (if any) BEFORE the overlay bundle, so
+  // `window.__SUPERCOMMENT__` is assigned before the overlay reads it. Both
+  // carry the nonce so the CSP rewrite whitelists them.
+  const bootTag = config.bootScriptUrl
+    ? buildOverlayScriptTag({ src: config.bootScriptUrl, nonce })
+    : '';
+  const scriptTag = bootTag + buildOverlayScriptTag({ src: config.overlayScriptUrl, nonce });
 
   function buildUpstreamHeaders(
     req: IncomingMessage,

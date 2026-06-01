@@ -300,6 +300,7 @@ export async function runStart(
       target: `http://${host}:${port}`,
       // Inject the boot config FIRST, then the overlay bundle (defer keeps order
       // by document position regardless). Both live on the front server origin.
+      bootScriptUrl: BOOT_CONFIG_PATH,
       overlayScriptUrl: OVERLAY_BUNDLE_PATH,
       ...(backendOrigin ? { backendOrigin } : {}),
     });
