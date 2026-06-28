@@ -159,6 +159,59 @@ describe('buildGuestUrl', () => {
   });
 });
 
+describe('set_deploy_url', () => {
+  it('accepts an allowlisted https URL and returns it as deploy_url', () => {
+    const patch = computeLinkPatch(
+      { type: 'set_deploy_url', deployUrl: 'https://my-app.vercel.app' },
+      baseState(),
+    );
+    expect(patch).toEqual({ deploy_url: 'https://my-app.vercel.app' });
+  });
+
+  it('trims surrounding whitespace before storing', () => {
+    const patch = computeLinkPatch(
+      { type: 'set_deploy_url', deployUrl: '  https://preview.example.com  ' },
+      baseState(),
+    );
+    expect(patch.deploy_url).toBe('https://preview.example.com');
+  });
+
+  it('rejects a non-https URL', () => {
+    expect(() =>
+      computeLinkPatch(
+        { type: 'set_deploy_url', deployUrl: 'http://my-app.vercel.app' },
+        baseState(),
+      ),
+    ).toThrow(LinkActionError);
+  });
+
+  it('rejects localhost / IP-literal / mDNS hosts', () => {
+    for (const bad of [
+      'https://localhost:3000',
+      'https://127.0.0.1',
+      'https://192.168.1.10',
+      'https://[::1]',
+      'https://app.local',
+    ]) {
+      expect(() =>
+        computeLinkPatch({ type: 'set_deploy_url', deployUrl: bad }, baseState()),
+      ).toThrow(LinkActionError);
+    }
+  });
+
+  it('rejects an empty / missing URL', () => {
+    expect(() =>
+      computeLinkPatch({ type: 'set_deploy_url', deployUrl: '   ' }, baseState()),
+    ).toThrow(LinkActionError);
+    expect(() =>
+      computeLinkPatch(
+        { type: 'set_deploy_url', deployUrl: undefined as unknown as string },
+        baseState(),
+      ),
+    ).toThrow(LinkActionError);
+  });
+});
+
 describe('slug generation', () => {
   it('generates a URL-safe slug of the requested length', () => {
     const s = generateSlug();

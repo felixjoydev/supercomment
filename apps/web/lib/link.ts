@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { classifyDeployUrl } from './external-redirect';
 
 /**
  * Pure link-management logic for previews. Kept free of React / Next / Supabase
@@ -26,6 +27,12 @@ export interface LinkPatch {
   access_mode?: AccessMode;
   link_secret?: string | null;
   expires_at?: string | null;
+  /**
+   * Validated deploy URL for embedded mode. Written through the
+   * register_deploy_target RPC (not a direct UPDATE) so the allowlist is
+   * enforced server-side; computeLinkPatch only validates + normalizes it here.
+   */
+  deploy_url?: string;
 }
 
 /**
@@ -53,7 +60,8 @@ export type LinkAction =
   | { type: 'set_access_mode'; accessMode: AccessMode }
   | { type: 'regenerate' }
   | { type: 'revoke' }
-  | { type: 'set_expiry'; expiresAt: string | null };
+  | { type: 'set_expiry'; expiresAt: string | null }
+  | { type: 'set_deploy_url'; deployUrl: string };
 
 /**
  * Generate a cryptographically-random, URL-safe guest-link secret of at least
@@ -82,6 +90,10 @@ export function generateLinkSecret(): string {
  *   - revoke: clear the secret AND force access back to team_only, so the guest
  *     link is dead and cannot be silently re-enabled with the old secret.
  *   - set_expiry: set or clear expires_at (ISO string or null).
+ *   - set_deploy_url: validate the embedded-mode deploy URL against the shared
+ *     allowlist (isAllowedDeployUrl) and return the normalized value. The route
+ *     writes it via the register_deploy_target RPC, which re-validates — this is
+ *     the UX/early-validation half of that defense-in-depth pair.
  *
  * Throws on invalid input so the caller returns a 400.
  */
@@ -122,6 +134,13 @@ export function computeLinkPatch(action: LinkAction, current: PreviewLinkState):
         throw new LinkActionError('Invalid expiry timestamp');
       }
       return { expires_at: ts.toISOString() };
+    }
+
+    case 'set_deploy_url': {
+      const raw = typeof action.deployUrl === 'string' ? action.deployUrl.trim() : '';
+      const verdict = classifyDeployUrl(raw);
+      if (!verdict.ok) throw new LinkActionError(verdict.message);
+      return { deploy_url: raw };
     }
 
     default: {

@@ -14,7 +14,11 @@ const KNOWN_ACTIONS = new Set<LinkAction['type']>([
   'regenerate',
   'revoke',
   'set_expiry',
+  'set_deploy_url',
 ]);
+
+const PREVIEW_RETURN_COLS =
+  'id, project_id, name, slug, access_mode, link_secret, deploy_url, expires_at, status';
 
 /**
  * Link-management endpoint for a single preview.
@@ -84,11 +88,35 @@ export async function PATCH(
     throw err;
   }
 
+  // deploy_url is a redirect target /s later trusts, so it is written through the
+  // allowlist-enforcing SECURITY DEFINER RPC (register_deploy_target) rather than
+  // a direct UPDATE. computeLinkPatch already validated it via isAllowedDeployUrl
+  // for a fast 400; the RPC re-validates server-side (defense in depth) and is the
+  // single authoritative writer, mirroring register_preview_tunnel.
+  if (action.type === 'set_deploy_url') {
+    const { error: rpcErr } = await supabase.rpc('register_deploy_target', {
+      p_preview_id: id,
+      p_deploy_url: patch.deploy_url as string,
+    });
+    if (rpcErr) {
+      return NextResponse.json({ error: rpcErr.message }, { status: 400 });
+    }
+    const { data, error } = await supabase
+      .from('previews')
+      .select(PREVIEW_RETURN_COLS)
+      .eq('id', id)
+      .single();
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    return NextResponse.json({ preview: data }, { status: 200 });
+  }
+
   const { data, error } = await supabase
     .from('previews')
     .update(patch)
     .eq('id', id)
-    .select('id, project_id, name, slug, access_mode, link_secret, expires_at, status')
+    .select(PREVIEW_RETURN_COLS)
     .single();
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
