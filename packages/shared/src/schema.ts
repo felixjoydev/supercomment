@@ -129,6 +129,12 @@ export const capturedContextSchema = z.object({
    */
   screenshot: z.string().optional(),
 
+  // --- Provenance (R14) — which deploy/commit the comment was captured against ---
+  /** Deploy origin the comment was made against (the customer's preview URL). */
+  deployUrl: z.url().optional(),
+  /** Commit SHA the deploy was built from, when the build injects it. */
+  commit: z.string().optional(),
+
   // --- React (optional) ---
   react: reactContextSchema.optional(),
 });
@@ -165,6 +171,8 @@ export const commentSchema = z.object({
   context: capturedContextSchema,
   status: commentStatusSchema,
   fidelity: captureFidelitySchema,
+  /** Set when re-anchoring can no longer resolve the element on the live deploy (R13). */
+  isStale: z.boolean().default(false),
   /** Who resolved/dismissed it (member user id), when applicable. */
   resolvedBy: z.uuid().optional(),
   /** Optional summary the agent/dev recorded on resolution. */
