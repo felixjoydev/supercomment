@@ -7,6 +7,7 @@ import {
 } from "./cluster.js";
 import { MarkerLayer } from "./render.js";
 import { edgeDirection } from "../core/geometry.js";
+import type { MarkerComment } from "../core/types.js";
 import {
   makeFakeDom,
   makeRect,
@@ -129,5 +130,107 @@ describe("MarkerLayer existing comments (U12)", () => {
     const stale = parent.querySelectorAll(".sc-marker.sc-stale");
     expect(stale.length).toBe(1);
     expect(stale[0]!.textContent).toBe("2");
+  });
+});
+
+describe("MarkerLayer comment popover (U12)", () => {
+  function setup(): { layer: MarkerLayer; parent: any } {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    doc.body.appendChild(parent);
+    const layer = new MarkerLayer(doc as unknown as Document, parent as any);
+    return { layer, parent };
+  }
+
+  const content = (over: Partial<MarkerComment> = {}): MarkerComment => ({
+    note: "Make the header bigger",
+    authorDisplayName: "Ada",
+    intent: "change",
+    severity: "important",
+    status: "open",
+    createdAt: "",
+    ...over,
+  });
+
+  // The delegated click listener lives on the container; in a real DOM a click on
+  // a pin bubbles up to it with e.target = the pin. The DOM double does not
+  // bubble, so dispatch on the container with the pin as the event target.
+  function clickPin(parent: any, pin: any): void {
+    parent
+      .querySelector(".sc-marker-container")!
+      .dispatch("click", { target: pin });
+  }
+
+  it("opens a popover with the note + author when a pin is clicked", () => {
+    const { layer, parent } = setup();
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content: content() });
+    layer.render({ width: 1000, height: 800 });
+
+    expect(layer.hasOpenPopover()).toBe(false);
+    clickPin(parent, parent.querySelectorAll(".sc-marker")[0]!);
+
+    const pop = parent.querySelector(".sc-comment-pop");
+    expect(pop).not.toBeNull();
+    expect(layer.hasOpenPopover()).toBe(true);
+    expect(pop!.textContent).toContain("Make the header bigger");
+    expect(pop!.textContent).toContain("Ada");
+    expect(pop!.textContent).toContain("#1");
+  });
+
+  it("clicking the same pin again closes the popover", () => {
+    const { layer, parent } = setup();
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content: content() });
+    layer.render({ width: 1000, height: 800 });
+    const pin = parent.querySelectorAll(".sc-marker")[0]!;
+
+    clickPin(parent, pin);
+    expect(layer.hasOpenPopover()).toBe(true);
+    clickPin(parent, pin);
+    expect(layer.hasOpenPopover()).toBe(false);
+    expect(parent.querySelector(".sc-comment-pop")).toBeNull();
+  });
+
+  it("closePopover() removes the open popover", () => {
+    const { layer, parent } = setup();
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content: content() });
+    layer.render({ width: 1000, height: 800 });
+    clickPin(parent, parent.querySelectorAll(".sc-marker")[0]!);
+    expect(layer.hasOpenPopover()).toBe(true);
+
+    layer.closePopover();
+    expect(layer.hasOpenPopover()).toBe(false);
+    expect(parent.querySelector(".sc-comment-pop")).toBeNull();
+  });
+
+  it("clicking a second pin switches the popover content", () => {
+    const { layer, parent } = setup();
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 0, 0),
+      content: content({ note: "First note", authorDisplayName: "Ada" }),
+    });
+    layer.add({
+      number: 2,
+      rect: makeRect(600, 500, 0, 0),
+      content: content({ note: "Second note", authorDisplayName: "Grace" }),
+    });
+    layer.render({ width: 1000, height: 800 });
+
+    const pins = parent.querySelectorAll(".sc-marker");
+    const pin1 = pins.find((p: any) => p.getAttribute("data-numbers") === "1")!;
+    const pin2 = pins.find((p: any) => p.getAttribute("data-numbers") === "2")!;
+
+    clickPin(parent, pin1);
+    expect(parent.querySelector(".sc-comment-pop")!.textContent).toContain(
+      "First note",
+    );
+
+    clickPin(parent, pin2);
+    // Exactly one popover, now showing the second comment's content.
+    expect(parent.querySelectorAll(".sc-comment-pop").length).toBe(1);
+    const pop = parent.querySelector(".sc-comment-pop")!;
+    expect(pop.textContent).toContain("Second note");
+    expect(pop.textContent).toContain("Grace");
+    expect(pop.textContent).not.toContain("First note");
   });
 });

@@ -157,6 +157,14 @@ export function toExistingMarkers(
     rect: readBoundingBox(c.context),
     isStale: c.isStale,
     anchors: readAnchors(c.context),
+    content: {
+      note: c.note,
+      authorDisplayName: c.authorDisplayName,
+      intent: c.intent,
+      severity: c.severity,
+      status: c.status,
+      createdAt: c.createdAt,
+    },
   }));
 }
 

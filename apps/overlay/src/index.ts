@@ -154,12 +154,14 @@ async function activateSession(
   try {
     if (token) {
       if (!backendOrigin) return; // cannot exchange → dormant
-      const auth = await anonSignIn({ supabaseUrl, anonKey: supabaseAnonKey });
-      // U4: acquire an invisible Turnstile token when a site key is configured;
-      // null in dev (no site key) → the server skips verification. Never throws.
-      const turnstileToken = await getTurnstileToken({
-        siteKey: boot.turnstileSiteKey,
-      });
+      // anon sign-in and the Turnstile challenge are independent, so run them
+      // concurrently before the exchange (which needs both). getTurnstileToken
+      // never throws (null in dev), so Promise.all only rejects on a sign-in
+      // failure — caught below, fail-closed, exactly as the sequential path was.
+      const [auth, turnstileToken] = await Promise.all([
+        anonSignIn({ supabaseUrl, anonKey: supabaseAnonKey }),
+        getTurnstileToken({ siteKey: boot.turnstileSiteKey }),
+      ]);
       const exchanged = await exchangeReviewToken({
         backendOrigin,
         accessToken: auth.accessToken,
@@ -222,6 +224,18 @@ async function activateSession(
     getAccessToken,
   });
 
+  // U12 (read-on-activate): start loading the preview's existing comments NOW,
+  // concurrently with DOM-ready, so the network round-trip overlaps document
+  // parsing instead of waiting until after mount. Fail-closed: a read failure
+  // resolves to null and leaves the overlay write-only — it NEVER throws into
+  // the host page or blocks the write path.
+  const commentsPromise = loadReviewComments({
+    supabaseUrl,
+    supabaseAnonKey,
+    previewId: session.previewId,
+    getAccessToken,
+  }).catch(() => null);
+
   await whenDomReady();
 
   const controller = mount({
@@ -233,36 +247,10 @@ async function activateSession(
     storage: prefilledNameStorage(session.displayName),
   });
 
-  // U12 (read-on-activate): load the preview's existing comments and render a
-  // marker per comment so the reviewer sees the shared thread on the live deploy.
-  void renderExistingComments(controller, {
-    supabaseUrl,
-    supabaseAnonKey,
-    previewId: session.previewId,
-    getAccessToken,
+  // Render the markers once the (already in-flight) read resolves.
+  void commentsPromise.then((comments) => {
+    if (comments) controller.loadExistingComments(toExistingMarkers(comments));
   });
-}
-
-/**
- * U12: read the preview's existing comments (via the session JWT) and render
- * them as markers. Fail-closed: a read failure must NEVER break the host page or
- * the write path — it just leaves the overlay write-only (no markers).
- */
-async function renderExistingComments(
-  controller: OverlayController,
-  deps: {
-    supabaseUrl: string;
-    supabaseAnonKey: string;
-    previewId: string;
-    getAccessToken: () => string | Promise<string>;
-  },
-): Promise<void> {
-  try {
-    const comments = await loadReviewComments(deps);
-    controller.loadExistingComments(toExistingMarkers(comments));
-  } catch {
-    // Fail closed.
-  }
 }
 
 /**

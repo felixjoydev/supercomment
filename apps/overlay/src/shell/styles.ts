@@ -431,6 +431,7 @@ textarea:focus-visible {
   justify-content: center;
   box-shadow: 0 0 0 2px #fff, 0 4px 14px rgba(224, 87, 43, 0.45);
   cursor: pointer;
+  pointer-events: auto;
   transition: transform 160ms var(--ease-out);
 }
 @media (hover: hover) and (pointer: fine) {
@@ -467,6 +468,92 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(35, 31, 24, 0.4);
+}
+
+/* Comment popover ----------------------------------------------------- */
+/* Opens when a pin is clicked: the reviewer reads the thread on the live
+   deploy. Same quiet-gallery language as the form/modal — white surface,
+   layered float shadow, warm ink, one persimmon accent. */
+.sc-comment-pop {
+  position: absolute;
+  z-index: 1;
+  max-width: 280px;
+  min-width: 200px;
+  width: max-content;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sc-comment-pop-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-comment-pop-close:hover {
+    background: var(--soft);
+    color: var(--ink);
+  }
+}
+.sc-comment-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sc-comment-entry + .sc-comment-entry {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.sc-comment-head {
+  font-weight: 600;
+  color: var(--ink);
+  padding-right: 22px;
+}
+.sc-comment-num {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.sc-comment-author {
+  color: var(--ink-2);
+  font-weight: 550;
+}
+.sc-comment-meta {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+  color: var(--accent-deep);
+}
+.sc-comment-note {
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sc-comment-time {
+  font-size: 11px;
+  color: var(--ink-3);
 }
 
 /* Reduced motion ------------------------------------------------------ */

@@ -157,10 +157,17 @@ export class FakeElement {
   }
 
   closest(selector: string): FakeElement | null {
-    const id = selector.startsWith("#") ? selector.slice(1) : null;
+    const sel = selector.trim();
+    const id = sel.startsWith("#") ? sel.slice(1) : null;
     let cur: FakeElement | null = this;
     while (cur) {
-      if (id && cur.id === id) return cur;
+      if (id) {
+        if (cur.id === id) return cur;
+      } else if (matchesSimple(cur, sel)) {
+        // Supports tag/.class compounds (e.g. ".sc-marker"); attribute and other
+        // selectors fall through to no match, as before.
+        return cur;
+      }
       cur = cur.parent;
     }
     return null;

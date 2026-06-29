@@ -24,6 +24,16 @@ export interface Rect {
   height: number;
 }
 
+/** Human-readable content of a comment, shown in a popover when its marker is clicked. */
+export interface MarkerComment {
+  note: string;
+  authorDisplayName: string;
+  intent?: string;
+  severity?: string;
+  status?: string;
+  createdAt?: string;
+}
+
 /**
  * An EXISTING comment loaded back onto the live deploy and rendered as a marker.
  *
@@ -44,6 +54,8 @@ export interface ExistingCommentMarker {
   isStale: boolean;
   /** Captured multi-anchor set, re-resolved against the live DOM (U8). */
   anchors: ElementAnchor[];
+  /** Human-readable comment content shown in the marker's popover (U12 read). */
+  content: MarkerComment;
 }
 
 /**

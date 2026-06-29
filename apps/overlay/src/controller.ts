@@ -155,7 +155,11 @@ export class OverlayController {
       for (const c of pending) {
         const { element } = resolveAnchors(c.anchors, this.doc);
         if (element) {
-          resolved.push({ number: c.number, rect: this.documentRect(element) });
+          resolved.push({
+            number: c.number,
+            rect: this.documentRect(element),
+            content: c.content,
+          });
         } else {
           unresolved.push(c);
         }
@@ -173,6 +177,7 @@ export class OverlayController {
         number: c.number,
         rect: c.rect ?? { x: 0, y: 0, width: 0, height: 0 },
         isStale: true,
+        content: c.content,
       })),
     );
   }
@@ -329,7 +334,18 @@ export class OverlayController {
 
     const result = await this.config.submitter.submit(payload);
     if (result.ok) {
-      this.markers.add({ number: result.number, rect: target.rect });
+      this.markers.add({
+        number: result.number,
+        rect: target.rect,
+        content: {
+          note: draft.note.trim(),
+          authorDisplayName: name,
+          intent: draft.intent,
+          severity: draft.severity,
+          status: "new",
+          createdAt: new Date().toISOString(),
+        },
+      });
     }
     this.cancelSelection();
   }
@@ -370,6 +386,9 @@ export class OverlayController {
   cancelSelection(): void {
     this.dismissForm();
     this.dismissModal();
+    // Esc also closes an open comment popover (Shadow DOM retargets cross-boundary
+    // clicks, so there is no doc-level "click outside" close — see bindEvents).
+    this.markers.closePopover();
     this.selection.clear();
     this.highlights.clear();
     this.deferredTarget = null;

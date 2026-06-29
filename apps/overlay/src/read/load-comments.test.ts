@@ -217,15 +217,41 @@ describe("toExistingMarkers", () => {
       },
     ];
 
-    expect(toExistingMarkers(comments)).toEqual([
+    const markers = toExistingMarkers(comments);
+    expect(markers).toEqual([
       {
         number: 1,
         rect: { x: 10, y: 20, width: 100, height: 40 },
         isStale: false,
         anchors: [],
+        content: {
+          note: "n",
+          authorDisplayName: "Ada",
+          intent: "fix",
+          severity: "minor",
+          status: "open",
+          createdAt: "",
+        },
       },
-      { number: 2, rect: null, isStale: true, anchors: [] },
+      {
+        number: 2,
+        rect: null,
+        isStale: true,
+        anchors: [],
+        content: {
+          note: "n",
+          authorDisplayName: "Grace",
+          intent: "fix",
+          severity: "minor",
+          status: "open",
+          createdAt: "",
+        },
+      },
     ]);
+    // The popover content rides along: note + author are carried per comment.
+    expect(markers[0]!.content.note).toBe("n");
+    expect(markers[0]!.content.authorDisplayName).toBe("Ada");
+    expect(markers[1]!.content.authorDisplayName).toBe("Grace");
   });
 
   it("carries the captured anchors through for the U8 re-anchor pass", () => {
