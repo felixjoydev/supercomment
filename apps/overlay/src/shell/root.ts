@@ -29,11 +29,15 @@ export function createShellRoot(doc: Document): ShellRoot {
 
   const host = doc.createElement("div");
   host.id = HOST_ELEMENT_ID;
-  // The host element itself is laid out outside normal flow and ignores
-  // pointer events; only the inner UI opts back in.
+  // The host element is laid out outside normal flow and ignores pointer
+  // events; only the inner UI opts back in. The max-int z-index lifts our whole
+  // stacking context above the host page's own positioned/sticky/modal layers:
+  // position:fixed already makes this element a stacking context, so the inner
+  // OVERLAY_Z_INDEX only orders our own nodes — this host z-index is what keeps
+  // the toolbar and comment box from rendering *behind* the host page's sections.
   host.setAttribute(
     "style",
-    "position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;",
+    "position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647;",
   );
 
   const shadow = host.attachShadow({ mode: "open" });
