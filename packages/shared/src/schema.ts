@@ -88,15 +88,22 @@ export type ConsoleError = z.infer<typeof consoleErrorSchema>;
 /**
  * Optional React-specific context. Present only when the annotated element is
  * backed by a React fiber. `componentPath` (display-name chain) is best-effort
- * via fiber walk (React 18/19); `sourceFile`/`sourceLine` come from
- * `_debugSource` and are only available on React-18/Babel dev builds (R12).
+ * via fiber walk (React 18/19).
+ *
+ * `sourceFile`/`sourceLine` carry the exact JSX `file:line`. React 19 / Next
+ * removed the runtime `_debugSource`/`jsxDEV` source args, so these now come
+ * from a **build-time `data-sc-source` stamp** (the `@supercomment/source-stamp`
+ * Babel plugin, preview builds only) read at runtime via
+ * `el.closest('[data-sc-source]')` — not from the fiber. Both stay optional:
+ * absent the plugin (production, no stamp, or a non-React app) only
+ * `componentPath` is populated and the fields are omitted (R9/R12).
  */
 export const reactContextSchema = z.object({
   /** Component display-name chain from the element up the tree. */
   componentPath: z.array(z.string()).min(1),
-  /** Best-effort source file path (Tier 2; React-18/Babel only). */
+  /** Exact source file path from the build-time `data-sc-source` stamp. */
   sourceFile: z.string().optional(),
-  /** Best-effort source line number (Tier 2; React-18/Babel only). */
+  /** Exact 1-based source line from the build-time `data-sc-source` stamp. */
   sourceLine: z.number().int().positive().optional(),
 });
 export type ReactContext = z.infer<typeof reactContextSchema>;

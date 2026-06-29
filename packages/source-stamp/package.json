@@ -1,0 +1,32 @@
+{
+  "name": "@supercomment/source-stamp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Babel plugin that stamps JSX elements with data-sc-source=\"file:line:col\" for SuperComment's exact code-context capture (preview builds only).",
+  "license": "UNLICENSED",
+  "main": "./src/plugin.js",
+  "types": "./src/plugin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/plugin.d.ts",
+      "default": "./src/plugin.js"
+    }
+  },
+  "files": [
+    "src/plugin.js",
+    "src/plugin.d.ts"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "babel-plugin",
+    "jsx",
+    "supercomment"
+  ],
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

@@ -1,8 +1,9 @@
-import type { CapturedContext } from "@supercomment/shared";
+import type { CapturedContext, ReactContext } from "@supercomment/shared";
 
 import type { ContextCapturer, SelectionTarget } from "../core/types.js";
 import { captureGenericContext } from "./generic.js";
 import { captureReactContext } from "./react.js";
+import { captureSourceStamp, mergeSourceStamp } from "./source.js";
 import { captureScreenshot, type ScreenshotOptions } from "./screenshot.js";
 import { installConsoleErrorBuffer } from "./console-buffer.js";
 
@@ -15,6 +16,13 @@ export {
   displayNameOf,
   findDebugSource,
 } from "./react.js";
+export {
+  captureSourceStamp,
+  parseSourceStamp,
+  mergeSourceStamp,
+  SOURCE_STAMP_ATTR,
+  type SourceStamp,
+} from "./source.js";
 export { captureScreenshot } from "./screenshot.js";
 export {
   installConsoleErrorBuffer,
@@ -61,13 +69,18 @@ export class RealContextCapturer implements ContextCapturer {
     // React tier degrades gracefully: null on non-React pages / area selections.
     const el = primaryElementOf(target);
     if (el) {
+      let react: ReactContext | null = null;
       try {
-        const react = captureReactContext(el);
-        if (react) {
-          context.react = react;
-        }
+        react = captureReactContext(el);
       } catch {
         // Non-React app or unreadable fiber -> stay generic-only.
+      }
+      // Overlay the build-time `data-sc-source` stamp (the authoritative
+      // file:line source on React 19, read via el.closest()). Absent the
+      // attribute this is a no-op and the fiber component-path capture stands.
+      react = mergeSourceStamp(react, captureSourceStamp(el));
+      if (react) {
+        context.react = react;
       }
     }
 
