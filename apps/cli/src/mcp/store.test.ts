@@ -22,6 +22,7 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     context: { selector: "x", anchors: [], url: "https://x", consoleErrors: [] },
     status: "open",
     fidelity: "live",
+    is_stale: false,
     resolved_by: null,
     resolved_summary: null,
     created_at: "2026-05-30T00:00:00.000Z",
@@ -41,6 +42,7 @@ function mcp(number: number, trust: "member" | "guest", status: McpComment["stat
     context: { selector: "x", anchors: [], url: "https://x", consoleErrors: [] },
     status,
     fidelity: "live",
+    isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: trust,
   };

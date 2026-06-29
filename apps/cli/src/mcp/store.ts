@@ -164,6 +164,7 @@ interface CommentRow {
   context: unknown;
   status: McpComment["status"];
   fidelity: McpComment["fidelity"];
+  is_stale: boolean;
   resolved_by: string | null;
   resolved_summary: string | null;
   created_at: string;
@@ -186,6 +187,7 @@ function rowToMcpComment(row: CommentRow): McpComment {
     context,
     status: row.status,
     fidelity: row.fidelity,
+    isStale: row.is_stale,
     ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
     ...(row.resolved_summary
       ? { resolvedSummary: row.resolved_summary }
@@ -197,7 +199,7 @@ function rowToMcpComment(row: CommentRow): McpComment {
 
 const COMMENT_COLUMNS =
   "id, preview_id, number, author_participant, trust_level, intent, severity, " +
-  "note, path, context, status, fidelity, resolved_by, resolved_summary, created_at";
+  "note, path, context, status, fidelity, is_stale, resolved_by, resolved_summary, created_at";
 
 /**
  * Production CommentStore backed by Supabase. Reads are scoped to the bound

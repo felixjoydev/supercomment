@@ -62,6 +62,7 @@ function makeComment(opts: {
     context: ctx(),
     status: opts.status ?? "open",
     fidelity: opts.fidelity ?? "live",
+    isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: opts.trustLevel,
   };
