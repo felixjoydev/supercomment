@@ -37,6 +37,7 @@ import {
   anonSignIn,
   clearSession,
   exchangeReviewToken,
+  getTurnstileToken,
   isExpired,
   persistSession,
   readTokenFromHash,
@@ -57,6 +58,12 @@ interface InjectedBootConfig {
   supabaseAnonKey?: string;
   /** EMBEDDED MODE: SuperComment backend origin for the token exchange. */
   backendOrigin?: string;
+  /**
+   * EMBEDDED MODE (U4): Cloudflare Turnstile site key. When set, the overlay
+   * acquires an invisible Turnstile token and includes it in the exchange. When
+   * absent (dev), no token is sent and the server skips verification.
+   */
+  turnstileSiteKey?: string;
 }
 
 declare global {
@@ -147,10 +154,16 @@ async function activateSession(
     if (token) {
       if (!backendOrigin) return; // cannot exchange → dormant
       const auth = await anonSignIn({ supabaseUrl, anonKey: supabaseAnonKey });
+      // U4: acquire an invisible Turnstile token when a site key is configured;
+      // null in dev (no site key) → the server skips verification. Never throws.
+      const turnstileToken = await getTurnstileToken({
+        siteKey: boot.turnstileSiteKey,
+      });
       const exchanged = await exchangeReviewToken({
         backendOrigin,
         accessToken: auth.accessToken,
         token,
+        turnstileToken,
       });
       session = {
         accessToken: auth.accessToken,

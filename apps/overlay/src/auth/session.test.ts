@@ -5,6 +5,7 @@ import {
   anonSignIn,
   clearSession,
   exchangeReviewToken,
+  getTurnstileToken,
   isExpired,
   persistSession,
   readTokenFromHash,
@@ -224,6 +225,21 @@ describe("network steps (injected fetch seam)", () => {
     });
   });
 
+  it("exchangeReviewToken includes turnstileToken in the body only when provided", async () => {
+    const fetchImpl = vi.fn<FetchFn>(async () => okResponse({ previewId: "pid" }));
+    await exchangeReviewToken({
+      backendOrigin: "https://app.supercomment.dev",
+      accessToken: "access-jwt",
+      token: "tok",
+      turnstileToken: "ts-123",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const [, init] = fetchImpl.mock.calls[0]!;
+    expect(init.body).toBe(
+      JSON.stringify({ token: "tok", turnstileToken: "ts-123" }),
+    );
+  });
+
   it("exchangeReviewToken throws when the server omits a previewId", async () => {
     const fetchImpl = vi.fn<FetchFn>(async () => okResponse({ role: "guest" }));
     await expect(
@@ -253,5 +269,148 @@ describe("network steps (injected fetch seam)", () => {
     expect(init.body).toBe(JSON.stringify({ refresh_token: "r1" }));
     expect(tokens.accessToken).toBe("a2");
     expect(tokens.refreshToken).toBe("r2");
+  });
+});
+
+describe("getTurnstileToken (U4, injected DOM seams)", () => {
+  interface FakeElement {
+    style: Record<string, string>;
+    removed: boolean;
+    remove(): void;
+  }
+  function fakeDoc(): { doc: { createElement: () => FakeElement; body: { appendChild: () => void } }; created: FakeElement[] } {
+    const created: FakeElement[] = [];
+    return {
+      created,
+      doc: {
+        createElement: () => {
+          const el: FakeElement = {
+            style: {},
+            removed: false,
+            remove() {
+              this.removed = true;
+            },
+          };
+          created.push(el);
+          return el;
+        },
+        body: { appendChild: () => {} },
+      },
+    };
+  }
+  type TurnstileWin = {
+    turnstile?: unknown;
+    setTimeout(handler: () => void, ms: number): number;
+    clearTimeout(id: number): void;
+  };
+  function fakeWin(turnstile?: unknown): TurnstileWin {
+    return {
+      turnstile,
+      setTimeout: (fn: () => void, ms: number): number =>
+        globalThis.setTimeout(fn, ms) as unknown as number,
+      clearTimeout: (id: number): void => {
+        globalThis.clearTimeout(id as unknown as ReturnType<typeof setTimeout>);
+      },
+    };
+  }
+  // getTurnstileToken's option types are structural; cast the fakes through.
+  const call = (opts: Record<string, unknown>) =>
+    getTurnstileToken(opts as Parameters<typeof getTurnstileToken>[0]);
+
+  it("resolves null when no site key is configured (dev path)", async () => {
+    expect(await call({ siteKey: null })).toBeNull();
+    expect(await call({ siteKey: "" })).toBeNull();
+    expect(await call({ siteKey: undefined })).toBeNull();
+  });
+
+  it("resolves the token when the widget callback fires", async () => {
+    const { doc } = fakeDoc();
+    const turnstile = {
+      render: (_c: unknown, p: { callback?: (t: string) => void }) => {
+        p.callback?.("tok-123");
+      },
+    };
+    const token = await call({
+      siteKey: "site",
+      doc,
+      win: fakeWin(turnstile),
+      loadScript: async () => {},
+    });
+    expect(token).toBe("tok-123");
+  });
+
+  it("resolves null when the turnstile global never appears after load", async () => {
+    const { doc } = fakeDoc();
+    expect(
+      await call({
+        siteKey: "site",
+        doc,
+        win: fakeWin(undefined),
+        loadScript: async () => {},
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves null when the script load fails", async () => {
+    const { doc } = fakeDoc();
+    expect(
+      await call({
+        siteKey: "site",
+        doc,
+        win: fakeWin({ render: () => {} }),
+        loadScript: async () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves null when render throws", async () => {
+    const { doc } = fakeDoc();
+    const turnstile = {
+      render: () => {
+        throw new Error("boom");
+      },
+    };
+    expect(
+      await call({
+        siteKey: "site",
+        doc,
+        win: fakeWin(turnstile),
+        loadScript: async () => {},
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves null via the error-callback", async () => {
+    const { doc } = fakeDoc();
+    const turnstile = {
+      render: (_c: unknown, p: { "error-callback"?: () => void }) => {
+        p["error-callback"]?.();
+      },
+    };
+    expect(
+      await call({
+        siteKey: "site",
+        doc,
+        win: fakeWin(turnstile),
+        loadScript: async () => {},
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves null on timeout when no callback fires", async () => {
+    const { doc, created } = fakeDoc();
+    const turnstile = { render: () => {} };
+    const token = await call({
+      siteKey: "site",
+      doc,
+      win: fakeWin(turnstile),
+      loadScript: async () => {},
+      timeoutMs: 10,
+    });
+    expect(token).toBeNull();
+    // the hidden container is cleaned up
+    expect(created[0]?.removed).toBe(true);
   });
 });

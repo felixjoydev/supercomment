@@ -235,17 +235,29 @@ export async function exchangeReviewToken(cfg: {
   backendOrigin: string;
   accessToken: string;
   token: string;
+  /**
+   * Optional Cloudflare Turnstile token (U4). Included in the POST body only
+   * when present, so dev (no site key → no token) keeps the body to `{ token }`.
+   * The server requires it only when TURNSTILE_SECRET_KEY is configured.
+   */
+  turnstileToken?: string | null;
   fetchImpl?: FetchLike;
 }): Promise<ExchangeResult> {
   const base = trimSlash(cfg.backendOrigin);
   const fetchImpl = cfg.fetchImpl ?? fetch;
+  const payload: { token: string; turnstileToken?: string } = {
+    token: cfg.token,
+  };
+  if (cfg.turnstileToken) {
+    payload.turnstileToken = cfg.turnstileToken;
+  }
   const res = await fetchImpl(`${base}/api/review-token/exchange`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${cfg.accessToken}`,
     },
-    body: JSON.stringify({ token: cfg.token }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     throw new Error(`exchange_failed_${res.status}`);
@@ -289,6 +301,183 @@ export async function refreshAccessToken(cfg: {
     throw new Error(`refresh_failed_${res.status}`);
   }
   return normalizeTokens((await res.json()) as AuthResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Turnstile (U4) — invisible token acquisition, supabase-js-free + seam-injected.
+//
+// When a site key is configured (boot config `turnstileSiteKey`), load the
+// Turnstile script + render an INVISIBLE widget and resolve a token to send to
+// the exchange. When NO site key is configured (dev), resolve null immediately
+// (the server skips verification when TURNSTILE_SECRET_KEY is unset). Every DOM
+// seam is injectable so the pure decision logic is unit-tested; the real
+// script-load + widget render path is VERIFY IN REAL ENV.
+// ---------------------------------------------------------------------------
+
+/** The subset of the Turnstile render API we use. */
+interface TurnstileRenderParams {
+  sitekey: string;
+  size?: string;
+  callback?: (token: string) => void;
+  "error-callback"?: () => void;
+  "timeout-callback"?: () => void;
+}
+
+interface TurnstileApi {
+  render(container: unknown, params: TurnstileRenderParams): string | undefined;
+  execute?(container: unknown, params?: { sitekey?: string }): void;
+}
+
+/** Minimal window surface (injectable) so timers + the global are testable. */
+interface TurnstileWindowLike {
+  turnstile?: TurnstileApi;
+  setTimeout(handler: () => void, ms: number): number;
+  clearTimeout(id: number): void;
+}
+
+/** Minimal document surface (injectable) for the hidden widget container. */
+interface TurnstileElementLike {
+  style: Record<string, string>;
+  remove?(): void;
+}
+interface TurnstileDocumentLike {
+  createElement(tag: string): TurnstileElementLike;
+  body: { appendChild(node: unknown): void };
+}
+
+export interface GetTurnstileTokenOptions {
+  /** Cloudflare Turnstile site key from boot config; null/empty → dev (no token). */
+  siteKey?: string | null;
+  /** Injectable document seam (defaults to the ambient document). */
+  doc?: TurnstileDocumentLike | null;
+  /** Injectable window seam (defaults to the ambient window). */
+  win?: TurnstileWindowLike | null;
+  /** Injectable script loader (defaults to loading the Cloudflare api.js once). */
+  loadScript?: () => Promise<void>;
+  /** Max time to wait for a token before resolving null. */
+  timeoutMs?: number;
+}
+
+/**
+ * Acquire an invisible Turnstile token, or null when not configured / on any
+ * failure. NEVER throws — a failure here must not break activation (the server
+ * decides whether a token is required).
+ */
+export async function getTurnstileToken(
+  opts: GetTurnstileTokenOptions,
+): Promise<string | null> {
+  const siteKey = opts.siteKey;
+  if (!siteKey) return null; // dev / not configured → no token, no DOM work.
+
+  const doc = opts.doc ?? defaultTurnstileDocument();
+  const win = opts.win ?? defaultTurnstileWindow();
+  if (!doc || !win) return null;
+
+  const load = opts.loadScript ?? loadTurnstileScript;
+  try {
+    await load();
+  } catch {
+    return null;
+  }
+
+  const turnstile = win.turnstile;
+  if (!turnstile || typeof turnstile.render !== "function") return null;
+
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    let container: TurnstileElementLike | null = null;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      win.clearTimeout(timer);
+      try {
+        container?.remove?.();
+      } catch {
+        // ignore container cleanup failures
+      }
+      resolve(value);
+    };
+    const timer = win.setTimeout(() => finish(null), opts.timeoutMs ?? 12_000);
+    try {
+      container = doc.createElement("div");
+      container.style.display = "none";
+      doc.body.appendChild(container);
+      turnstile.render(container, {
+        sitekey: siteKey,
+        size: "invisible",
+        callback: (token) => finish(token || null),
+        "error-callback": () => finish(null),
+        "timeout-callback": () => finish(null),
+      });
+      // Some invisible configurations require an explicit execute().
+      if (typeof turnstile.execute === "function") {
+        try {
+          turnstile.execute(container, { sitekey: siteKey });
+        } catch {
+          // render's callback path still applies; ignore execute errors.
+        }
+      }
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+const TURNSTILE_SCRIPT_URL =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+
+let turnstileScriptPromise: Promise<void> | null = null;
+
+/**
+ * Load the Turnstile script once (idempotent). Uses the ambient document — this
+ * is the real-env path; tests inject `loadScript` to bypass it. VERIFY IN REAL ENV.
+ */
+function loadTurnstileScript(): Promise<void> {
+  if (typeof document === "undefined") {
+    return Promise.reject(new Error("no_document"));
+  }
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+  turnstileScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(
+      'script[src^="https://challenges.cloudflare.com/turnstile"]',
+    );
+    if (existing) {
+      resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = TURNSTILE_SCRIPT_URL;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("turnstile_script_failed"));
+    (document.head ?? document.body ?? document.documentElement).appendChild(
+      script,
+    );
+  });
+  return turnstileScriptPromise;
+}
+
+function defaultTurnstileWindow(): TurnstileWindowLike | null {
+  try {
+    if (typeof window !== "undefined") {
+      return window as unknown as TurnstileWindowLike;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function defaultTurnstileDocument(): TurnstileDocumentLike | null {
+  try {
+    if (typeof document !== "undefined") {
+      return document as unknown as TurnstileDocumentLike;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

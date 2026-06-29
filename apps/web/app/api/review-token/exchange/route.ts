@@ -22,12 +22,61 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
  * to the deploy-URL allowlist is a hardening follow-up; bearer-only means a
  * forged origin gains nothing without a valid anon JWT + unused token.)
  *
+ * U4 HARDENING — TURNSTILE AT SESSION MINT: before establishing the session we
+ * require + verify a Cloudflare Turnstile token (body field `turnstileToken`)
+ * against the siteverify API using TURNSTILE_SECRET_KEY. This throttles
+ * automated anonymous-session minting (each guest does an anon sign-in, so the
+ * mint is the abuse choke point). DEV/DEMO DEGRADATION: when TURNSTILE_SECRET_KEY
+ * is UNSET we SKIP verification with a console note, so local dev/demos keep
+ * working without provisioning Turnstile keys.
+ *
  * VERIFY IN REAL ENV: live JWT verification (auth.getUser), the
- * establish_review_session round-trip, and the real cross-origin preflight from
- * a customer deploy cannot be exercised in this sandbox.
+ * establish_review_session round-trip, the real cross-origin preflight from a
+ * customer deploy, and the live Turnstile siteverify call cannot be exercised in
+ * this sandbox.
+ *
+ * REAL-ENV FLAGS:
+ *   * TURNSTILE_SECRET_KEY (server-only) — when set, exchange requires a valid
+ *     Turnstile token; when unset, verification is skipped (dev).
+ *   * The overlay must be configured with the matching site key
+ *     (window.__SUPERCOMMENT__.turnstileSiteKey, e.g. from
+ *     NEXT_PUBLIC_TURNSTILE_SITE_KEY) so it can produce the token.
  */
 
 export const dynamic = "force-dynamic";
+
+/** Cloudflare Turnstile server-side verification endpoint. */
+const TURNSTILE_VERIFY_URL =
+  "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+
+/**
+ * Verify a Turnstile token server-side via siteverify (raw fetch — no SDK).
+ * Returns true only on `success`. Any network/parse failure → false (fail
+ * closed). Best-effort `remoteip` is included when a client IP header is present.
+ */
+async function verifyTurnstile(
+  token: string,
+  secret: string,
+  remoteIp: string | null,
+): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const form = new URLSearchParams();
+    form.set("secret", secret);
+    form.set("response", token);
+    if (remoteIp) form.set("remoteip", remoteIp);
+    const res = await fetch(TURNSTILE_VERIFY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { success?: boolean };
+    return data?.success === true;
+  } catch {
+    return false;
+  }
+}
 
 /** Bearer-auth + no cookies → reflecting the request Origin is safe. */
 function corsHeaders(origin: string | null): Record<string, string> {
@@ -78,6 +127,30 @@ export async function POST(request: NextRequest): Promise<Response> {
       : "";
   if (!token) {
     return jsonError("missing_token", 400, cors);
+  }
+  const turnstileToken =
+    body &&
+    typeof body === "object" &&
+    typeof (body as { turnstileToken?: unknown }).turnstileToken === "string"
+      ? (body as { turnstileToken: string }).turnstileToken.trim()
+      : "";
+
+  // ---- Turnstile (U4) -----------------------------------------------------
+  // When the secret is configured, require + verify a Turnstile token before we
+  // mint a session. When it is UNSET (local dev / demo), skip with a clear note.
+  const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+  if (turnstileSecret) {
+    const remoteIp =
+      request.headers.get("cf-connecting-ip") ??
+      request.headers.get("x-forwarded-for");
+    const passed = await verifyTurnstile(turnstileToken, turnstileSecret, remoteIp);
+    if (!passed) {
+      return jsonError("turnstile_failed", 403, cors);
+    }
+  } else {
+    console.warn(
+      "[review-token/exchange] TURNSTILE_SECRET_KEY unset — skipping Turnstile verification (dev/demo only).",
+    );
   }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
