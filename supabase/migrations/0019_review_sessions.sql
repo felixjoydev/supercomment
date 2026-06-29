@@ -68,6 +68,11 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+-- The RETURNS TABLE output columns (preview_id, role) share names with
+-- review_sessions columns; use_column resolves the ON CONFLICT / column refs in
+-- the INSERT to the table columns rather than the OUT-param variables (caught by
+-- the live smoke: "column reference preview_id is ambiguous").
+#variable_conflict use_column
 declare
   v_token public.review_tokens%rowtype;
 begin
