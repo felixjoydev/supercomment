@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsup --watch",
+    "prebuild": "pnpm --filter @supercomment/shared build",
     "build": "tsup",
     "typecheck": "tsc --noEmit"
   },
