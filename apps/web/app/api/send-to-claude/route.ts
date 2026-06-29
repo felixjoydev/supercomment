@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import type { CapturedContext } from "@supercomment/shared";
+
 import { createClient } from "@/lib/supabase/server";
 import { requireMember, type VerifiedClaims } from "@/lib/auth-guard";
 import { canEnqueue } from "@/lib/comments/view";
+import { handoffSourceRef } from "@/lib/comments/handoff";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +39,11 @@ export async function POST(request: NextRequest) {
       : "";
   const confirmGuest =
     !!body && typeof body === "object" && (body as { confirmGuest?: unknown }).confirmGuest === true;
+  // R10: the dashboard's "Include file:line in AI hand-offs" toggle (default ON).
+  // Only an explicit `false` withholds the source location; absent/anything else
+  // keeps the default-on behavior.
+  const includeSource =
+    !(body && typeof body === "object" && (body as { includeSource?: unknown }).includeSource === false);
 
   if (!commentId) {
     return NextResponse.json({ error: "commentId is required" }, { status: 400 });
@@ -43,10 +51,11 @@ export async function POST(request: NextRequest) {
 
   const supabase = await createClient();
 
-  // Load the comment (RLS-scoped) so we know its preview + trust level.
+  // Load the comment (RLS-scoped) so we know its preview + trust level, plus the
+  // captured context so the hand-off can carry the exact file:line (R10/R11).
   const { data: comment, error: loadError } = await supabase
     .from("comments")
-    .select("id, preview_id, trust_level")
+    .select("id, preview_id, trust_level, context")
     .eq("id", commentId)
     .maybeSingle();
 
@@ -82,6 +91,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // R10/R11: the exact file:line for the clicked element, attached to the
+  // hand-off only when the comment carries a build-time source stamp AND the
+  // dashboard toggle is on. The queue row is a pointer (comment_id); the full
+  // captured context — including this source location — travels to the agent via
+  // the MCP `get_comment` read, so this `sourceRef` is the explicit, gated echo
+  // of what the developer is handing off.
+  const sourceRef = handoffSourceRef(
+    (comment.context ?? null) as CapturedContext | null,
+    includeSource,
+  );
+
   // Enqueue. The partial unique index (0006) makes a re-send while an attempt
   // is already pending/working a benign conflict; surface that as "already
   // queued" rather than an error.
@@ -101,7 +121,10 @@ export async function POST(request: NextRequest) {
       insertError.code === "23505" ||
       /duplicate key|comment_queue_active_uniq/i.test(insertError.message ?? "");
     if (isDuplicate) {
-      return NextResponse.json({ ok: true, status: "pending", deduped: true }, { status: 200 });
+      return NextResponse.json(
+        { ok: true, status: "pending", deduped: true, sourceRef },
+        { status: 200 },
+      );
     }
     return NextResponse.json({ error: "Failed to enqueue" }, { status: 500 });
   }
@@ -110,7 +133,7 @@ export async function POST(request: NextRequest) {
   // over the outbound channel and reports back working→done. End-to-end local
   // delivery cannot be exercised in this sandbox.
   return NextResponse.json(
-    { ok: true, status: queued?.status ?? "pending", queueId: queued?.id ?? null },
+    { ok: true, status: queued?.status ?? "pending", queueId: queued?.id ?? null, sourceRef },
     { status: 201 },
   );
 }

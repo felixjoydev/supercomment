@@ -9,6 +9,8 @@ import {
   sendStateFromQueueStatus,
   type SendState,
 } from "../lib/comments/send-state";
+import { handoffSourceRef, sourceRefFromContext } from "../lib/comments/handoff";
+import type { CapturedContext } from "@supercomment/shared";
 
 /**
  * U9 Send-to-Claude — R20 enqueue + R23 guest-confirm gate, plus the pure
@@ -153,5 +155,65 @@ describe("send button state machine", () => {
     expect(sendButtonLabel("sent")).toBe("Queued");
     expect(sendButtonLabel("working")).toBe("Working…");
     expect(sendButtonLabel("failed")).toBe("Retry");
+  });
+});
+
+/**
+ * U6 enhanced-context hand-off (R10/R11): the exact `file:line` is attached to
+ * the Send-to-Claude hand-off only when the comment carries a build-time source
+ * stamp AND the dashboard "include file:line" toggle is on.
+ */
+function contextWithSource(sourceFile?: string, sourceLine?: number): CapturedContext {
+  return {
+    selector: "#el",
+    anchors: [],
+    url: "https://example.com",
+    consoleErrors: [],
+    ...(sourceFile
+      ? {
+          react: {
+            componentPath: ["App", "Card"],
+            sourceFile,
+            ...(sourceLine ? { sourceLine } : {}),
+          },
+        }
+      : {}),
+  } as CapturedContext;
+}
+
+describe("R10/R11 enhanced-context hand-off (handoffSourceRef)", () => {
+  it("includes file:line when source is present and the toggle is on", () => {
+    const ctx = contextWithSource("src/components/Card.tsx", 42);
+    expect(handoffSourceRef(ctx, true)).toBe("src/components/Card.tsx:42");
+  });
+
+  it("includes the file alone when only the file (no line) was stamped", () => {
+    const ctx = contextWithSource("src/components/Card.tsx");
+    expect(handoffSourceRef(ctx, true)).toBe("src/components/Card.tsx");
+  });
+
+  it("omits file:line when the comment has no source stamp (AE7)", () => {
+    expect(handoffSourceRef(contextWithSource(), true)).toBeNull();
+    expect(handoffSourceRef(null, true)).toBeNull();
+  });
+
+  it("withholds file:line when the toggle is off, even when present", () => {
+    const ctx = contextWithSource("src/components/Card.tsx", 42);
+    expect(handoffSourceRef(ctx, false)).toBeNull();
+  });
+
+  it("sourceRefFromContext formats the same way without gating", () => {
+    expect(sourceRefFromContext(contextWithSource("a/b.tsx", 7))).toBe("a/b.tsx:7");
+    expect(sourceRefFromContext(contextWithSource())).toBeNull();
+  });
+
+  it("the enqueue hand-off payload carries the gated source ref", () => {
+    // Mirrors the { commentId, confirmGuest, sourceRef } shape the
+    // /api/send-to-claude route assembles: present when enabled, null when off.
+    const ctx = contextWithSource("src/Card.tsx", 42);
+    const on = { commentId: "c1", confirmGuest: false, sourceRef: handoffSourceRef(ctx, true) };
+    const off = { commentId: "c1", confirmGuest: false, sourceRef: handoffSourceRef(ctx, false) };
+    expect(on.sourceRef).toBe("src/Card.tsx:42");
+    expect(off.sourceRef).toBeNull();
   });
 });
