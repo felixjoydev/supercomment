@@ -7,6 +7,7 @@ import {
   generateReviewToken,
   buildEmbeddedRedirectUrl,
 } from '@/lib/share-access';
+import { HOP_BY_HOP, buildForwardHeaders } from '@/lib/proxy-headers';
 
 /**
  * Stable preview link: `…/s/<slug>/<anything>`.
@@ -121,12 +122,10 @@ async function tryEmbedded(
 
 // ---------------------------------------------------------------------------
 // TUNNEL MODE (legacy reverse proxy) — retained for the dormant tunnel path.
+// HOP_BY_HOP + the forwarded-request header strip (which also drops the
+// reviewer's first-party credentials: authorization / cookie / sb-*) live in
+// @/lib/proxy-headers so they are unit-tested without next/server.
 // ---------------------------------------------------------------------------
-
-const HOP_BY_HOP = new Set([
-  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
-]);
 
 async function resolveTunnel(slug: string): Promise<TunnelRoute | null> {
   const supabase = anonClient();
@@ -160,12 +159,10 @@ async function proxyTunnel(
   const search = request.nextUrl.search ?? '';
   const upstreamUrl = `${base}${subPath}${search}`;
 
-  const fwdHeaders = new Headers();
-  request.headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (HOP_BY_HOP.has(lower) || lower === 'accept-encoding') return;
-    fwdHeaders.set(key, value);
-  });
+  // Strip hop-by-hop + accept-encoding AND the reviewer's first-party
+  // credentials (authorization / cookie / sb-*) so a signed-in member's session
+  // never leaks to the developer-controlled tunnel origin (the plan-001 fix).
+  const fwdHeaders = buildForwardHeaders(request.headers);
 
   const method = request.method;
   const hasBody = method !== 'GET' && method !== 'HEAD';
