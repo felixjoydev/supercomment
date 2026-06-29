@@ -22,11 +22,20 @@ import type { ElementAnchor } from "@supercomment/shared";
  * brittle selector remains possible.
  */
 
-/** Max characters of text content stored as a `text` anchor. */
-const MAX_TEXT_ANCHOR_LENGTH = 80;
+/**
+ * Max characters of text content stored as a `text` anchor.
+ *
+ * Exported so the re-anchor resolver (`reanchor.ts`) caps a live element's text
+ * with the IDENTICAL bound before comparing it to a stored anchor.
+ */
+export const MAX_TEXT_ANCHOR_LENGTH = 80;
 
-/** Attributes commonly used as stable test hooks, in priority order. */
-const TEST_ID_ATTRIBUTES = [
+/**
+ * Attributes commonly used as stable test hooks, in priority order. Exported so
+ * the resolver re-finds a `data-testid` anchor across the same attribute set
+ * (the anchor is stored as type `data-testid` even when sourced from `data-cy`).
+ */
+export const TEST_ID_ATTRIBUTES = [
   "data-testid",
   "data-test-id",
   "data-test",
@@ -37,9 +46,10 @@ const TEST_ID_ATTRIBUTES = [
 /**
  * Implicit ARIA role lookup for the handful of elements where the role is
  * meaningful for re-anchoring. A small, well-known subset rather than a full
- * HTML-AAM implementation.
+ * HTML-AAM implementation. Exported so the resolver computes an element's
+ * effective role identically to capture (via {@link effectiveRole}).
  */
-const IMPLICIT_ROLES: Record<string, string> = {
+export const IMPLICIT_ROLES: Record<string, string> = {
   a: "link",
   button: "button",
   nav: "navigation",
@@ -80,7 +90,7 @@ export function captureAnchors(target: Element): ElementAnchor[] {
     anchors.push({ type: "data-testid", value: testId });
   }
 
-  const role = readRole(target);
+  const role = effectiveRole(target);
   if (role) {
     anchors.push({ type: "role", value: role });
   }
@@ -113,8 +123,12 @@ function readTestId(target: Element): string | undefined {
   return undefined;
 }
 
-/** Explicit `role=` wins; otherwise fall back to a small implicit-role table. */
-function readRole(target: Element): string | undefined {
+/**
+ * An element's effective role for anchoring: explicit `role=` wins, otherwise a
+ * small implicit-role table. Exported + reused by the re-anchor resolver so
+ * capture and resolution agree on what "role" means for a given element.
+ */
+export function effectiveRole(target: Element): string | undefined {
   const explicit = target.getAttribute?.("role");
   if (explicit) {
     return explicit;
@@ -123,19 +137,32 @@ function readRole(target: Element): string | undefined {
 }
 
 /**
+ * Normalise raw text into the stored `text` anchor value: collapse whitespace,
+ * trim, and cap to {@link MAX_TEXT_ANCHOR_LENGTH} (ellipsis when truncated).
+ * Returns `undefined` for empty/whitespace-only input.
+ *
+ * Exported + reused by the re-anchor resolver so a live element's text is
+ * normalised IDENTICALLY before being compared to a stored anchor — otherwise a
+ * trailing-space or casing-of-collapse difference would spuriously miss.
+ */
+export function normalizeAnchorText(raw: string): string | undefined {
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return undefined;
+  }
+  if (collapsed.length <= MAX_TEXT_ANCHOR_LENGTH) {
+    return collapsed;
+  }
+  return `${collapsed.slice(0, MAX_TEXT_ANCHOR_LENGTH).trimEnd()}…`;
+}
+
+/**
  * Trimmed, whitespace-collapsed, length-capped text content. Falls back to
  * `textContent` of the whole subtree, which is acceptable for re-anchoring
  * since we only keep a capped prefix.
  */
 function readTextContent(target: Element): string | undefined {
-  const raw = (target.textContent ?? "").replace(/\s+/g, " ").trim();
-  if (!raw) {
-    return undefined;
-  }
-  if (raw.length <= MAX_TEXT_ANCHOR_LENGTH) {
-    return raw;
-  }
-  return `${raw.slice(0, MAX_TEXT_ANCHOR_LENGTH).trimEnd()}…`;
+  return normalizeAnchorText(target.textContent ?? "");
 }
 
 /**

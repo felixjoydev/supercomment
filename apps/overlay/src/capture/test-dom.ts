@@ -200,6 +200,11 @@ export class FakeDocument {
   private matchSegment(el: FakeElement, seg: string): boolean {
     const tag = el.tagName.toLowerCase();
 
+    // universal selector (matches every element) — used by the re-anchor
+    // resolver to enumerate elements for role/text comparison.
+    if (seg === "*") {
+      return true;
+    }
     // #id
     if (seg.startsWith("#")) {
       return el.id === seg.slice(1);
