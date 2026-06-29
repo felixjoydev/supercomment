@@ -16,6 +16,9 @@ import type {
   CapturedContext,
 } from "@supercomment/shared";
 
+/** Latest "Send to Claude" queue state for a comment (null = never sent). */
+export type SendStatus = "pending" | "working" | "done" | "failed";
+
 export interface CommentView {
   id: string;
   previewId: string;
@@ -27,10 +30,18 @@ export interface CommentView {
   note: string;
   status: CommentStatus;
   fidelity: CaptureFidelity;
+  /** True when re-anchoring could not resolve the element on the live deploy (R13). */
+  isStale: boolean;
   context: CapturedContext | null;
   path: string | null;
   resolvedSummary: string | null;
   createdAt: string;
+  /**
+   * Persisted "Send to Claude" status from comment_queue, hydrated server-side
+   * so the button survives a page refresh. Null when the comment was never
+   * enqueued (or for realtime-delivered rows, which carry no queue join).
+   */
+  sendStatus: SendStatus | null;
 }
 
 /**
@@ -50,6 +61,7 @@ export interface CommentRow {
   note: string;
   status: CommentStatus;
   fidelity?: CaptureFidelity | null;
+  is_stale?: boolean | null;
   context?: unknown;
   path?: string | null;
   resolved_summary?: string | null;

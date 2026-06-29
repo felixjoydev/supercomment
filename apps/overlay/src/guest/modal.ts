@@ -5,6 +5,8 @@
  * allowed without a name; submitting is not. The name is required (empty input
  * keeps the confirm button disabled).
  */
+import { enterCard, exitCard, fadeIn } from "../shell/motion.js";
+
 const MODAL_TITLE = "Add your name to comment";
 const MODAL_HINT = "Your teammates will see this name on your comments.";
 
@@ -17,6 +19,7 @@ export class GuestModal {
   private readonly backdrop: HTMLElement;
   private readonly input: HTMLInputElement;
   private readonly confirmBtn: HTMLButtonElement;
+  private destroyed = false;
 
   constructor(
     doc: Document,
@@ -37,7 +40,7 @@ export class GuestModal {
     heading.textContent = MODAL_TITLE;
 
     const hint = doc.createElement("div");
-    hint.className = "sc-chip";
+    hint.className = "sc-modal-hint";
     hint.textContent = MODAL_HINT;
 
     this.input = doc.createElement("input");
@@ -72,12 +75,20 @@ export class GuestModal {
     this.backdrop.appendChild(modal);
     parent.appendChild(this.backdrop);
 
+    // Backdrop fades while the card settles in; modals scale from center.
+    fadeIn(this.backdrop);
+    enterCard(modal, 10);
+
     this.syncConfirmState();
     this.input.focus();
   }
 
   destroy(): void {
-    this.backdrop.remove();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    const done = exitCard(this.backdrop);
+    if (done) void done.then(() => this.backdrop.remove());
+    else this.backdrop.remove();
   }
 
   private tryConfirm(callbacks: GuestModalCallbacks): void {

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/copy-overlay.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -12,14 +13,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource-variable/fraunces": "^5.2.9",
+    "@fontsource-variable/instrument-sans": "^5.2.8",
     "@supabase/ssr": "0.10.3",
     "@supabase/supabase-js": "2.106.2",
     "@supercomment/shared": "workspace:*",
+    "motion": "^12.40.0",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
   "devDependencies": {
+    "@supercomment/source-stamp": "workspace:*",
     "@types/node": "25.9.1",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",

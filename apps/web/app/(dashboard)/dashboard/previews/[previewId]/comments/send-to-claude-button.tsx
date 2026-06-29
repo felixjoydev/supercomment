@@ -1,10 +1,20 @@
-"use client";
+'use client';
 
-import { useReducer, useState } from "react";
+import { useReducer, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 
-import type { CommentView } from "@/lib/comments/types";
-import { requiresGuestConfirm } from "@/lib/comments/view";
-import { sendReducer, sendButtonLabel, isInFlight } from "@/lib/comments/send-state";
+import type { CommentView } from '@/lib/comments/types';
+import { requiresGuestConfirm } from '@/lib/comments/view';
+import {
+  sendReducer,
+  sendButtonLabel,
+  isInFlight,
+  sendStateFromQueueStatus,
+  type SendState,
+} from '@/lib/comments/send-state';
+import { readIncludeSourcePref } from '@/lib/comments/handoff';
+
+const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
 /**
  * Per-comment "Send to Claude" button (R20 + R23).
@@ -22,7 +32,12 @@ export function SendToClaudeButton({
   comment: CommentView;
   canMutate: boolean;
 }) {
-  const [state, dispatch] = useReducer(sendReducer, "idle");
+  // Seed from the persisted queue status so a refresh shows Queued/Working/Done
+  // rather than resetting to "Send to Claude".
+  const initialState: SendState = comment.sendStatus
+    ? sendStateFromQueueStatus(comment.sendStatus)
+    : 'idle';
+  const [state, dispatch] = useReducer(sendReducer, initialState);
   const [error, setError] = useState<string | null>(null);
 
   if (!canMutate) return null;
@@ -31,117 +46,119 @@ export function SendToClaudeButton({
 
   async function enqueue(confirmGuest: boolean) {
     setError(null);
-    dispatch({ type: "request", requiresConfirm: false });
+    dispatch({ type: 'request', requiresConfirm: false });
     try {
-      const res = await fetch("/api/send-to-claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ commentId: comment.id, confirmGuest }),
+      const res = await fetch('/api/send-to-claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          commentId: comment.id,
+          confirmGuest,
+          // R10: honor the per-preview "include file:line" toggle (default ON).
+          includeSource: readIncludeSourcePref(comment.previewId),
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data?.message || data?.error || `Failed (${res.status})`);
-        dispatch({ type: "failed" });
+        dispatch({ type: 'failed' });
         return;
       }
-      dispatch({ type: "succeeded" });
+      dispatch({ type: 'succeeded' });
     } catch {
-      setError("Network error");
-      dispatch({ type: "failed" });
+      setError('Network error');
+      dispatch({ type: 'failed' });
     }
   }
 
   function onPrimaryClick() {
-    if (state === "confirm_required") return; // handled by confirm UI below
-    if (needsConfirm && state === "idle") {
-      dispatch({ type: "request", requiresConfirm: true });
+    if (state === 'confirm_required') return; // handled by confirm UI below
+    if (needsConfirm && state === 'idle') {
+      dispatch({ type: 'request', requiresConfirm: true });
       return;
     }
     void enqueue(false);
   }
 
   return (
-    <span style={{ display: "inline-flex", flexDirection: "column", gap: "0.4rem" }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}>
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 6 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
         <button
           type="button"
+          className="btn btn-accent btn-sm"
           onClick={onPrimaryClick}
-          disabled={isInFlight(state) || state === "confirm_required"}
-          style={{
-            padding: "0.35rem 0.75rem",
-            borderRadius: 6,
-            border: "1px solid #7c3aed",
-            background: state === "failed" ? "#fff" : "#7c3aed",
-            color: state === "failed" ? "#7c3aed" : "#fff",
-            fontSize: "0.8125rem",
-            cursor: isInFlight(state) ? "default" : "pointer",
-            opacity: isInFlight(state) ? 0.8 : 1,
-          }}
+          disabled={isInFlight(state) || state === 'confirm_required'}
         >
-          {sendButtonLabel(state)}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={state}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              transition={{ type: 'spring', duration: 0.3, bounce: 0 }}
+            >
+              {sendButtonLabel(state)}
+            </motion.span>
+          </AnimatePresence>
         </button>
-        {needsConfirm && state !== "confirm_required" && (
-          <span style={{ fontSize: "0.6875rem", color: "#c2410c" }}>guest — needs confirm</span>
+        {needsConfirm && state === 'idle' && (
+          <span className="guest-hint">guest — needs confirm</span>
         )}
       </span>
 
-      {state === "confirm_required" && (
-        <span
-          style={{
-            display: "inline-flex",
-            flexDirection: "column",
-            gap: "0.4rem",
-            padding: "0.6rem",
-            border: "1px solid #fed7aa",
-            background: "#fff7ed",
-            borderRadius: 6,
-            fontSize: "0.75rem",
-            color: "#9a3412",
-          }}
-        >
-          <span>
-            This comment is from a <strong>guest</strong> and is untrusted to the agent. Confirm you
-            want to send it to Claude.
-          </span>
-          <span style={{ display: "inline-flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              onClick={() => {
-                dispatch({ type: "confirm" });
-                void enqueue(true);
-              }}
-              style={{
-                padding: "0.3rem 0.7rem",
-                borderRadius: 6,
-                border: "1px solid #c2410c",
-                background: "#c2410c",
-                color: "#fff",
-                fontSize: "0.75rem",
-                cursor: "pointer",
-              }}
-            >
-              Confirm &amp; send
-            </button>
-            <button
-              type="button"
-              onClick={() => dispatch({ type: "cancel" })}
-              style={{
-                padding: "0.3rem 0.7rem",
-                borderRadius: 6,
-                border: "1px solid #d1d5db",
-                background: "#fff",
-                color: "#374151",
-                fontSize: "0.75rem",
-                cursor: "pointer",
-              }}
-            >
-              Cancel
-            </button>
-          </span>
-        </span>
-      )}
+      <AnimatePresence initial={false}>
+        {state === 'confirm_required' ? (
+          <motion.span
+            key="guest-confirm"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={spring}
+            style={{ overflow: 'hidden', display: 'block' }}
+          >
+            <span className="guest-confirm">
+              <span>
+                This comment is from a <strong>guest</strong> and is untrusted to the agent.
+                Confirm you want to send it to Claude.
+              </span>
+              <span style={{ display: 'inline-flex', gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    dispatch({ type: 'confirm' });
+                    void enqueue(true);
+                  }}
+                >
+                  Confirm &amp; send
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => dispatch({ type: 'cancel' })}
+                >
+                  Cancel
+                </button>
+              </span>
+            </span>
+          </motion.span>
+        ) : null}
+      </AnimatePresence>
 
-      {error && <span style={{ fontSize: "0.6875rem", color: "#dc2626" }}>{error}</span>}
+      <AnimatePresence initial={false}>
+        {error ? (
+          <motion.span
+            key="err"
+            className="msg msg-err"
+            style={{ fontSize: 12 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            {error}
+          </motion.span>
+        ) : null}
+      </AnimatePresence>
     </span>
   );
 }

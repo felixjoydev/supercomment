@@ -19,20 +19,20 @@ export default async function DashboardLayout({ children }: { children: ReactNod
 
   return (
     <div>
-      <header className="dash-top">
-        <Link href="/dashboard" className="dash-brand">
+      <header className="shell-header">
+        <Link href="/dashboard" className="shell-brand">
           SuperComment
         </Link>
-        <div className="dash-top-right">
-          {user?.email ? <span className="dash-user">{user.email}</span> : null}
+        <div className="shell-right">
+          {user?.email ? <span className="shell-user">{user.email}</span> : null}
           <form action={signOut}>
-            <button type="submit" className="dash-signout">
+            <button type="submit" className="btn btn-quiet">
               Sign out
             </button>
           </form>
         </div>
       </header>
-      <main className="dash-main">{children}</main>
+      <main className="shell-main">{children}</main>
     </div>
   );
 }

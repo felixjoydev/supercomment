@@ -32,6 +32,7 @@ import { StubCommentSubmitter } from "./core/stubs.js";
 import { RealContextCapturer } from "./capture/index.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
+import { loadReviewComments, toExistingMarkers } from "./read/load-comments.js";
 import {
   REFRESH_SKEW_MS,
   anonSignIn,
@@ -223,7 +224,7 @@ async function activateSession(
 
   await whenDomReady();
 
-  mount({
+  const controller = mount({
     previewId: session.previewId,
     // sessionStorage is origin-scoped; namespace the cosmetic guest-name store
     // by host like the tunnel path does.
@@ -231,6 +232,37 @@ async function activateSession(
     submitter,
     storage: prefilledNameStorage(session.displayName),
   });
+
+  // U12 (read-on-activate): load the preview's existing comments and render a
+  // marker per comment so the reviewer sees the shared thread on the live deploy.
+  void renderExistingComments(controller, {
+    supabaseUrl,
+    supabaseAnonKey,
+    previewId: session.previewId,
+    getAccessToken,
+  });
+}
+
+/**
+ * U12: read the preview's existing comments (via the session JWT) and render
+ * them as markers. Fail-closed: a read failure must NEVER break the host page or
+ * the write path — it just leaves the overlay write-only (no markers).
+ */
+async function renderExistingComments(
+  controller: OverlayController,
+  deps: {
+    supabaseUrl: string;
+    supabaseAnonKey: string;
+    previewId: string;
+    getAccessToken: () => string | Promise<string>;
+  },
+): Promise<void> {
+  try {
+    const comments = await loadReviewComments(deps);
+    controller.loadExistingComments(toExistingMarkers(comments));
+  } catch {
+    // Fail closed.
+  }
 }
 
 /**

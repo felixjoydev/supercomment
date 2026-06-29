@@ -7,6 +7,7 @@
 import type { Intent, Severity } from "@supercomment/shared";
 import { intentSchema, severitySchema } from "@supercomment/shared";
 import type { CommentDraft, Rect } from "../core/types.js";
+import { enterCard, exitCard } from "../shell/motion.js";
 
 const FORM_WIDTH = 320;
 const FORM_MARGIN = 12;
@@ -24,6 +25,8 @@ export class CommentForm {
   private readonly submitBtn: HTMLButtonElement;
   private intent: Intent = "change";
   private severity: Severity = "important";
+  private flippedAbove = false;
+  private destroyed = false;
 
   constructor(
     private readonly doc: Document,
@@ -81,6 +84,9 @@ export class CommentForm {
     parent.appendChild(this.el);
 
     this.place(anchor);
+    // Scale in from the side facing the selection, never from nothing.
+    this.el.style.transformOrigin = this.flippedAbove ? "bottom center" : "top center";
+    enterCard(this.el, this.flippedAbove ? -8 : 8);
     this.textarea.focus();
   }
 
@@ -100,7 +106,13 @@ export class CommentForm {
   }
 
   destroy(): void {
-    this.el.remove();
+    if (this.destroyed) return;
+    this.destroyed = true;
+    // Exits are softer and faster than enters; remove after the fade. When no
+    // animation can run, remove synchronously.
+    const done = exitCard(this.el);
+    if (done) void done.then(() => this.el.remove());
+    else this.el.remove();
   }
 
   private trySubmit(): void {
@@ -166,6 +178,7 @@ export class CommentForm {
     if (top + FORM_EST_HEIGHT + FORM_MARGIN > vh) {
       // Flip above the anchor when there isn't room below.
       top = anchor.y - FORM_EST_HEIGHT - FORM_MARGIN;
+      this.flippedAbove = true;
     }
     top = Math.max(FORM_MARGIN, top);
 

@@ -10,18 +10,11 @@ import type {
   Severity,
   NewCommentInput,
   CapturedContext,
+  ElementAnchor,
 } from "@supercomment/shared";
 
 /** The four selection modes the toolbar exposes (R9). */
 export type SelectionMode = "element" | "area" | "text" | "multi";
-
-/** Keyboard shortcut -> mode mapping (E / A / T / M). */
-export const MODE_SHORTCUTS: Readonly<Record<string, SelectionMode>> = {
-  e: "element",
-  a: "area",
-  t: "text",
-  m: "multi",
-};
 
 /** A rectangle in document (page) coordinates, CSS pixels. */
 export interface Rect {
@@ -29,6 +22,28 @@ export interface Rect {
   y: number;
   width: number;
   height: number;
+}
+
+/**
+ * An EXISTING comment loaded back onto the live deploy and rendered as a marker.
+ *
+ * U8 (re-anchor on activate): the controller re-resolves the live element from
+ * {@link anchors} against the current DOM and places the marker at the element's
+ * CURRENT rect, deriving stale-ness from anchor corroboration. `rect` is the
+ * capture-time `context.boundingBox` (document coords; null when none was
+ * stored) and is used only as the best-effort fallback position for a comment
+ * that goes stale. `isStale` is the server-persisted flag (NOT consulted by the
+ * live re-anchor pass, which recomputes stale-ness client-side per plan).
+ */
+export interface ExistingCommentMarker {
+  /** Stable per-preview comment number shown on the pin. */
+  number: number;
+  /** Capture-time position (document coords) from context.boundingBox. */
+  rect: Rect | null;
+  /** Server-persisted stale flag (retained for callers; not used by U8). */
+  isStale: boolean;
+  /** Captured multi-anchor set, re-resolved against the live DOM (U8). */
+  anchors: ElementAnchor[];
 }
 
 /**

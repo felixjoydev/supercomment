@@ -1,22 +1,38 @@
 /**
- * The mode-switching toolbar (R9). Four selection modes with keyboard
- * shortcuts (E/A/T/M) and an active highlight, plus the reviewer chip and the
- * multi-mode "Annotate N" confirm. Pure presentation + callbacks; the active
- * mode and the multi count are pushed in by the controller.
+ * The mode-switching toolbar (R9). Four selection modes with a spring-sliding
+ * active indicator, plus the reviewer chip and the multi-mode "Annotate N"
+ * confirm. Pure presentation + callbacks; the active mode and the multi count
+ * are pushed in by the controller.
+ *
+ * Modes are mouse-driven only — single-letter shortcuts were removed because
+ * they fired while typing (Shadow DOM retargeting hid the real event target).
  */
 import type { SelectionMode } from "../core/types.js";
+import { slidePill } from "../shell/motion.js";
 
 interface ModeDef {
   mode: SelectionMode;
   label: string;
-  key: string;
+  icon: string;
 }
 
+/** Minimal 13px stroke icons (currentColor) for each selection mode. */
+const ICONS: Record<SelectionMode, string> = {
+  element:
+    '<svg viewBox="0 0 14 14" fill="none"><rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" stroke-width="1.5"/></svg>',
+  area:
+    '<svg viewBox="0 0 14 14" fill="none"><path d="M1.5 4V3a1.5 1.5 0 0 1 1.5-1.5h1M9.5 1.5H11A1.5 1.5 0 0 1 12.5 3v1M12.5 10v1a1.5 1.5 0 0 1-1.5 1.5h-1M4.5 12.5H3A1.5 1.5 0 0 1 1.5 11v-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  text:
+    '<svg viewBox="0 0 14 14" fill="none"><path d="M2.5 3.5V2h9v1.5M7 2v10M5 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  multi:
+    '<svg viewBox="0 0 14 14" fill="none"><rect x="1.5" y="1.5" width="7.5" height="7.5" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M12.5 5v4.5A3 3 0 0 1 9.5 12.5H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+};
+
 const MODES: ModeDef[] = [
-  { mode: "element", label: "Element", key: "E" },
-  { mode: "area", label: "Area", key: "A" },
-  { mode: "text", label: "Text", key: "T" },
-  { mode: "multi", label: "Multi", key: "M" },
+  { mode: "element", label: "Element", icon: ICONS.element },
+  { mode: "area", label: "Area", icon: ICONS.area },
+  { mode: "text", label: "Text", icon: ICONS.text },
+  { mode: "multi", label: "Multi", icon: ICONS.multi },
 ];
 
 export interface ToolbarCallbacks {
@@ -27,9 +43,11 @@ export interface ToolbarCallbacks {
 
 export class Toolbar {
   private readonly el: HTMLElement;
+  private readonly pill: HTMLElement;
   private readonly buttons = new Map<SelectionMode, HTMLButtonElement>();
   private readonly confirmBtn: HTMLButtonElement;
   private readonly chipName: HTMLElement;
+  private pillPlaced = false;
 
   constructor(
     doc: Document,
@@ -41,20 +59,27 @@ export class Toolbar {
     this.el.setAttribute("role", "toolbar");
     this.el.setAttribute("aria-label", "SuperComment");
 
+    // The sliding active indicator sits behind the buttons.
+    this.pill = doc.createElement("div");
+    this.pill.className = "sc-mode-pill";
+    this.pill.setAttribute("aria-hidden", "true");
+    this.el.appendChild(this.pill);
+
     for (const def of MODES) {
       const btn = doc.createElement("button");
       btn.type = "button";
       btn.className = "sc-mode-btn";
       btn.setAttribute("data-mode", def.mode);
       btn.setAttribute("aria-pressed", "false");
-      btn.title = `${def.label} (${def.key})`;
+      btn.title = def.label;
 
+      const icon = doc.createElement("span");
+      icon.className = "sc-mode-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = def.icon;
       const label = doc.createElement("span");
       label.textContent = def.label;
-      const key = doc.createElement("span");
-      key.className = "sc-mode-key";
-      key.textContent = def.key;
-      btn.append(label, key);
+      btn.append(icon, label);
 
       btn.addEventListener("click", () => callbacks.onModeChange(def.mode));
       this.buttons.set(def.mode, btn);
@@ -82,12 +107,16 @@ export class Toolbar {
     const change = doc.createElement("button");
     change.type = "button";
     change.className = "sc-chip-change";
-    change.textContent = "change";
+    change.textContent = "Change";
     change.addEventListener("click", () => callbacks.onChangeName());
     chip.append(reviewing, this.chipName, change);
 
     this.el.append(this.confirmBtn, sep, chip);
     parent.appendChild(this.el);
+
+    // Keep the indicator aligned if the viewport/layout shifts.
+    const view = doc.defaultView;
+    view?.addEventListener("resize", () => this.placePill(true));
   }
 
   /** Highlight the active mode and toggle the multi confirm button. */
@@ -96,6 +125,29 @@ export class Toolbar {
       btn.setAttribute("aria-pressed", String(m === mode));
     }
     this.confirmBtn.style.display = mode === "multi" ? "" : "none";
+    this.placePill(!this.pillPlaced);
+  }
+
+  /** Move the sliding indicator under the active button. */
+  private placePill(instant: boolean): void {
+    const active = Array.from(this.buttons.values()).find(
+      (b) => b.getAttribute("aria-pressed") === "true",
+    );
+    if (!active) return;
+    const place = () => {
+      const x = active.offsetLeft;
+      const width = active.offsetWidth;
+      if (!width) return; // not laid out yet (e.g. test doubles)
+      slidePill(this.pill, x, width, instant || !this.pillPlaced);
+      this.pillPlaced = true;
+    };
+    // First placement waits a frame so layout (and the entrance animation's
+    // starting styles) have settled; later moves measure synchronously.
+    if (!this.pillPlaced && typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(place);
+    } else {
+      place();
+    }
   }
 
   /** Update the "Annotate N" label and enabled state. */

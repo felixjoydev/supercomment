@@ -1,17 +1,20 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 
-import { createClient } from "@/lib/supabase/client";
-import { toCommentView } from "@/lib/comments/transform";
-import type { CommentRow, CommentView } from "@/lib/comments/types";
+import { createClient } from '@/lib/supabase/client';
+import { toCommentView } from '@/lib/comments/transform';
+import type { CommentRow, CommentView } from '@/lib/comments/types';
 import {
   mergeComment,
   selectView,
   countByStatus,
   type DashboardFilter,
-} from "@/lib/comments/view";
-import { CommentCard } from "./comment-card";
+} from '@/lib/comments/view';
+import { CommentCard } from './comment-card';
+
+const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
 /**
  * Root client island for the realtime comment review surface.
@@ -20,7 +23,7 @@ import { CommentCard } from "./comment-card";
  * to the per-preview PRIVATE broadcast channel `preview:<id>` and merge each
  * delivery through the pure `mergeComment` (insert / update-by-id / dedup). The
  * channel is authorized by the realtime.messages RLS policy from migration 0004
- * — only the preview's team members + participants receive its topic.
+ * — only the preview's workspace members + participants receive its topic.
  *
  * VERIFY IN REAL ENV: the live websocket round-trip (subscribe, receive a
  * broadcast, status SUBSCRIBED) cannot be exercised in this sandbox; the merge
@@ -36,9 +39,9 @@ export function CommentBoard({
   canMutate: boolean;
 }) {
   const [comments, setComments] = useState<CommentView[]>(initialComments);
-  const [filter, setFilter] = useState<DashboardFilter>("open");
-  const [connection, setConnection] = useState<"connecting" | "live" | "error">(
-    "connecting",
+  const [filter, setFilter] = useState<DashboardFilter>('open');
+  const [connection, setConnection] = useState<'connecting' | 'live' | 'error'>(
+    'connecting',
   );
 
   useEffect(() => {
@@ -57,12 +60,12 @@ export function CommentBoard({
     }
 
     channel
-      .on("broadcast", { event: "INSERT" }, (msg: { payload?: unknown }) => ingest(msg.payload))
-      .on("broadcast", { event: "UPDATE" }, (msg: { payload?: unknown }) => ingest(msg.payload))
+      .on('broadcast', { event: 'INSERT' }, (msg: { payload?: unknown }) => ingest(msg.payload))
+      .on('broadcast', { event: 'UPDATE' }, (msg: { payload?: unknown }) => ingest(msg.payload))
       .subscribe((status: string) => {
-        if (status === "SUBSCRIBED") setConnection("live");
-        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT")
-          setConnection("error");
+        if (status === 'SUBSCRIBED') setConnection('live');
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')
+          setConnection('error');
       });
 
     return () => {
@@ -79,106 +82,111 @@ export function CommentBoard({
 
   return (
     <section>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "1rem",
-          flexWrap: "wrap",
-          gap: "0.75rem",
-        }}
-      >
-        <div style={{ display: "flex", gap: "0.5rem" }} role="tablist" aria-label="Comment filter">
-          <FilterTab label={`Open (${counts.open})`} active={filter === "open"} onClick={() => setFilter("open")} />
-          <FilterTab
-            label={`History (${counts.resolved + counts.dismissed})`}
-            active={filter === "history"}
-            onClick={() => setFilter("history")}
-          />
-          <FilterTab label={`All (${counts.total})`} active={filter === "all"} onClick={() => setFilter("all")} />
-        </div>
-        <ConnectionDot state={connection} />
+      <div className="comments-head">
+        <FilterTabs filter={filter} onChange={setFilter} counts={counts} />
+        <ConnectionIndicator state={connection} />
       </div>
 
       {visible.length === 0 ? (
         <EmptyState filter={filter} />
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.75rem" }}>
-          {visible.map((comment) => (
-            <li key={comment.id}>
-              <CommentCard comment={comment} canMutate={canMutate} onLocalUpdate={handleLocalUpdate} />
-            </li>
-          ))}
+        <ul className="comment-list">
+          <AnimatePresence initial={false} mode="popLayout">
+            {visible.map((comment) => (
+              <motion.li
+                key={comment.id}
+                layout
+                initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={spring}
+              >
+                <CommentCard
+                  comment={comment}
+                  canMutate={canMutate}
+                  onLocalUpdate={handleLocalUpdate}
+                />
+              </motion.li>
+            ))}
+          </AnimatePresence>
         </ul>
       )}
     </section>
   );
 }
 
-function FilterTab({
-  label,
-  active,
-  onClick,
+function FilterTabs({
+  filter,
+  onChange,
+  counts,
 }: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  filter: DashboardFilter;
+  onChange: (f: DashboardFilter) => void;
+  counts: { open: number; resolved: number; dismissed: number; total: number };
 }) {
+  const tabs: { key: DashboardFilter; label: string; count: number }[] = [
+    { key: 'open', label: 'Open', count: counts.open },
+    { key: 'history', label: 'History', count: counts.resolved + counts.dismissed },
+    { key: 'all', label: 'All', count: counts.total },
+  ];
+
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      style={{
-        padding: "0.35rem 0.75rem",
-        borderRadius: 999,
-        border: "1px solid " + (active ? "#2563eb" : "#e5e7eb"),
-        background: active ? "#2563eb" : "#fff",
-        color: active ? "#fff" : "#374151",
-        fontSize: "0.8125rem",
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
+    <div className="seg" role="tablist" aria-label="Comment filter">
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          type="button"
+          role="tab"
+          aria-selected={filter === tab.key}
+          className="seg-btn"
+          onClick={() => onChange(tab.key)}
+        >
+          {filter === tab.key ? (
+            <motion.span
+              layoutId="comment-filter-pill"
+              className="seg-pill"
+              transition={spring}
+            />
+          ) : null}
+          <span className="seg-label">
+            {tab.label} <span className="seg-count">{tab.count}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
-function ConnectionDot({ state }: { state: "connecting" | "live" | "error" }) {
-  const color = state === "live" ? "#16a34a" : state === "error" ? "#dc2626" : "#9ca3af";
-  const label = state === "live" ? "Live" : state === "error" ? "Reconnecting…" : "Connecting…";
+function ConnectionIndicator({ state }: { state: 'connecting' | 'live' | 'error' }) {
+  const cls =
+    state === 'live'
+      ? 'live-indicator is-live'
+      : state === 'error'
+        ? 'live-indicator is-error'
+        : 'live-indicator is-connecting';
+  const label = state === 'live' ? 'Live' : state === 'error' ? 'Reconnecting…' : 'Connecting…';
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", fontSize: "0.75rem", color: "#6b7280" }}>
-      <span style={{ width: 8, height: 8, borderRadius: 999, background: color }} aria-hidden />
+    <span className={cls}>
+      <span className="live-indicator-dot" aria-hidden="true" />
       {label}
     </span>
   );
 }
 
 function EmptyState({ filter }: { filter: DashboardFilter }) {
-  if (filter === "open") {
+  if (filter === 'open') {
     return (
-      <div
-        style={{
-          border: "1px dashed #d1d5db",
-          borderRadius: 8,
-          padding: "2rem",
-          textAlign: "center",
-          color: "#6b7280",
-        }}
-      >
-        <p style={{ fontWeight: 600, margin: "0 0 0.25rem", color: "#374151" }}>No open comments yet</p>
-        <p style={{ margin: 0, fontSize: "0.875rem" }}>
-          Share this preview&rsquo;s link with your team to start collecting visual feedback.
+      <div className="empty-state">
+        <p className="empty-title">All clear</p>
+        <p className="empty-sub">
+          Share this preview&rsquo;s link with your workspace to start collecting visual feedback.
         </p>
       </div>
     );
   }
   return (
-    <div style={{ border: "1px dashed #d1d5db", borderRadius: 8, padding: "1.5rem", textAlign: "center", color: "#6b7280" }}>
-      <p style={{ margin: 0, fontSize: "0.875rem" }}>Nothing here yet.</p>
+    <div className="empty-state">
+      <p className="empty-sub">Nothing here yet.</p>
     </div>
   );
 }

@@ -37,9 +37,13 @@ export function toCommentView(
     note: row.note,
     status: row.status,
     fidelity: (row.fidelity ?? "live") as CommentView["fidelity"],
+    isStale: row.is_stale ?? false,
     context: coerceContext(row.context),
     path: row.path ?? null,
     resolvedSummary: row.resolved_summary ?? null,
     createdAt: row.created_at,
+    // Hydrated separately from comment_queue in getCommentsForPreview; the
+    // realtime/broadcast path carries no queue join, so it defaults to null.
+    sendStatus: null,
   };
 }

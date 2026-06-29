@@ -1,62 +1,67 @@
 import Link from 'next/link';
-import { listTeams, listProjects } from '@/lib/data';
-import { CreateTeamForm, CreateProjectForm } from './forms';
+import { ensureDefaultWorkspace, listProjects } from '@/lib/data';
+import { Stagger, StaggerItem } from '@/components/motion';
+import { CreateWorkspaceForm, CreateProjectForm } from './forms';
 
 /**
- * Dashboard home: the team → project navigation surface. Reads are RLS-scoped,
- * so a member only sees their own teams/projects. New users with no team see a
- * first-team bootstrap prompt (create_team RPC).
+ * Dashboard home: the workspace → project navigation surface. Reads are
+ * RLS-scoped, so a member only sees their own workspaces/projects. A brand-new
+ * user is bootstrapped a default workspace (U4) so they land straight on
+ * "create a project" — no manual workspace step.
  */
 export default async function DashboardPage() {
-  const teams = await listTeams();
+  const workspaces = await ensureDefaultWorkspace();
 
   return (
-    <div>
-      <div className="page-head">
-        <h1 className="page-title">Your teams</h1>
-      </div>
-
-      {teams.length === 0 ? (
-        <div>
-          <p className="empty">
-            You&rsquo;re not on a team yet. Create one to start managing previews.
-          </p>
-          <CreateTeamForm />
+    <Stagger>
+      <StaggerItem>
+        <div className="page-head">
+          <h1 className="page-title">Your workspaces</h1>
         </div>
-      ) : (
-        <>
-          <ul className="card-list">
-            {teams.map((team) => (
-              <TeamCard key={team.id} teamId={team.id} teamName={team.name} />
-            ))}
-          </ul>
-          <CreateTeamForm />
-        </>
-      )}
-    </div>
+      </StaggerItem>
+
+      {workspaces.map((workspace) => (
+        <StaggerItem key={workspace.id}>
+          <WorkspaceSection workspaceId={workspace.id} workspaceName={workspace.name} />
+        </StaggerItem>
+      ))}
+
+      <StaggerItem>
+        <CreateWorkspaceForm />
+      </StaggerItem>
+    </Stagger>
   );
 }
 
-/** A team card listing its projects. */
-async function TeamCard({ teamId, teamName }: { teamId: string; teamName: string }) {
-  const projects = await listProjects(teamId);
+/** A workspace section listing its projects as tiles. */
+async function WorkspaceSection({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+  const projects = await listProjects(workspaceId);
   return (
-    <li className="card">
-      <div className="card-head">
-        <h2 className="card-title">{teamName}</h2>
+    <section className="workspace-section">
+      <div className="workspace-head">
+        <h2 className="workspace-name">{workspaceName}</h2>
       </div>
+
       {projects.length === 0 ? (
-        <p className="empty">No projects yet.</p>
+        <p className="empty-inline" style={{ margin: '0 0 14px' }}>
+          No projects yet — add the first one below.
+        </p>
       ) : (
-        <ul className="sub-list">
+        <div className="tile-grid">
           {projects.map((p) => (
-            <li key={p.id} className="sub-item">
-              <Link href={`/dashboard/projects/${p.id}`}>{p.name}</Link>
-            </li>
+            <Link key={p.id} href={`/dashboard/projects/${p.id}`} className="tile">
+              <span className="tile-row">
+                <span className="tile-title">{p.name}</span>
+                <span className="tile-arrow" aria-hidden="true">
+                  →
+                </span>
+              </span>
+            </Link>
           ))}
-        </ul>
+        </div>
       )}
-      <CreateProjectForm teamId={teamId} />
-    </li>
+
+      <CreateProjectForm workspaceId={workspaceId} />
+    </section>
   );
 }

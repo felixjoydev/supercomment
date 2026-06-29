@@ -14,7 +14,7 @@ export default function DashboardError({
   return (
     <div className="error-box">
       <h2>Something went wrong</h2>
-      <p className="empty">{error.message || 'Failed to load this view.'}</p>
+      <p>{error.message || 'Failed to load this view.'}</p>
       <button className="btn" onClick={reset}>
         Try again
       </button>

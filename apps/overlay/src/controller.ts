@@ -16,8 +16,8 @@ import type {
 } from "@supercomment/shared";
 import { newCommentInputSchema } from "@supercomment/shared";
 import {
-  MODE_SHORTCUTS,
   type CommentDraft,
+  type ExistingCommentMarker,
   type OverlayConfig,
   type Rect,
   type SelectionMode,
@@ -30,7 +30,17 @@ import { HighlightLayer } from "./selection/highlight.js";
 import { CommentForm } from "./selection/form.js";
 import { GuestModal } from "./guest/modal.js";
 import { GuestNameStore } from "./guest/store.js";
-import { MarkerLayer } from "./markers/render.js";
+import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
+import { resolveAnchors } from "./capture/reanchor.js";
+import { attachBeforeArtifact } from "./capture/screenshot.js";
+
+/**
+ * U8: how many times re-anchoring retries an unresolved comment across animation
+ * frames before declaring it stale. CSR/SPA apps render content AFTER the overlay
+ * activates, so a comment whose element is merely late (not gone) gets a short
+ * settle window (~N frames) rather than being falsely marked stale on frame 0.
+ */
+const REANCHOR_MAX_ATTEMPTS = 10;
 
 /** Convert a DOMRect-ish to our plain Rect (viewport coordinates). */
 function toRect(r: {
@@ -47,6 +57,19 @@ function toRect(r: {
     width: r.width,
     height: r.height,
   };
+}
+
+/** The element a "before" artifact should target, if any (U9/R15). */
+function primaryElementOfTarget(target: SelectionTarget): Element | null {
+  switch (target.kind) {
+    case "element":
+      return target.element;
+    case "multi":
+      return target.elements[0] ?? null;
+    case "text":
+    case "area":
+      return null;
+  }
 }
 
 export class OverlayController {
@@ -91,6 +114,93 @@ export class OverlayController {
   /** Remove the overlay from the page. */
   destroy(): void {
     this.shell.destroy();
+  }
+
+  /**
+   * U8 (re-anchor on activate): render markers for the preview's EXISTING
+   * comments, loaded back after the overlay activates on the live deploy (R12,
+   * R13). Each comment's live element is re-resolved from its captured
+   * multi-anchor set against the CURRENT DOM:
+   *
+   *   - resolved  → marker placed at the element's CURRENT rect (document coords);
+   *   - stale     → marker kept VISIBLE in the distinct stale state at a
+   *                 best-effort position (its last-known capture box, else top),
+   *                 rather than silently dropped or mis-anchored to the wrong
+   *                 element (the resolver never guesses a non-unique match).
+   *
+   * Stale-ness is recomputed client-side from the anchors here (the server
+   * `isStale` flag is not consulted); persisting it server-side is deferred.
+   *
+   * Fire-and-forget: the async retry settle (below) must never reject into the
+   * host page, so failures are swallowed (the caller also fails closed).
+   */
+  loadExistingComments(comments: ExistingCommentMarker[]): void {
+    void this.reanchorExistingComments(comments).catch(() => {});
+  }
+
+  /**
+   * Resolve + place existing comments, retrying the not-yet-resolvable ones
+   * across a few animation frames so late-rendered CSR/SPA content is not
+   * falsely marked stale. The first pass is synchronous, so comments whose
+   * elements are already in the DOM render immediately; only genuinely missing
+   * ones wait out the settle window before going stale.
+   */
+  private async reanchorExistingComments(
+    comments: ExistingCommentMarker[],
+  ): Promise<void> {
+    let pending = comments;
+    for (let attempt = 0; ; attempt++) {
+      const resolved: PlacedMarker[] = [];
+      const unresolved: ExistingCommentMarker[] = [];
+      for (const c of pending) {
+        const { element } = resolveAnchors(c.anchors, this.doc);
+        if (element) {
+          resolved.push({ number: c.number, rect: this.documentRect(element) });
+        } else {
+          unresolved.push(c);
+        }
+      }
+      if (resolved.length > 0) this.markers.addMany(resolved);
+      pending = unresolved;
+      if (pending.length === 0) return;
+      if (attempt >= REANCHOR_MAX_ATTEMPTS) break;
+      await this.nextFrame();
+    }
+
+    // Settle window exhausted: the rest are stale but kept visible.
+    this.markers.addMany(
+      pending.map((c) => ({
+        number: c.number,
+        rect: c.rect ?? { x: 0, y: 0, width: 0, height: 0 },
+        isStale: true,
+      })),
+    );
+  }
+
+  /** A live element's rect in DOCUMENT coordinates (viewport rect + scroll). */
+  private documentRect(el: Element): Rect {
+    const r = el.getBoundingClientRect();
+    const view = this.doc.defaultView;
+    const sx = view?.scrollX ?? view?.pageXOffset ?? 0;
+    const sy = view?.scrollY ?? view?.pageYOffset ?? 0;
+    return {
+      x: (r.x ?? r.left) + sx,
+      y: (r.y ?? r.top) + sy,
+      width: r.width,
+      height: r.height,
+    };
+  }
+
+  /** Resolve on the next animation frame (or a macrotask in non-browser envs). */
+  private nextFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      const view = this.doc.defaultView;
+      if (view && typeof view.requestAnimationFrame === "function") {
+        view.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(() => resolve(), 0);
+      }
+    });
   }
 
   // --- Mode handling ------------------------------------------------------
@@ -198,6 +308,15 @@ export class OverlayController {
     if (!name) return; // still no name -> stay blocked
 
     const context = await this.captureContext(target);
+
+    // U9 (R15): guarantee a per-comment, ELEMENT-scoped "before" artifact is
+    // attached AT SUBMIT. The injected capturer normally fills
+    // `context.screenshot` (an element raster when a rasterizer is wired, else an
+    // element-subtree DOM snapshot); this backstop covers a capturer that didn't,
+    // using the snapshot fallback. It is fully best-effort and NEVER throws, so a
+    // raster/snapshot failure can never block submission.
+    await attachBeforeArtifact(context, primaryElementOfTarget(target));
+
     const payload: NewCommentInput = newCommentInputSchema.parse({
       previewId: this.config.previewId,
       authorDisplayName: name,
@@ -276,17 +395,14 @@ export class OverlayController {
     const view = this.doc.defaultView;
     if (!view) return;
 
+    // Escape is the only global key. Single-letter mode shortcuts were removed
+    // deliberately: Shadow DOM retargets keydowns from our own form to the
+    // shadow host, so a naive "am I typing?" guard cannot see the textarea and
+    // letters typed into the note field would switch modes and destroy the
+    // draft. Modes are mouse-driven from the toolbar.
     this.doc.addEventListener("keydown", (e) => {
       const ke = e as KeyboardEvent;
-      if (ke.key === "Escape") {
-        this.cancelSelection();
-        return;
-      }
-      // Ignore shortcuts while typing in a field.
-      const tag = (ke.target as Element | null)?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea") return;
-      const mode = MODE_SHORTCUTS[ke.key.toLowerCase()];
-      if (mode) this.changeMode(mode);
+      if (ke.key === "Escape") this.cancelSelection();
     });
 
     // Clicks on the host page drive element/multi selection. We listen in the

@@ -14,16 +14,27 @@ import {
   type MarkerInput,
 } from "./cluster.js";
 import { edgeDirection } from "../core/geometry.js";
+import { popIn } from "../shell/motion.js";
 
 /** A placed comment marker, anchored to its target rect (viewport space). */
 export interface PlacedMarker {
   number: number;
   rect: Rect;
+  /**
+   * U12: an EXISTING comment whose element could not be confidently re-anchored
+   * on the current deploy is rendered in a visually distinct stale state (kept
+   * visible). Fresh submits leave this undefined. U8 flips it from anchor
+   * corroboration; for now it reflects the server-persisted is_stale flag.
+   */
+  isStale?: boolean;
 }
 
 export class MarkerLayer {
   private readonly container: HTMLElement;
   private readonly markers: PlacedMarker[] = [];
+  /** Number of the marker added by the latest add(), so only IT pops in —
+   * scroll/resize repaints must not replay entrance animations. */
+  private justAdded: number | null = null;
 
   constructor(
     private readonly doc: Document,
@@ -35,9 +46,23 @@ export class MarkerLayer {
     parent.appendChild(this.container);
   }
 
-  /** Register a new marker and repaint. */
+  /** Register a new marker and repaint (the new pin pops in once). */
   add(marker: PlacedMarker): void {
     this.markers.push(marker);
+    this.justAdded = marker.number;
+    this.render();
+    this.justAdded = null;
+  }
+
+  /**
+   * U12: register MANY existing comments at once (loaded back on activate) and
+   * repaint once. Unlike add(), these do NOT pop in — they are pre-existing, not
+   * freshly created — and any marked stale renders in a distinct state.
+   */
+  addMany(markers: PlacedMarker[]): void {
+    if (markers.length === 0) return;
+    this.markers.push(...markers);
+    this.justAdded = null;
     this.render();
   }
 
@@ -58,9 +83,20 @@ export class MarkerLayer {
 
     const { visible, offscreen } = partitionByViewport(inputs, vp);
 
+    // U12: numbers rendered in the distinct stale state (kept visible).
+    const staleNumbers = new Set<number>(
+      this.markers.filter((m) => m.isStale).map((m) => m.number),
+    );
+
     for (const cluster of clusterMarkers(visible, this.thresholdPx)) {
       const el = this.doc.createElement("div");
-      el.className = cluster.isCluster ? "sc-marker sc-cluster" : "sc-marker";
+      if (cluster.isCluster) {
+        el.className = "sc-marker sc-cluster";
+      } else if (staleNumbers.has(cluster.numbers[0]!)) {
+        el.className = "sc-marker sc-stale";
+      } else {
+        el.className = "sc-marker";
+      }
       el.style.left = `${cluster.point.x}px`;
       el.style.top = `${cluster.point.y}px`;
       el.textContent = cluster.isCluster
@@ -71,11 +107,14 @@ export class MarkerLayer {
         cluster.numbers.join(","),
       );
       this.container.appendChild(el);
+      if (this.justAdded !== null && cluster.numbers.includes(this.justAdded)) {
+        popIn(el);
+      }
     }
 
     for (const off of offscreen) {
       const el = this.doc.createElement("div");
-      el.className = "sc-edge";
+      el.className = staleNumbers.has(off.number) ? "sc-edge sc-stale" : "sc-edge";
       el.setAttribute("data-direction", edgeDirection(off.point, vp));
       el.setAttribute("data-number", String(off.number));
       // Pin the indicator to the nearest viewport edge along the direction.

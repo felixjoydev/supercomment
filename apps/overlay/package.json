@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@supercomment/shared": "workspace:*"
+    "@supercomment/shared": "workspace:*",
+    "motion": "^12.40.0"
   },
   "devDependencies": {
     "jsdom": "29.1.1",

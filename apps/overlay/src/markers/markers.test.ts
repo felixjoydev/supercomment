@@ -91,3 +91,43 @@ describe("MarkerLayer rendering", () => {
     expect(layer.renderedEdgeCount()).toBe(1);
   });
 });
+
+describe("MarkerLayer existing comments (U12)", () => {
+  function setup(): { layer: MarkerLayer; parent: any } {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    doc.body.appendChild(parent);
+    const layer = new MarkerLayer(doc as unknown as Document, parent as any);
+    return { layer, parent };
+  }
+
+  it("addMany renders a pin per existing comment in one paint", () => {
+    const { layer } = setup();
+    layer.addMany([
+      { number: 1, rect: makeRect(100, 100, 0, 0) },
+      { number: 2, rect: makeRect(500, 500, 0, 0), isStale: true },
+    ]);
+    layer.render({ width: 1000, height: 800 });
+    expect(layer.count()).toBe(2);
+    expect(layer.renderedPinCount()).toBe(2);
+  });
+
+  it("addMany of an empty list paints nothing (clean empty render)", () => {
+    const { layer } = setup();
+    layer.addMany([]);
+    expect(layer.count()).toBe(0);
+    expect(layer.renderedPinCount()).toBe(0);
+  });
+
+  it("renders a stale existing comment with the sc-stale class", () => {
+    const { layer, parent } = setup();
+    layer.addMany([
+      { number: 1, rect: makeRect(100, 100, 0, 0), isStale: false },
+      { number: 2, rect: makeRect(500, 500, 0, 0), isStale: true },
+    ]);
+    layer.render({ width: 1000, height: 800 });
+    const stale = parent.querySelectorAll(".sc-marker.sc-stale");
+    expect(stale.length).toBe(1);
+    expect(stale[0]!.textContent).toBe("2");
+  });
+});

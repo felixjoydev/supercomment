@@ -38,6 +38,16 @@ function rectFor(el: Element): {
   return (el as unknown as FakeElement).getBoundingClientRect();
 }
 
+/**
+ * Drain all pending microtasks before asserting on the async submit flow. A
+ * macrotask tick is used (rather than counting `Promise.resolve()` hops) because
+ * `completeSubmit` now awaits the best-effort before-artifact capture (U9) in
+ * addition to context capture + submit, so the exact microtask depth is an
+ * implementation detail the test should not encode.
+ */
+const flush = (): Promise<void> =>
+  new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 class RecordingCapturer implements ContextCapturer {
   lastTarget: SelectionTarget | null = null;
   capture(target: SelectionTarget): CapturedContext {
@@ -205,8 +215,7 @@ describe("OverlayController — element mode", () => {
     const submitBtn = shadow.querySelectorAll(".sc-btn-primary")[0]!;
     submitBtn.dispatch("click", {});
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     expect(submitter.payloads.length).toBe(1);
     const payload = submitter.payloads[0]!;
@@ -217,6 +226,33 @@ describe("OverlayController — element mode", () => {
     expect(capturer.lastTarget?.kind).toBe("element");
 
     // A numbered marker appears.
+    expect(shadow.querySelectorAll(".sc-marker").length).toBe(1);
+  });
+});
+
+describe("OverlayController — before-artifact is best-effort (U9)", () => {
+  it("submits the comment even when the before-artifact yields nothing (capture never blocks submit)", async () => {
+    // RecordingCapturer returns a context WITHOUT a screenshot, so the
+    // controller's best-effort before-artifact backstop runs at submit. Whether
+    // it produces an element-subtree snapshot or nothing, submission MUST still
+    // complete and the marker MUST still be placed (R15).
+    const { controller, doc, submitter } = makeController();
+    const el = doc.createElement("button");
+    el.setAttribute("data-rect", "0,0,30,30");
+    doc.body.appendChild(el);
+
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    const shadow = doc.getElementById(HOST_ELEMENT_ID)!.shadowRoot!;
+    shadow.querySelector("textarea")!.value = "Best-effort before-artifact";
+    shadow.querySelectorAll(".sc-btn-primary")[0]!.dispatch("click", {});
+
+    await flush();
+
+    expect(submitter.payloads.length).toBe(1);
+    expect(() =>
+      newCommentInputSchema.parse(submitter.payloads[0]!),
+    ).not.toThrow();
     expect(shadow.querySelectorAll(".sc-marker").length).toBe(1);
   });
 });
@@ -232,8 +268,7 @@ describe("OverlayController — area / text / multi", () => {
     const textarea = shadow.querySelector("textarea")!;
     textarea.value = "This region is misaligned";
     shadow.querySelectorAll(".sc-btn-primary")[0]!.dispatch("click", {});
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     expect(capturer.lastTarget?.kind).toBe("area");
     expect(submitter.payloads.length).toBe(1);
@@ -265,8 +300,7 @@ describe("OverlayController — area / text / multi", () => {
     const shadow = doc.getElementById(HOST_ELEMENT_ID)!.shadowRoot!;
     shadow.querySelector("textarea")!.value = "These two are inconsistent";
     shadow.querySelectorAll(".sc-btn-primary")[0]!.dispatch("click", {});
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     expect(submitter.payloads.length).toBe(1); // ONE comment for both
     expect(capturer.lastTarget?.kind).toBe("multi");
@@ -310,8 +344,7 @@ describe("OverlayController — guest name gate", () => {
     const primaries = shadow.querySelectorAll(".sc-btn-primary");
     primaries[primaries.length - 1]!.dispatch("click", {});
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
 
     expect(submitter.payloads.length).toBe(1);
     expect(submitter.payloads[0]!.authorDisplayName).toBe("Jordan");

@@ -13,6 +13,7 @@
 import { runMcpServer } from "../mcp/server.js";
 import { runStart } from "../start/index.js";
 import { loadProjectBinding } from "../config/binding.js";
+import { isTunnelEnabled, TUNNEL_DISABLED_MESSAGE } from "../tunnel-gate.js";
 import type { ChannelSupabaseClient } from "../channel/index.js";
 import type { AccessMode } from "../exposure-warning.js";
 
@@ -73,7 +74,24 @@ async function runStartCommand(args: string[]): Promise<number> {
   }
 
   const binding = await loadProjectBinding();
-  const client = await buildSupabaseClient(binding.supabaseUrl, binding.token);
+  // Supabase requires the project's ANON (publishable) key as the `apikey`; the
+  // developer's member JWT goes only in the Authorization bearer so RLS applies
+  // the member identity. They are different values — passing the JWT as the
+  // apikey yields "Invalid API key".
+  const anonKey = process.env.SUPERCOMMENT_ANON_KEY;
+  if (!anonKey) {
+    process.stderr.write(
+      "start: SUPERCOMMENT_ANON_KEY is required (the project's anon/publishable " +
+        "key, used as the Supabase apikey). SUPERCOMMENT_TOKEN must be your " +
+        "developer member session JWT, not the anon key.\n",
+    );
+    return 1;
+  }
+  const client = await buildSupabaseClient(
+    binding.supabaseUrl,
+    anonKey,
+    binding.token,
+  );
 
   await runStart({ port, accessMode, binding, client });
   // runStart resolves once live; keep the process alive until SIGINT cleans up.
@@ -99,12 +117,15 @@ function normalizeAccessMode(value: string | undefined): AccessMode {
  */
 async function buildSupabaseClient(
   url: string,
-  token: string,
+  anonKey: string,
+  memberToken: string,
 ): Promise<ChannelSupabaseClient> {
   const { createClient } = await import("@supabase/supabase-js");
-  const client = createClient(url, token, {
+  // apikey = anon key (required by the gateway); Authorization = member JWT (so
+  // RLS / member-only RPCs like register_preview_tunnel see the developer).
+  const client = createClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${token}` } },
+    global: { headers: { Authorization: `Bearer ${memberToken}` } },
   });
   return client as unknown as ChannelSupabaseClient;
 }
@@ -122,6 +143,15 @@ async function main(argv: string[]): Promise<number> {
       return 0;
 
     case "start":
+      // Tunnel mode is disabled by default (U10 / R17): the product ships
+      // embedded review mode. runStart + all proxy/tunnel/channel/csp code are
+      // retained intact (and bug-patched) behind SUPERCOMMENT_ENABLE_TUNNEL, but
+      // the dispatch refuses to spawn anything unless the flag is set. (Tests
+      // call runStart directly, so they survive this dispatch-level gate.)
+      if (!isTunnelEnabled()) {
+        process.stdout.write(TUNNEL_DISABLED_MESSAGE + "\n");
+        return 0;
+      }
       return await runStartCommand(argv.slice(1));
 
     case "mcp": {

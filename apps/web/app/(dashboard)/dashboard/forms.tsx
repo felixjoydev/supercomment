@@ -1,39 +1,41 @@
 'use client';
+
 import { useRef } from 'react';
-import { createTeamAction, createProjectAction } from './actions';
+import { useFormStatus } from 'react-dom';
+import { createWorkspaceAction, createProjectAction } from './actions';
 
 /**
- * Inline create-team form. Submits to the createTeamAction server action, which
- * bootstraps the team + owner membership via the create_team RPC.
+ * Inline create-workspace form. Submits to the createWorkspaceAction server
+ * action, which bootstraps the workspace + owner membership via the
+ * create_workspace RPC.
  */
-export function CreateTeamForm() {
+export function CreateWorkspaceForm({ autoFocus = false }: { autoFocus?: boolean }) {
   const ref = useRef<HTMLFormElement>(null);
   return (
     <form
       ref={ref}
       action={async (fd) => {
-        await createTeamAction(fd);
+        await createWorkspaceAction(fd);
         ref.current?.reset();
       }}
-      className="inline-form"
+      className="create-row"
     >
       <input
         name="name"
         required
         maxLength={80}
-        placeholder="New team name"
-        aria-label="New team name"
-        className="inline-input"
+        placeholder="New workspace name"
+        aria-label="New workspace name"
+        className="input"
+        autoFocus={autoFocus}
       />
-      <button type="submit" className="btn">
-        Create team
-      </button>
+      <SubmitButton pendingLabel="Creating…">Create workspace</SubmitButton>
     </form>
   );
 }
 
-/** Inline create-project form under a team. */
-export function CreateProjectForm({ teamId }: { teamId: string }) {
+/** Inline create-project form under a workspace. */
+export function CreateProjectForm({ workspaceId }: { workspaceId: string }) {
   const ref = useRef<HTMLFormElement>(null);
   return (
     <form
@@ -42,20 +44,37 @@ export function CreateProjectForm({ teamId }: { teamId: string }) {
         await createProjectAction(fd);
         ref.current?.reset();
       }}
-      className="inline-form"
+      className="create-row"
     >
-      <input type="hidden" name="teamId" value={teamId} />
+      <input type="hidden" name="workspaceId" value={workspaceId} />
       <input
         name="name"
         required
         maxLength={120}
         placeholder="New project name"
         aria-label="New project name"
-        className="inline-input"
+        className="input"
       />
-      <button type="submit" className="btn btn-subtle">
+      <SubmitButton ghost pendingLabel="Adding…">
         Add project
-      </button>
+      </SubmitButton>
     </form>
+  );
+}
+
+function SubmitButton({
+  children,
+  pendingLabel,
+  ghost = false,
+}: {
+  children: React.ReactNode;
+  pendingLabel: string;
+  ghost?: boolean;
+}) {
+  const { pending } = useFormStatus();
+  return (
+    <button type="submit" className={ghost ? 'btn btn-ghost' : 'btn'} disabled={pending}>
+      {pending ? pendingLabel : children}
+    </button>
   );
 }
