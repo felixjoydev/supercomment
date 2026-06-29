@@ -11,9 +11,13 @@ import type { NextConfig } from "next";
  * never ships source paths even if a stamp slips through. In preview we leave
  * the attribute intact so the overlay can read it.
  *
- * NOTE (real-env, U11 finalizes): `reactRemoveProperties` is an SWC transform;
- * verify it runs under Turbopack's builtin-babel mode for true production
- * builds. U11 owns the complete prod-safety + CSP story.
+ * This is the `data-sc-source` half of production safety (R18). The overlay half
+ * (the /sc-loader boot config + production inert-gating) lives in
+ * lib/overlay-asset.ts; the full two-layer prod-safety + CSP story is documented
+ * in docs/embed/install.md (U11).
+ *
+ * REAL-ENV FLAG: `reactRemoveProperties` is an SWC transform; verify it runs
+ * under Turbopack's builtin-babel mode for true production builds.
  */
 const SC_SOURCE_STAMP =
   process.env.SC_SOURCE_STAMP === "1" ||

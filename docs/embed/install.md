@@ -15,23 +15,56 @@ staging builds only** — never production (see [Environment gating](#environmen
 Replace `<supercomment-host>` with your SuperComment app host (for example
 `https://app.supercomment.dev`).
 
-That's it. `/sc-loader` returns a tiny, always-fresh snippet that injects the
-current overlay bundle from
-`https://<supercomment-host>/sc/overlay.<hash>.global.js`. The bundle is
-content-hashed and served with immutable caching, so upgrades are instant and
-safe — only the small loader is re-fetched, never the cached bundle.
+That's it. `/sc-loader` returns a tiny, always-fresh snippet that (1) sets the
+overlay boot config on `window.__SUPERCOMMENT__` and (2) injects the current
+overlay bundle from `https://<supercomment-host>/sc/overlay.<hash>.global.js`. The
+bundle is content-hashed and served with immutable caching, so upgrades are
+instant and safe — only the small loader is re-fetched, never the cached bundle.
 
-### What it does (and doesn't) do yet
+### What it does
 
-- Loads the overlay code onto the page. The overlay stays **dormant** until a
-  review session is activated via a share link. _(Activation lands in a later
-  unit — U3.)_
-- It does **not** activate for your end users on its own. Gate it out of
-  production anyway — see below.
+- Delivers the overlay **boot config** (`window.__SUPERCOMMENT__` — Supabase URL +
+  anon key, the SuperComment backend origin, and an optional Turnstile site key)
+  and loads the overlay code onto the page.
+- The overlay stays **dormant** until a reviewer activates a session by following
+  a share link (`/s/<slug>`). With no valid token and no persisted review session
+  it mounts nothing and binds no listeners — it never activates for your end users
+  on its own.
+- Gate it out of production anyway (defense in depth — see
+  [Production safety](#production-safety-two-layers)).
 
-## Environment gating (important)
+## Environment variables (SuperComment host)
 
-Only ship the snippet to non-production builds. A minimal guard:
+`/sc-loader` reads these from the **SuperComment app's own** environment at
+request time and bakes them into the boot config it ships to the overlay. They
+belong on the deployment that serves `/sc-loader` — **not** on the app you embed
+the snippet in. All are public client values (the anon key is publishable; RLS is
+the security boundary).
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL — the overlay's anon sign-in / token-refresh / RPC target. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Supabase anon / publishable key (public by design). |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | optional | Cloudflare Turnstile **site** key. When set, the overlay produces an invisible Turnstile token for the session exchange; when unset, no token is sent (dev / demo). |
+
+> `backendOrigin` is **not** an env var — `/sc-loader` derives it from its own
+> request origin (the SuperComment host is the token-exchange backend). When
+> Supabase URL/key are absent, the overlay stays dormant rather than erroring.
+
+> **Never** put `service_role` or the Turnstile **secret** into any
+> `NEXT_PUBLIC_*` value. Only the anon key and the Turnstile *site* key are
+> client-safe. The Turnstile secret (`TURNSTILE_SECRET_KEY`, server-only) is read
+> by the token-exchange endpoint, never shipped to the browser.
+
+## Production safety (two layers)
+
+The overlay must never reach your production end users (R18). Two independent
+layers enforce this — neither alone is trusted.
+
+### Layer 1 — build-time: include the snippet in preview/staging only
+
+Only add the `<script src=".../sc-loader">` to **non-production** builds of your
+app. A minimal Next.js guard in your root layout:
 
 ```tsx
 // Example: Next.js root layout — preview/staging only.
@@ -40,12 +73,67 @@ Only ship the snippet to non-production builds. A minimal guard:
 )}
 ```
 
-> **See U11 (production-safety gating) for the complete story.** U11 owns the
-> full env-gating matrix _and_ the Content-Security-Policy guidance you'll need:
-> `script-src` / `connect-src` for the overlay, plus
-> `script-src` / `frame-src challenges.cloudflare.com` for Turnstile, and the
-> `strict-dynamic` / `default-src` materialization gotchas. This file is the
-> delivery floor only — it intentionally does not implement gating or CSP.
+As a backstop on the SuperComment side, `/sc-loader` is **itself inert on
+production deploys** of the SuperComment host: when `NEXT_PUBLIC_VERCEL_ENV ===
+"production"` it returns a no-op script (logs a console note, injects no overlay
+and no boot config) instead of the bundle. If you intentionally run a non-public
+staging environment as `production`, set `SUPERCOMMENT_ENABLE_IN_PROD=1` on the
+SuperComment host to re-enable it.
+
+### Layer 2 — runtime: dormant without a token
+
+Even if the snippet somehow ships to production and the bundle loads, the overlay
+stays **dormant** unless a valid review session is active. With no `#sc_token`
+URL fragment and no persisted review session it mounts nothing and binds no
+listeners. Activation happens only by following a `/s/<slug>` share link, which
+mints a short-lived, single-use, preview-scoped token. The companion
+`data-sc-source` build stamp is likewise preview-only and stripped from
+production builds via `reactRemoveProperties` (see
+[Enhanced code context](#enhanced-code-context-optional)).
+
+## Content-Security-Policy (CSP)
+
+If your app sends a `Content-Security-Policy`, allow the overlay's script and
+network surfaces below. The overlay needs only host/nonce sources — **never add
+`'unsafe-inline'`** (it would weaken your policy far beyond what's required).
+
+| Directive | Add | Why |
+| --- | --- | --- |
+| `script-src` | `https://<supercomment-host>` | The `/sc-loader` snippet you include + the overlay bundle it injects. |
+| `script-src` | `https://challenges.cloudflare.com` | Cloudflare Turnstile (only if a Turnstile site key is configured). |
+| `connect-src` | `https://<supercomment-host>` | The cross-origin token exchange (`POST /api/review-token/exchange`). |
+| `connect-src` | `https://<project-ref>.supabase.co` | Supabase anon sign-in / token refresh / comment read + write RPCs. Add the `wss://<project-ref>.supabase.co` form too if you rely on realtime. |
+| `frame-src` | `https://challenges.cloudflare.com` | Turnstile renders its (invisible) challenge in a frame. |
+
+A complete example for an app that otherwise locks everything down:
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src  'self' https://<supercomment-host> https://challenges.cloudflare.com;
+  connect-src 'self' https://<supercomment-host> https://<project-ref>.supabase.co wss://<project-ref>.supabase.co;
+  frame-src   https://challenges.cloudflare.com;
+```
+
+### Gotchas (hard-won)
+
+- **`'strict-dynamic'` ignores host allow-lists.** If your `script-src` contains
+  `'strict-dynamic'`, browsers **ignore** host sources like
+  `https://<supercomment-host>` and run only scripts carrying a valid
+  **nonce**/hash — plus the scripts those then inject. Put your per-request nonce
+  on the SuperComment `<script>` tag; the bundle it injects inherits trust
+  automatically. Adding the host to `script-src` does nothing under
+  `'strict-dynamic'` — don't rely on it.
+- **Materialize `script-src` / `connect-src` from `default-src` first.** CSP
+  directives do **not** merge — a present `script-src` fully replaces the
+  `default-src` fallback for scripts (same for `connect-src`). If today you set
+  only `default-src`, create the explicit `script-src` / `connect-src` **seeded
+  with your existing `default-src` sources**, *then* append the
+  overlay / Supabase / Turnstile sources. Otherwise those become the *only*
+  allowed sources and the rest of your app breaks.
+- **Never add `'unsafe-inline'`.** The boot config ships inside the external
+  `/sc-loader` script (not an inline `<script>`), so no inline allowance is
+  needed.
 
 ## Enhanced code context (optional)
 
@@ -124,22 +212,21 @@ const nextConfig = {
 ```
 
 > **CSP:** enabling enhanced context needs no extra Content-Security-Policy
-> entries beyond the overlay's own. The complete CSP guidance (overlay +
-> Turnstile) lands with **U11 (production-safety gating)** — see that section
-> when it ships.
+> entries beyond the overlay's own — see [Content-Security-Policy](#content-security-policy-csp).
 
 ## How delivery works
 
 | URL | Cache | Purpose |
 | --- | --- | --- |
-| `/sc-loader` | `no-store` | Stable entry point your `<script>` points at; injects the current bundle. |
+| `/sc-loader` | `no-store` | Stable entry point your `<script>` points at; sets the boot config + injects the current bundle (inert on production). |
 | `/sc/overlay.<hash>.global.js` | `public, max-age=31536000, immutable` | The content-hashed overlay IIFE (global `SuperCommentOverlay`). |
 
 The hash changes whenever the overlay changes, so customers always get the
 latest overlay without editing their snippet and without stale-cache risk. The
-loader is loaded with a plain cross-origin `<script src>`, which executes
-without any CORS headers; the cross-origin **fetch** surface (token mint /
-exchange) is a separate concern handled in U2/U3.
+loader is loaded with a plain cross-origin `<script src>`, which executes without
+any CORS headers. The overlay's own cross-origin **fetch** surface — anon
+sign-in + token exchange + comment read/write — is what your
+[CSP `connect-src`](#content-security-policy-csp) must allow.
 
 ### Build / deploy note
 
