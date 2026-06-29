@@ -35,3 +35,12 @@ pnpm-debug.log*
 # Supabase local
 supabase/.branches/
 supabase/.temp/
+
+# Local tooling / agent config (not part of the project source)
+.claude/
+.agents/
+.mcp.json
+skills-lock.json
+
+# Live-DB dev harness (carries credentials — never commit)
+apps/cli/.dev-live-session.mts
