@@ -24,13 +24,13 @@ describe('requireMember (route-handler / action authz guard)', () => {
     if (!r.ok) expect(r.status).toBe(403);
   });
 
-  it('rejects a signed-in NON-member of the team with 403', () => {
+  it('rejects a signed-in NON-member of the workspace with 403', () => {
     const r = requireMember(member, false);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(403);
   });
 
-  it('allows a signed-in member of the team', () => {
+  it('allows a signed-in member of the workspace', () => {
     const r = requireMember(member, true);
     expect(r.ok).toBe(true);
   });

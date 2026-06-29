@@ -7,7 +7,7 @@ import { createBrowserClient } from '@supabase/ssr';
  * auth provided by @supabase/ssr, so the same session the server reads is
  * available client-side. All data access still goes through RLS as the
  * authenticated member, so this client can only ever see the caller's own
- * team's rows.
+ * workspace's rows.
  *
  * URL + anon key come from env (never hardcode the project ref or any secret).
  */

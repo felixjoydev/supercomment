@@ -28,7 +28,7 @@
  *
  * HARDENING FOLLOW-UP (intentionally NOT built now): a richer allowlist that
  * pins the host to known preview-CDN patterns (`*.vercel.app`, `*.netlify.app`,
- * `*.pages.dev`, `*.fly.dev`, `*.onrender.com`) or to a domain the team has
+ * `*.pages.dev`, `*.fly.dev`, `*.onrender.com`) or to a domain the workspace has
  * proven ownership of. v1 accepts any public https host; tightening this is an
  * explicit, separate increment.
  */

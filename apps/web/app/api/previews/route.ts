@@ -7,9 +7,9 @@ import { generateSlug } from '@/lib/slug';
  * Preview create endpoint.
  *
  * Authz is enforced HERE (not just in the proxy): we verify the user with
- * getClaims() and confirm team membership of the parent project via the
- * is_project_team_member helper before inserting. RLS (previews_insert) is the
- * final backstop. New previews default to access_mode = team_only (R24).
+ * getClaims() and confirm workspace membership of the parent project via the
+ * is_project_workspace_member helper before inserting. RLS (previews_insert) is
+ * the final backstop. New previews default to access_mode = team_only (R24).
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
   const previewName = (name ?? '').trim() || 'Untitled preview';
 
   // Membership check on the parent project.
-  const { data: isMember } = await supabase.rpc('is_project_team_member', {
+  const { data: isMember } = await supabase.rpc('is_project_workspace_member', {
     p_project_id: projectId,
   });
   const guard = requireMember(claims, isMember === true);

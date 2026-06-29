@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
  * report sent / working / failed via the row's status.
  *
  * Authz enforced HERE (mirrors app/api/previews/[id]/route.ts): verify the user
- * (getClaims), confirm preview team membership (is_preview_team_member), THEN
+ * (getClaims), confirm preview workspace membership (is_preview_workspace_member), THEN
  * insert via the RLS-scoped client. The UI hides the button for non-members,
  * but the server is the source of truth.
  *
@@ -66,10 +66,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Comment not found" }, { status: 404 });
   }
 
-  // Authorize against the comment's preview team (owner/dev/member).
+  // Authorize against the comment's preview workspace (owner/dev/member).
   const { data: claimsData } = await supabase.auth.getClaims();
   const claims = (claimsData?.claims ?? null) as VerifiedClaims | null;
-  const { data: isMember } = await supabase.rpc("is_preview_team_member", {
+  const { data: isMember } = await supabase.rpc("is_preview_workspace_member", {
     p_preview_id: comment.preview_id,
   });
   const guard = requireMember(claims, isMember === true);

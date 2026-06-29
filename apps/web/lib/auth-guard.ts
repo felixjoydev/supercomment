@@ -3,7 +3,7 @@
  *
  * Research is emphatic: do not rely on the proxy for authz. Every privileged
  * entry point calls these to (a) confirm there is a verified, non-anonymous
- * user, and (b) confirm that user is a member of the relevant team/preview
+ * user, and (b) confirm that user is a member of the relevant workspace/preview
  * BEFORE acting. RLS is still the final backstop, but a clear guard gives a
  * proper 401/403 instead of a silent empty result.
  *
@@ -40,14 +40,14 @@ export function requireMember(
     return { ok: false, status: 403, error: 'Guests cannot manage previews' };
   }
   if (!isMember) {
-    return { ok: false, status: 403, error: 'Not a member of this team' };
+    return { ok: false, status: 403, error: 'Not a member of this workspace' };
   }
   return { ok: true };
 }
 
 /**
  * Require only a verified, non-anonymous user (no resource scope yet) — e.g.
- * for "create my first team" or "list my teams".
+ * for "create my first workspace" or "list my workspaces".
  */
 export function requireAuthedUser(claims: VerifiedClaims | null | undefined): GuardResult {
   if (!claims || !claims.sub) {

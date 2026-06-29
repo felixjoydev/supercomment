@@ -23,8 +23,8 @@ const PREVIEW_RETURN_COLS =
 /**
  * Link-management endpoint for a single preview.
  *
- * Authz enforced HERE: verify the user (getClaims), confirm preview team
- * membership (is_preview_team_member), THEN apply the computed patch via an
+ * Authz enforced HERE: verify the user (getClaims), confirm preview workspace
+ * membership (is_preview_workspace_member), THEN apply the computed patch via an
  * RLS-scoped UPDATE. Destructive semantics (regenerate rotates the secret;
  * revoke nulls it + drops to team_only) live in the pure lib/link module; the
  * confirmation UX lives client-side. Effects are immediate: rotating/clearing
@@ -40,7 +40,7 @@ export async function PATCH(
   const { data: claimsData } = await supabase.auth.getClaims();
   const claims = (claimsData?.claims ?? null) as VerifiedClaims | null;
 
-  const { data: isMember } = await supabase.rpc('is_preview_team_member', {
+  const { data: isMember } = await supabase.rpc('is_preview_workspace_member', {
     p_preview_id: id,
   });
   const guard = requireMember(claims, isMember === true);

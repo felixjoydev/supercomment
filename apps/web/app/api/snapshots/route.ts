@@ -15,8 +15,8 @@ import { createClient } from '../../../lib/supabase/server';
  *    inserts past RLS for exactly the preview the secret unlocks. The anon /
  *    authenticated grant on the function is what makes this safe — guests never
  *    touch the snapshots table directly.
- *  - Members POST authenticated; we verify the session, check team membership
- *    via is_preview_team_member, then insert under RLS as the member.
+ *  - Members POST authenticated; we verify the session, check workspace membership
+ *    via is_preview_workspace_member, then insert under RLS as the member.
  */
 export async function POST(request: Request) {
   let body: unknown;
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ snapshot: data }, { status: 201 });
   }
 
-  // Member path: must be authenticated and a team member of the preview.
+  // Member path: must be authenticated and a workspace member of the preview.
   const memberParse = memberSnapshotRequestSchema.safeParse(body);
   if (!memberParse.success) {
     return NextResponse.json({ error: 'invalid request' }, { status: 400 });
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
   // Explicit membership check via the security-definer helper, then insert
   // (RLS on snapshots also enforces this, defense in depth).
   const { data: isMember, error: memberError } = await supabase.rpc(
-    'is_preview_team_member',
+    'is_preview_workspace_member',
     { p_preview_id: previewId },
   );
   if (memberError) {
