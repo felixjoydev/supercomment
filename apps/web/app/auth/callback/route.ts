@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { safeNextPath } from '@/lib/safe-redirect';
 
 /**
  * OAuth / magic-link callback. Supabase redirects here with a `code` after the
@@ -13,7 +14,9 @@ import { createClient } from '@/lib/supabase/server';
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
   const code = searchParams.get('code');
-  const next = searchParams.get('next') ?? '/dashboard';
+  // safeNextPath rejects cross-origin targets (//evil, /\evil, https://…) so the
+  // post-auth redirect can only land on a same-origin path (plan-002 fix).
+  const next = safeNextPath(searchParams.get('next'));
 
   if (code) {
     const supabase = await createClient();

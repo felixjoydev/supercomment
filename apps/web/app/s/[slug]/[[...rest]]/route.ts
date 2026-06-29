@@ -1,26 +1,27 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient as createAnonClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/server';
+import { safeNextPath } from '@/lib/safe-redirect';
+import {
+  classifyMintError,
+  generateReviewToken,
+  buildEmbeddedRedirectUrl,
+} from '@/lib/share-access';
 
 /**
- * Stable preview link: `…/s/<slug>/<anything>` (U4 backend half).
+ * Stable preview link: `…/s/<slug>/<anything>`.
  *
- * The developer shares ONE stable URL; the underlying cloudflared tunnel URL
- * changes every `supercomment start`. This catch-all route resolves the slug to
- * the preview's CURRENT tunnel URL (via the anon-granted resolve_tunnel_for_slug
- * RPC) and reverse-proxies the request — any method, any sub-path, including the
- * overlay/boot scripts the CLI's front server serves — so reviewers always reach
- * the live app through the constant link. The tunnel already serves the page
- * with the overlay injected (U3/U4 CLI side), so we just forward bytes.
+ * EMBEDDED MODE (U2, primary): when the preview has a registered `deploy_url`,
+ * we resolve identity FIRST-PARTY here (member via the cookie-bound session vs
+ * guest via the link secret), mint a short-lived single-use preview-scoped token
+ * server-side (mint_review_token), and 307-redirect the reviewer to their own
+ * deployed preview with the token in the URL FRAGMENT. The overlay embedded in
+ * that deploy exchanges the token for a scoped session (U3). The guest secret is
+ * validated here and NEVER forwarded to the deploy origin.
  *
- * When the preview is offline (no live tunnel) we return a clear "not live"
- * page rather than a confusing proxy error. Serving the latest SNAPSHOT here is
- * U11 (offline serving) — deliberately out of scope for this route today.
- *
- * NOTE: WebSocket upgrades (HMR) are NOT proxied through this Next route — the
- * Node serverless/runtime request model here is request/response only. For full
- * HMR fidelity a reviewer can hit the raw tunnel URL; the stable link covers
- * normal HTTP review traffic. (Documented limitation; revisit with a dedicated
- * proxy server if needed.)
+ * TUNNEL MODE (legacy, dormant): when the preview has NO deploy_url, we fall
+ * back to the original reverse-proxy of the current cloudflared tunnel URL. This
+ * path is retained for the (flag-gated, U10) tunnel mode and is otherwise unused.
  */
 
 export const dynamic = 'force-dynamic';
@@ -39,29 +40,95 @@ function anonClient() {
   if (!url || !anonKey) {
     throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
   }
-  // No session/cookies needed: resolve_tunnel_for_slug is anon-executable and
-  // returns only routing fields.
   return createAnonClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
 
-function offlinePage(message: string, status = 503): Response {
+function infoPage(message: string, status = 503): Response {
   const html = `<!doctype html><html><head><meta charset="utf-8">
-<title>SuperComment — preview offline</title>
+<title>SuperComment — preview</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#1f2937}
 h1{font-size:1.25rem}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}</style>
-</head><body><h1>This preview isn't live right now</h1>
-<p>${message}</p>
-<p>The developer needs to run <code>supercomment start</code> to share it again.</p>
-</body></html>`;
+</head><body><h1>This preview isn't available</h1>
+<p>${message}</p></body></html>`;
   return new NextResponse(html, {
     status,
     headers: { 'content-type': 'text/html; charset=utf-8' },
   });
 }
 
-async function resolve(slug: string): Promise<TunnelRoute | null> {
+/**
+ * Embedded activation: mint a token (first-party) and redirect to the deploy
+ * URL with it in the fragment. Returns null to signal "not embedded — use the
+ * tunnel fallback"; throws nothing (errors map to responses).
+ */
+async function tryEmbedded(
+  request: NextRequest,
+  slug: string,
+): Promise<Response | null> {
+  const k = request.nextUrl.searchParams.get('k');
+  const token = generateReviewToken();
+
+  // TODO(U4): durable per-slug+IP rate limit on minting (in-memory is useless in
+  // serverless). The 90s single-use token + Turnstile-gated exchange (U4) bound
+  // the blast radius until then.
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc('mint_review_token', {
+    p_slug: slug,
+    p_token: token,
+    p_link_secret: k,
+  });
+
+  if (error) {
+    const outcome = classifyMintError(error.message);
+    switch (outcome) {
+      case 'not_embeddable':
+        return null; // fall back to tunnel mode
+      case 'login_required': {
+        const next = safeNextPath(`/s/${slug}`);
+        return NextResponse.redirect(
+          new URL(`/login?next=${encodeURIComponent(next)}`, request.nextUrl.origin),
+          { status: 307 },
+        );
+      }
+      case 'link_expired':
+        return infoPage('This share link has expired.');
+      case 'preview_not_found':
+        return new NextResponse('Preview not found.', { status: 404 });
+      case 'access_denied':
+        return infoPage('You do not have access to this preview.', 403);
+      default:
+        return infoPage('We could not open this preview.', 502);
+    }
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { token: string; deploy_url: string; role: string }
+    | undefined;
+  if (!row?.deploy_url) return null;
+
+  const target = buildEmbeddedRedirectUrl(row.deploy_url, row.token ?? token);
+  if (!target) {
+    return infoPage('This preview has an invalid deploy target.', 502);
+  }
+  // 307 to the deploy origin; token in the fragment; no Referer to the target.
+  return new NextResponse(null, {
+    status: 307,
+    headers: { location: target, 'referrer-policy': 'no-referrer' },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// TUNNEL MODE (legacy reverse proxy) — retained for the dormant tunnel path.
+// ---------------------------------------------------------------------------
+
+const HOP_BY_HOP = new Set([
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+  'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
+]);
+
+async function resolveTunnel(slug: string): Promise<TunnelRoute | null> {
   const supabase = anonClient();
   const { data, error } = await supabase.rpc('resolve_tunnel_for_slug', { p_slug: slug });
   if (error) throw error;
@@ -69,43 +136,30 @@ async function resolve(slug: string): Promise<TunnelRoute | null> {
   return row ?? null;
 }
 
-/** Hop-by-hop headers we must not forward (RFC 7230 §6.1). */
-const HOP_BY_HOP = new Set([
-  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
-]);
-
-async function handle(
+async function proxyTunnel(
   request: NextRequest,
-  ctx: { params: Promise<{ slug: string; rest?: string[] }> },
+  slug: string,
+  rest: string[] | undefined,
 ): Promise<Response> {
-  const { slug, rest } = await ctx.params;
-
   let route: TunnelRoute | null;
   try {
-    route = await resolve(slug);
+    route = await resolveTunnel(slug);
   } catch {
-    return offlinePage('We could not look up this preview.', 502);
+    return infoPage('We could not look up this preview.', 502);
   }
-
-  if (!route) {
-    return new NextResponse('Preview not found.', { status: 404 });
-  }
+  if (!route) return new NextResponse('Preview not found.', { status: 404 });
   if (route.expires_at && new Date(route.expires_at).getTime() < Date.now()) {
-    return offlinePage('This share link has expired.');
+    return infoPage('This share link has expired.');
   }
   if (route.status !== 'live' || !route.current_tunnel_url) {
-    return offlinePage('The developer is currently offline.');
+    return infoPage('The developer is currently offline.');
   }
 
-  // Build the upstream URL: tunnel origin + the path after /s/<slug> + query.
   const base = route.current_tunnel_url.replace(/\/+$/, '');
   const subPath = rest && rest.length > 0 ? '/' + rest.join('/') : '/';
   const search = request.nextUrl.search ?? '';
   const upstreamUrl = `${base}${subPath}${search}`;
 
-  // Forward the request, stripping hop-by-hop + Accept-Encoding (so the tunnel
-  // returns identity-encoded bytes we can stream straight back).
   const fwdHeaders = new Headers();
   request.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
@@ -125,20 +179,34 @@ async function handle(
       redirect: 'manual',
     });
   } catch {
-    return offlinePage('The developer went offline mid-session.');
+    return infoPage('The developer went offline mid-session.');
   }
 
-  // Pass the upstream response straight back, dropping hop-by-hop headers.
   const outHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
     if (HOP_BY_HOP.has(key.toLowerCase())) return;
     outHeaders.set(key, value);
   });
 
-  return new NextResponse(upstream.body, {
-    status: upstream.status,
-    headers: outHeaders,
-  });
+  return new NextResponse(upstream.body, { status: upstream.status, headers: outHeaders });
+}
+
+async function handle(
+  request: NextRequest,
+  ctx: { params: Promise<{ slug: string; rest?: string[] }> },
+): Promise<Response> {
+  const { slug, rest } = await ctx.params;
+
+  // Embedded mode only applies to the root activation hit, not sub-asset paths
+  // (those only exist in tunnel mode). For embedded previews, sub-paths are
+  // served by the customer's own deploy, not us.
+  const isRootHit = !rest || rest.length === 0;
+  if (isRootHit && (request.method === 'GET' || request.method === 'HEAD')) {
+    const embedded = await tryEmbedded(request, slug);
+    if (embedded) return embedded;
+  }
+
+  return proxyTunnel(request, slug, rest);
 }
 
 export const GET = handle;

@@ -2,6 +2,7 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
+import { safeNextPath } from '@/lib/safe-redirect';
 
 /**
  * Server actions for auth. We use a passwordless magic link (OTP) as the
@@ -30,10 +31,15 @@ export async function signInWithEmail(
   const supabase = await createClient();
   const hdrs = await headers();
   const origin = originFromHeaders(hdrs.get('host'), hdrs.get('x-forwarded-proto'));
+  // Carry a safe `next` through the magic-link round trip so team_only review
+  // links return the reviewer to /s/<slug> after sign-in (U2 / AE4).
+  const next = safeNextPath(String(formData.get('next') ?? ''));
 
   const { error } = await supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: `${origin}/auth/callback` },
+    options: {
+      emailRedirectTo: `${origin}/auth/callback?next=${encodeURIComponent(next)}`,
+    },
   });
   if (error) return { error: error.message };
   return { sent: true };
@@ -56,7 +62,7 @@ export async function signInWithPassword(
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { error: error.message };
-  redirect('/dashboard');
+  redirect(safeNextPath(String(formData.get('next') ?? '')));
 }
 
 export async function signUpWithPassword(
@@ -72,7 +78,7 @@ export async function signUpWithPassword(
   const { data, error } = await supabase.auth.signUp({ email, password });
   if (error) return { error: error.message };
   // When "Confirm email" is OFF, a session is returned and we're signed in.
-  if (data.session) redirect('/dashboard');
+  if (data.session) redirect(safeNextPath(String(formData.get('next') ?? '')));
   // Otherwise the account exists but needs email confirmation.
   return { sent: true };
 }
