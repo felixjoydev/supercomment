@@ -181,10 +181,13 @@ module.exports = function (api) {
 };
 ```
 
-> If your app's `package.json` sets `"type": "module"`, this `.js` file is an ES
-> module: use `export default function (api) { … }`, reference the plugin by
-> name (`plugins: ["@supercomment/source-stamp"]`) instead of `require.resolve`,
-> or name the file `babel.config.cjs`.
+> **If your app's `package.json` sets `"type": "module"`, name the file
+> `babel.config.cjs`** (CommonJS, `module.exports = …`). As a `.js` file it is
+> then treated as ESM, and Next's Babel loader `require()`s the config — which
+> throws `require() of ES Module not supported` and breaks the build. A `.cjs`
+> extension forces CommonJS regardless of `"type": "module"`. (This is exactly
+> why the SuperComment app itself does not stamp its own source — it is the
+> dashboard/backend, not a reviewed preview.)
 
 > **SWC vs Babel:** a Babel config makes Turbopack run Babel (slower than the
 > pure-SWC path). The empty `{}` returned for non-preview builds keeps Turbopack
