@@ -28,7 +28,7 @@ Mirror `apps/web/.env.local`. Required:
 
 | Var | Value | Notes |
 |-----|-------|-------|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://uuldjrdrlwcgsiuknoor.supabase.co` | public |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://<your-project-ref>.supabase.co` | public |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the anon/publishable key | public; RLS is the security boundary |
 | `NEXT_PUBLIC_APP_URL` | the deployed origin, e.g. `https://supercomment-xxx.vercel.app` | so `/s` links + `/sc-loader` resolve to the right host |
 
