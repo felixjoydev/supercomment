@@ -56,6 +56,13 @@ export async function updateSession(request: NextRequest) {
     // account) must reach them. Access control for /s/ is the slug + link
     // secret + access_mode, NOT a dashboard login.
     pathname.startsWith('/s/') ||
+    // Embedded-mode public surfaces, reached cross-origin by customer apps with
+    // NO SuperComment session: the overlay loader + its static bundle, and the
+    // token-exchange API (bearer-authed via the anon JWT, not the dashboard
+    // cookie). These must never redirect to /login.
+    pathname.startsWith('/sc-loader') ||
+    pathname.startsWith('/sc/') ||
+    pathname.startsWith('/api/review-token') ||
     pathname === '/';
 
   if (!claims && !isPublic) {
