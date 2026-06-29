@@ -24,14 +24,23 @@
 import type { NewCommentInput } from "@supercomment/shared";
 import type { CommentSubmitter, SubmitResult } from "../core/types.js";
 
-/** Boot config the proxy injects onto the page before the overlay runs. */
+/** Boot config injected onto the page before the overlay runs. */
 export interface OverlayBootConfig {
   previewId?: string;
   previewKey?: string;
-  /** Guest link secret passed to `create_guest_comment` (R24). */
+  /**
+   * TUNNEL MODE: guest link secret passed to `create_guest_comment` (R24). Its
+   * presence selects the tunnel write path (SupabaseCommentSubmitter). Embedded
+   * review mode (U3) has no link secret — it authorizes via a session JWT.
+   */
   linkSecret?: string;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
+  /**
+   * EMBEDDED MODE (U3): the SuperComment backend origin the overlay POSTs the
+   * review-token exchange to (cross-origin). Unused in tunnel mode.
+   */
+  backendOrigin?: string;
 }
 
 /**
