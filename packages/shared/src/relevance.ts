@@ -1,0 +1,232 @@
+import type { CapturedContext } from "./schema.js";
+
+/**
+ * Relevance curation for the agent-facing comment payload.
+ *
+ * Capture is intentionally complete (the overlay records everything; the
+ * dashboard and `get_comment` expose all of it). But flooding the coding agent
+ * with every signal on every comment dilutes the decisive facts. This module
+ * curates the context for the *triage* surfaces (`list_open_comments` /
+ * `get_all_open`) so what we send is RELEVANT to the comment — while never
+ * starving the agent:
+ *
+ *   1. the decisive, compact core is ALWAYS kept (selector, anchors, url,
+ *      source location, screenshot, commit, bounding box, surrounding HTML),
+ *   2. bulky runtime enrichment (network, interaction trail, app state,
+ *      environment, computed styles, a11y tree) is kept only when it matches the
+ *      comment's apparent concern,
+ *   3. console errors are kept whenever present (a runtime error is inherently
+ *      relevant),
+ *   4. {@link summarizeContextSignals} is attached so the agent always SEES the
+ *      full inventory and can pull everything with `get_comment` — curation is
+ *      ranking-with-a-pointer, never silent hiding.
+ */
+
+export type Concern =
+  | "behavioral"
+  | "state"
+  | "visual"
+  | "a11y"
+  | "perf"
+  | "browser";
+
+interface ConcernPattern {
+  concern: Concern;
+  regex: RegExp;
+}
+
+/**
+ * Keyword signals that map a comment's free text to a concern. Overlap between
+ * patterns is fine: a term hitting two concerns only broadens inclusion, which
+ * is the safe direction ("relevant but enough").
+ */
+const CONCERN_PATTERNS: ConcernPattern[] = [
+  {
+    concern: "behavioral",
+    regex:
+      /\b(work|works|working|click|clicks|button|submit|save|saving|load|loading|fetch|request|api|endpoint|error|errors|fail|failing|failed|broken|crash|freeze|hang|stuck|spinner|unresponsive|disabled|doesn'?t|does not|doesnt|can'?t|cannot|cant|not working|nothing happens)\b/i,
+  },
+  {
+    concern: "state",
+    regex:
+      /\b(login|log ?in|logout|log ?out|sign ?in|sign ?out|auth|session|token|cart|checkout|state|saved|persist|persisted|logged|account|profile|cookie|storage)\b/i,
+  },
+  {
+    concern: "visual",
+    regex:
+      /\b(align|alignment|spacing|margin|padding|gap|colou?r|background|layout|position|overlap|overlapping|size|width|height|font|typography|style|styling|css|looks|appear|appears|appearance|design|pixel|responsive|too big|too small|cut ?off|clipped|truncat)\w*\b/i,
+  },
+  {
+    concern: "a11y",
+    regex:
+      /\b(accessib\w*|a11y|aria|screen ?reader|contrast|alt ?text|label|focus|keyboard|tab order|wcag)\b/i,
+  },
+  {
+    concern: "perf",
+    regex:
+      /\b(slow|sluggish|lag|laggy|performance|takes (too )?long|delay|delayed|janky|stutter|loading forever|never loads)\b/i,
+  },
+  {
+    concern: "browser",
+    regex:
+      /\b(safari|chrome|firefox|edge|opera|ios|android|mobile|tablet|desktop|browser|device)\b/i,
+  },
+];
+
+export interface CurateOptions {
+  /** Comment intent ("fix" | "change" | "question"); a weak nudge. */
+  intent?: string;
+  /** The reviewer's note — the primary relevance signal. */
+  note?: string;
+}
+
+/** Concerns inferred from a comment's note (+ intent). May be empty. */
+export function detectConcerns(opts: CurateOptions): Set<Concern> {
+  const text = opts.note ?? "";
+  const concerns = new Set<Concern>();
+  for (const { concern, regex } of CONCERN_PATTERNS) {
+    if (regex.test(text)) {
+      concerns.add(concern);
+    }
+  }
+  return concerns;
+}
+
+/**
+ * One-line inventory of everything captured, ALWAYS safe to attach. Lets the
+ * agent know what exists (and can be pulled via `get_comment`) even when the
+ * curated view omits the bulky arrays.
+ */
+export function summarizeContextSignals(
+  context: CapturedContext | null | undefined,
+): string {
+  if (!context) {
+    return "none";
+  }
+  const parts: string[] = [];
+  if (context.surface) {
+    const size = context.viewport
+      ? ` (${context.viewport.width}×${context.viewport.height})`
+      : "";
+    parts.push(`surface: ${context.surface}${size}`);
+  }
+  if (context.react?.sourceFile) {
+    parts.push(
+      `source: ${context.react.sourceFile}${
+        context.react.sourceLine ? `:${context.react.sourceLine}` : ""
+      }`,
+    );
+  }
+  if (context.commit) {
+    parts.push(`commit: ${context.commit}`);
+  }
+  const consoleCount = context.consoleErrors?.length ?? 0;
+  if (consoleCount > 0) {
+    parts.push(`console: ${consoleCount} error(s)`);
+  }
+  const networkCount = context.networkRequests?.length ?? 0;
+  if (networkCount > 0) {
+    parts.push(`network: ${networkCount} request(s)`);
+  }
+  const actionCount = context.interactionTrail?.length ?? 0;
+  if (actionCount > 0) {
+    parts.push(`actions: ${actionCount}`);
+  }
+  if (context.appState) {
+    const keys =
+      (context.appState.localStorageKeys?.length ?? 0) +
+      (context.appState.sessionStorageKeys?.length ?? 0);
+    if (keys > 0) {
+      parts.push(`storage: ${keys} key(s)`);
+    }
+  }
+  const a11yCount = context.a11yTree?.length ?? 0;
+  if (a11yCount > 0) {
+    parts.push(`a11y: ${a11yCount} node(s)`);
+  }
+  if (context.screenshot) {
+    parts.push("screenshot");
+  }
+  if (context.environment?.userAgent) {
+    parts.push("environment");
+  }
+  return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+/**
+ * Return a curated copy of `context` containing the decisive core plus only the
+ * enrichment relevant to the comment. Pure — the input is not mutated. Pair with
+ * {@link summarizeContextSignals} so the agent can still pull what was omitted.
+ */
+export function curateContextForAgent(
+  context: CapturedContext | null | undefined,
+  opts: CurateOptions = {},
+): CapturedContext | null | undefined {
+  if (!context) {
+    return context;
+  }
+  const concerns = detectConcerns(opts);
+  // A device-tagged comment (mobile/tablet/responsive) is inherently about
+  // layout on a device, so treat it as visual + browser-relevant — keep styles,
+  // a11y, and environment up front for the agent.
+  if (context.surface && context.surface !== "web") {
+    concerns.add("visual");
+    concerns.add("browser");
+  }
+  const general = concerns.size === 0;
+  const hasConsole = (context.consoleErrors?.length ?? 0) > 0;
+  const hasSource = Boolean(context.react?.sourceFile);
+
+  const curated: CapturedContext = { ...context };
+
+  // Network: relevant to behavioural/perf/state bugs, or whenever the runtime
+  // already logged an error.
+  if (
+    !(
+      concerns.has("behavioral") ||
+      concerns.has("perf") ||
+      concerns.has("state") ||
+      hasConsole
+    )
+  ) {
+    delete curated.networkRequests;
+  }
+
+  // Interaction trail: the repro steps matter for behavioural/state/perf bugs.
+  if (
+    !(
+      concerns.has("behavioral") ||
+      concerns.has("state") ||
+      concerns.has("perf")
+    )
+  ) {
+    delete curated.interactionTrail;
+  }
+
+  // App state: hints at state/auth/feature-flag bugs.
+  if (!(concerns.has("state") || concerns.has("behavioral"))) {
+    delete curated.appState;
+  }
+
+  // Environment: only matters for browser/device-specific reports.
+  if (!concerns.has("browser")) {
+    delete curated.environment;
+  }
+
+  // a11y tree: relevant to visual/accessibility/structural comments, and useful
+  // for code-location whenever there's no exact source line. Kept on the general
+  // (unclassified) path as a sensible default.
+  if (
+    !(concerns.has("visual") || concerns.has("a11y") || general || !hasSource)
+  ) {
+    delete curated.a11yTree;
+  }
+
+  // Computed styles: matter for visual/a11y comments; dropped for purely
+  // behavioural ones. Kept on the general path.
+  if (!(concerns.has("visual") || concerns.has("a11y") || general)) {
+    delete curated.computedStyles;
+  }
+
+  return curated;
+}

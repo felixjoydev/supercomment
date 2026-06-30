@@ -21,12 +21,43 @@
  *   as such. The default result reports how many guest comments were withheld.
  */
 import {
+  curateContextForAgent,
+  summarizeContextSignals,
   type GetCommentOutput,
   type ListOpenCommentsOutput,
   type McpComment,
   type MutateCommentOutput,
 } from "@supercomment/shared";
 import type { CommentStore } from "./store.js";
+
+/**
+ * Relevance layer (agent payload curation).
+ *
+ * `withSignals` keeps the FULL captured context (used by `get_comment`, the
+ * focus path) and just attaches the one-line signals inventory.
+ *
+ * `curateForTriage` is for the LIST paths: it relevance-filters the bulky
+ * runtime enrichment to what matches the comment, while always keeping the
+ * decisive core and attaching the same signals summary — so the curated view is
+ * relevant without ever hiding what exists (the agent can still `get_comment`).
+ */
+function withSignals(comment: McpComment): McpComment {
+  return {
+    ...comment,
+    contextSignals: summarizeContextSignals(comment.context),
+  };
+}
+
+function curateForTriage(comment: McpComment): McpComment {
+  return {
+    ...comment,
+    context: curateContextForAgent(comment.context, {
+      intent: comment.intent,
+      note: comment.note,
+    }) as McpComment["context"],
+    contextSignals: summarizeContextSignals(comment.context),
+  };
+}
 
 /**
  * R23 / OWASP LLM01 — labeled untrusted-data handoff.
@@ -87,7 +118,8 @@ export async function handleListOpenComments(
   // the "withheld" count are computed in one auditable place.
   const open = await store.listOpenComments({ includeGuests: true });
   const { comments, excludedGuestCount } = applyTrustGuard(open, includeGuests);
-  return { comments, excludedGuestCount };
+  // Triage view: relevance-curate each comment's context to what matches it.
+  return { comments: comments.map(curateForTriage), excludedGuestCount };
 }
 
 /**
@@ -107,13 +139,14 @@ export async function handleGetComment(
       notActionableReason: `No comment #${args.number} exists for this preview.`,
     };
   }
+  // Focus path: keep the FULL context, just attach the signals inventory.
   if (comment.status !== "open") {
     return {
-      comment,
+      comment: withSignals(comment),
       notActionableReason: `Comment #${args.number} is ${comment.status}, not open — nothing to fix.`,
     };
   }
-  return { comment };
+  return { comment: withSignals(comment) };
 }
 
 /** `resolve_comment` handler (R19). */

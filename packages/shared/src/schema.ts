@@ -43,6 +43,20 @@ export type CommentStatus = z.infer<typeof commentStatusSchema>;
 export const captureFidelitySchema = z.enum(["live", "snapshot"]);
 export type CaptureFidelity = z.infer<typeof captureFidelitySchema>;
 
+/**
+ * The device surface a comment was made on. Auto-derived from the viewport width
+ * for normal comments; set explicitly by the responsive device-mode toolbar.
+ * "responsive" means the reviewer is flagging a fluid/breakpoint issue rather
+ * than one specific device.
+ */
+export const deviceSurfaceSchema = z.enum([
+  "web",
+  "mobile",
+  "tablet",
+  "responsive",
+]);
+export type DeviceSurface = z.infer<typeof deviceSurfaceSchema>;
+
 // ---------------------------------------------------------------------------
 // Captured context (R11 generic + R12 optional React tier)
 // ---------------------------------------------------------------------------
@@ -84,6 +98,70 @@ export const consoleErrorSchema = z.object({
   timestamp: z.iso.datetime().optional(),
 });
 export type ConsoleError = z.infer<typeof consoleErrorSchema>;
+
+/**
+ * One node of the accessibility/ancestor chain around the annotated element
+ * (target first, then ancestors). Gives an agent structural + a11y context for
+ * locating the right component and catching accessibility issues. All fields are
+ * best-effort; `name` is the accessible name (redacted).
+ */
+export const a11yNodeSchema = z.object({
+  tagName: z.string(),
+  role: z.string().optional(),
+  name: z.string().optional(),
+  id: z.string().optional(),
+  className: z.string().optional(),
+});
+export type A11yNode = z.infer<typeof a11yNodeSchema>;
+
+/** Browser/runtime environment at capture time (non-sensitive). */
+export const environmentSchema = z.object({
+  userAgent: z.string(),
+  language: z.string().optional(),
+  platform: z.string().optional(),
+});
+export type Environment = z.infer<typeof environmentSchema>;
+
+/**
+ * Client-side storage **keys only** (never values, never cookies). Storage keys
+ * hint at app/feature/auth state without exfiltrating tokens or PII; keys are
+ * still run through redaction defensively in case a key embeds a secret.
+ */
+export const appStateSchema = z.object({
+  localStorageKeys: z.array(z.string()),
+  sessionStorageKeys: z.array(z.string()),
+});
+export type AppState = z.infer<typeof appStateSchema>;
+
+/** A single recent user action leading up to the comment (repro breadcrumb). */
+export const interactionEventSchema = z.object({
+  type: z.enum(["click", "input", "change", "submit", "navigation"]),
+  /** Compact selector for the action target, when applicable. */
+  target: z.string().optional(),
+  /**
+   * Reserved. Raw input values are intentionally NOT captured (the canonical
+   * redactor is best-effort for token shapes and does not cover free-text PII),
+   * so this stays optional/empty unless an explicit, future opt-in populates it.
+   */
+  value: z.string().optional(),
+  timestamp: z.iso.datetime(),
+});
+export type InteractionEvent = z.infer<typeof interactionEventSchema>;
+
+/**
+ * A network request observed via the read-only Resource Timing API. Note this
+ * deliberately does NOT instrument `fetch`/XHR (no monkeypatch), so HTTP method
+ * and status code are unavailable — this keeps capture fully passive and unable
+ * to affect the host app. URLs are redacted.
+ */
+export const networkRequestSchema = z.object({
+  url: z.string(),
+  initiatorType: z.string().optional(),
+  duration: z.number().optional(),
+  transferSize: z.number().optional(),
+  startTime: z.number().optional(),
+});
+export type NetworkRequest = z.infer<typeof networkRequestSchema>;
 
 /**
  * Optional React-specific context. Present only when the annotated element is
@@ -135,6 +213,20 @@ export const capturedContextSchema = z.object({
    * or a storage reference resolved by the backend.
    */
   screenshot: z.string().optional(),
+
+  // --- Additive runtime context (all optional; older comments omit these) ---
+  /** Accessibility/ancestor chain around the target (target first). */
+  a11yTree: z.array(a11yNodeSchema).optional(),
+  /** Browser/runtime environment (user agent, language, platform). */
+  environment: environmentSchema.optional(),
+  /** Client-side storage keys (no values, no cookies). */
+  appState: appStateSchema.optional(),
+  /** Recent user actions leading up to the comment (repro breadcrumbs). */
+  interactionTrail: z.array(interactionEventSchema).optional(),
+  /** Recent network requests via read-only Resource Timing (no method/status). */
+  networkRequests: z.array(networkRequestSchema).optional(),
+  /** Device surface the comment was made on (auto from viewport, or device-mode). */
+  surface: deviceSurfaceSchema.optional(),
 
   // --- Provenance (R14) — which deploy/commit the comment was captured against ---
   /** Deploy origin the comment was made against (the customer's preview URL). */
@@ -220,6 +312,13 @@ export type NewCommentInput = z.infer<typeof newCommentInputSchema>;
  */
 export const mcpCommentSchema = commentSchema.extend({
   trustLevel: trustLevelSchema,
+  /**
+   * One-line inventory of all captured signals (relevance layer). Always
+   * present on agent-facing comments so the agent knows what exists even when a
+   * triage view curates the bulky fields out — it can pull the rest with
+   * `get_comment`.
+   */
+  contextSignals: z.string().optional(),
 });
 export type McpComment = z.infer<typeof mcpCommentSchema>;
 

@@ -11,6 +11,7 @@ import type {
   NewCommentInput,
   CapturedContext,
   ElementAnchor,
+  DeviceSurface,
 } from "@supercomment/shared";
 
 /** The four selection modes the toolbar exposes (R9). */
@@ -56,6 +57,8 @@ export interface ExistingCommentMarker {
   anchors: ElementAnchor[];
   /** Human-readable comment content shown in the marker's popover (U12 read). */
   content: MarkerComment;
+  /** Device surface this comment was made on; missing/legacy → treated as "web". */
+  surface?: DeviceSurface;
 }
 
 /**
@@ -149,6 +152,24 @@ export interface OverlayConfig {
   doc?: Document;
   /** Storage for the guest name; defaults to `localStorage` in browsers. */
   storage?: NameStorage;
+  /**
+   * True for the controller mounted INSIDE the device-mode iframe. Such a child
+   * reuses the parent's submitter/session but must NOT render its own device
+   * toolbar (that would nest device mode). Defaults to false (top-level).
+   */
+  deviceChild?: boolean;
+  /**
+   * The device surface this controller represents. The top-level controller is
+   * "web"; a device-mode child is the chosen device's surface. Markers are
+   * filtered to this surface so a mobile comment never shows on desktop.
+   */
+  surface?: DeviceSurface;
+  /**
+   * Called after a comment is successfully submitted, with the controller's
+   * surface. The top-level controller uses this to keep the device-toolbar
+   * per-surface counts live (incl. comments made inside the device iframe).
+   */
+  onCommentSubmitted?: (surface: DeviceSurface) => void;
 }
 
 /** Minimal storage surface so the guest store is testable without a browser. */

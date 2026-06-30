@@ -18,7 +18,7 @@
  * no_review_session guard, RLS bypass via SECURITY DEFINER, CORS from the
  * customer origin) cannot run in this sandbox — only arg/row mapping is tested.
  */
-import type { ElementAnchor } from "@supercomment/shared";
+import type { DeviceSurface, ElementAnchor } from "@supercomment/shared";
 
 import type { ExistingCommentMarker, Rect } from "../core/types.js";
 
@@ -157,6 +157,7 @@ export function toExistingMarkers(
     rect: readBoundingBox(c.context),
     isStale: c.isStale,
     anchors: readAnchors(c.context),
+    surface: readSurface(c.context),
     content: {
       note: c.note,
       authorDisplayName: c.authorDisplayName,
@@ -166,6 +167,15 @@ export function toExistingMarkers(
       createdAt: c.createdAt,
     },
   }));
+}
+
+/** Defensively read the captured device `surface` out of a comment's context. */
+function readSurface(context: unknown): DeviceSurface | undefined {
+  if (!context || typeof context !== "object") return undefined;
+  const s = (context as { surface?: unknown }).surface;
+  return s === "web" || s === "mobile" || s === "tablet" || s === "responsive"
+    ? s
+    : undefined;
 }
 
 /** Defensively read the captured `anchors` array out of a comment's context. */

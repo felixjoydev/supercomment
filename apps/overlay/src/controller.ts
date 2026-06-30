@@ -13,6 +13,7 @@
 import type {
   NewCommentInput,
   CapturedContext,
+  DeviceSurface,
 } from "@supercomment/shared";
 import { newCommentInputSchema } from "@supercomment/shared";
 import {
@@ -33,6 +34,9 @@ import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
+import { DeviceMode } from "./device/device-mode.js";
+import { DeviceToolbar } from "./device/device-toolbar.js";
+import { filterBySurface, countBySurface } from "./device/surface-filter.js";
 
 /**
  * U8: how many times re-anchoring retries an unresolved comment across animation
@@ -87,10 +91,26 @@ export class OverlayController {
   private deferredTarget: SelectionTarget | null = null;
   private deferredDraft: CommentDraft | null = null;
 
+  /** Responsive device-mode (top-level controllers only; null in the iframe child). */
+  private readonly deviceMode: DeviceMode | null;
+  private readonly deviceToolbar: DeviceToolbar | null;
+  /** The device surface this controller renders markers for ("web" for the top-level). */
+  private readonly surface: DeviceSurface;
+  /** All loaded existing comments (every surface); markers are filtered per surface. */
+  private existingComments: ExistingCommentMarker[] = [];
+  /** Live per-surface comment counts for the device toggle badges (top-level only). */
+  private surfaceCounts: Record<DeviceSurface, number> = {
+    web: 0,
+    mobile: 0,
+    tablet: 0,
+    responsive: 0,
+  };
+
   private readonly rectFor: RectFor;
 
   constructor(private readonly config: OverlayConfig) {
     this.doc = config.doc ?? document;
+    this.surface = config.surface ?? "web";
     this.shell = createShellRoot(this.doc);
 
     this.rectFor = (el) => toRect(el.getBoundingClientRect());
@@ -108,12 +128,60 @@ export class OverlayController {
     this.toolbar.setMode(this.selection.getMode());
     this.toolbar.setReviewerName(this.guestStore.get());
 
+    // Responsive device-mode toolbar — top-level controllers only. The child
+    // controller mounted inside the device iframe must not nest its own.
+    if (!config.deviceChild) {
+      this.deviceMode = new DeviceMode({
+        doc: this.doc,
+        container: this.shell.layer,
+        mountChild: (childDoc, preset) => {
+          const child = new OverlayController({
+            ...this.config,
+            doc: childDoc,
+            deviceChild: true,
+            surface: preset.surface,
+            // Route the child's submits back so the parent's toggle counts stay live.
+            onCommentSubmitted: (s) => this.bumpSurfaceCount(s),
+          });
+          // Hand the child the full comment set; it renders only its own surface.
+          child.loadExistingComments(this.existingComments);
+          return child;
+        },
+        onError: (message) => this.showDeviceNotice(message),
+        onChange: (preset) => this.deviceToolbar?.setActive(preset),
+      });
+      this.deviceToolbar = new DeviceToolbar(this.doc, this.shell.layer, {
+        onSelect: (preset) => {
+          if (preset.surface === "web") {
+            this.deviceMode?.exit();
+          } else {
+            this.deviceMode?.enter(preset);
+          }
+        },
+      });
+    } else {
+      this.deviceMode = null;
+      this.deviceToolbar = null;
+    }
+
     this.bindEvents();
   }
 
   /** Remove the overlay from the page. */
   destroy(): void {
+    this.deviceMode?.exit();
     this.shell.destroy();
+  }
+
+  /** Briefly surface a device-mode error inside the overlay (auto-dismisses). */
+  private showDeviceNotice(message: string): void {
+    const notice = this.doc.createElement("div");
+    notice.className = "sc-device-notice";
+    notice.setAttribute("role", "status");
+    notice.textContent = message;
+    this.shell.layer.appendChild(notice);
+    const view = this.doc.defaultView;
+    view?.setTimeout(() => notice.remove(), 4000);
   }
 
   /**
@@ -135,7 +203,27 @@ export class OverlayController {
    * host page, so failures are swallowed (the caller also fails closed).
    */
   loadExistingComments(comments: ExistingCommentMarker[]): void {
-    void this.reanchorExistingComments(comments).catch(() => {});
+    this.existingComments = comments;
+    // The toggle badges count comments across ALL surfaces; the markers we
+    // actually place are filtered to THIS controller's surface so a mobile
+    // comment never shows on desktop (and vice versa).
+    this.refreshSurfaceCounts();
+    const mine = filterBySurface(comments, this.surface);
+    void this.reanchorExistingComments(mine).catch(() => {});
+  }
+
+  /** Recompute per-surface counts from the loaded set and push to the toolbar. */
+  private refreshSurfaceCounts(): void {
+    if (!this.deviceToolbar) return;
+    this.surfaceCounts = countBySurface(this.existingComments);
+    this.deviceToolbar.setCounts(this.surfaceCounts);
+  }
+
+  /** Increment one surface's count (a new comment) and update the toggles. */
+  private bumpSurfaceCount(surface: DeviceSurface): void {
+    if (!this.deviceToolbar) return;
+    this.surfaceCounts[surface] = (this.surfaceCounts[surface] ?? 0) + 1;
+    this.deviceToolbar.setCounts(this.surfaceCounts);
   }
 
   /**
@@ -346,6 +434,10 @@ export class OverlayController {
           createdAt: new Date().toISOString(),
         },
       });
+      // Keep the toggle counts live: update this controller's own toolbar (if
+      // top-level) and notify the parent (if this is the device-iframe child).
+      this.bumpSurfaceCount(this.surface);
+      this.config.onCommentSubmitted?.(this.surface);
     }
     this.cancelSelection();
   }

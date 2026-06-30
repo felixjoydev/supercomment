@@ -1,6 +1,14 @@
 'use client';
 
 import type { CommentView } from '@/lib/comments/types';
+import {
+  a11yPathLabel,
+  appStateLabel,
+  environmentLabel,
+  interactionTrailLabel,
+  networkLabel,
+  surfaceLabel,
+} from '@/lib/comments/context-summary';
 
 /**
  * Inline expandable view of a comment's captured context: the capture-time
@@ -19,12 +27,21 @@ export function ContextDetail({ comment }: { comment: CommentView }) {
     );
   }
 
+  // Additive summaries (null when the field is absent — e.g. older comments).
+  const surface = surfaceLabel(ctx.surface, ctx.viewport);
+  const a11y = a11yPathLabel(ctx.a11yTree);
+  const actions = interactionTrailLabel(ctx.interactionTrail);
+  const network = networkLabel(ctx.networkRequests);
+  const storage = appStateLabel(ctx.appState);
+  const browser = environmentLabel(ctx.environment);
+
   return (
     <div className="context-panel">
       {ctx.screenshot && (
         <BeforeArtifact src={ctx.screenshot} number={comment.number} />
       )}
 
+      {surface && <Row label="Surface" value={surface} />}
       {ctx.selector && <Row label="Selector" value={ctx.selector} mono />}
       {ctx.url && <Row label="URL" value={ctx.url} mono />}
       {ctx.react?.componentPath && ctx.react.componentPath.length > 0 && (
@@ -41,9 +58,15 @@ export function ContextDetail({ comment }: { comment: CommentView }) {
           mono
         />
       )}
+      {a11y && <Row label="A11y" value={a11y} />}
       {ctx.consoleErrors && ctx.consoleErrors.length > 0 && (
         <Row label="Console" value={`${ctx.consoleErrors.length} error(s)`} />
       )}
+      {actions && <Row label="Actions" value={actions} />}
+      {network && <Row label="Network" value={network} />}
+      {storage && <Row label="Storage" value={storage} />}
+      {browser && <Row label="Browser" value={browser} mono />}
+      {ctx.commit && <Row label="Commit" value={ctx.commit} mono />}
     </div>
   );
 }

@@ -33,6 +33,7 @@ import { RealContextCapturer } from "./capture/index.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { loadReviewComments, toExistingMarkers } from "./read/load-comments.js";
+import { isDeviceChild } from "./device/device-mode.js";
 import {
   REFRESH_SKEW_MS,
   anonSignIn,
@@ -287,6 +288,13 @@ function prefilledNameStorage(displayName: string): NameStorage {
  * and only activates when there is a token or an unexpired persisted session.
  */
 function bootstrap(): void {
+  // DEVICE-MODE CHILD: this document is loaded inside the responsive device
+  // iframe; the parent overlay mounts a controller against it explicitly, so
+  // the iframe's own bundle must NOT auto-mount (prevents a nested overlay).
+  if (typeof location !== "undefined" && isDeviceChild(location.search)) {
+    return;
+  }
+
   const boot = window.__SUPERCOMMENT__ || {};
 
   // TUNNEL MODE: a link secret means the dev is proxying their own app.
