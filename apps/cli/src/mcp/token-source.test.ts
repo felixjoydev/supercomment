@@ -91,6 +91,63 @@ describe("RefreshingTokenSource", () => {
     expect([a, b, c]).toEqual(["A2", "A2", "A2"]);
     expect(calls).toBe(1);
   });
+
+  it("adopts a newer on-disk token (a concurrent process refreshed) without refreshing itself", async () => {
+    const refreshFn = vi.fn();
+    const reload = vi.fn(async () => ({
+      accessToken: "A-disk",
+      refreshToken: "R-disk",
+      expiresAt: NOW_S + 3600,
+    }));
+    const src = new RefreshingTokenSource(
+      "https://ref.supabase.co",
+      "anon",
+      { accessToken: "A1", refreshToken: "R1", expiresAt: NOW_S - 1 }, // ours stale
+      { now, refreshFn: refreshFn as unknown as RefreshFn, reload },
+    );
+    expect(await src.getAccessToken()).toBe("A-disk");
+    expect(refreshFn).not.toHaveBeenCalled(); // no rotation — we used the winner's
+  });
+
+  it("recovers from a failed refresh by adopting the winner's on-disk token", async () => {
+    let reloadCalls = 0;
+    const reload = async () => {
+      reloadCalls += 1;
+      // Before our refresh: disk still stale. After our refresh fails (the
+      // concurrent winner rotated the token): disk now carries a fresh pair.
+      return reloadCalls === 1
+        ? { accessToken: "A1", refreshToken: "R1", expiresAt: NOW_S - 1 }
+        : { accessToken: "A-winner", refreshToken: "R-winner", expiresAt: NOW_S + 3600 };
+    };
+    const refreshFn: RefreshFn = async () => {
+      throw new Error("refresh_token already used (reuse)");
+    };
+    const src = new RefreshingTokenSource(
+      "https://ref.supabase.co",
+      "anon",
+      { accessToken: "A1", refreshToken: "R1", expiresAt: NOW_S - 1 },
+      { now, refreshFn, reload },
+    );
+    expect(await src.getAccessToken()).toBe("A-winner"); // no error surfaced
+  });
+
+  it("throws only when the refresh fails AND the on-disk token is also stale", async () => {
+    const reload = async () => ({
+      accessToken: "A-old",
+      refreshToken: "R-old",
+      expiresAt: NOW_S - 1,
+    });
+    const refreshFn: RefreshFn = async () => {
+      throw new Error("session revoked");
+    };
+    const src = new RefreshingTokenSource(
+      "https://ref.supabase.co",
+      "anon",
+      { accessToken: "A1", refreshToken: "R1", expiresAt: NOW_S - 1 },
+      { now, refreshFn, reload },
+    );
+    await expect(src.getAccessToken()).rejects.toThrow("session revoked");
+  });
 });
 
 describe("makeRefreshingFetch", () => {

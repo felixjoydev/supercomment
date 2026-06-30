@@ -35,6 +35,7 @@ import {
   RefreshingTokenSource,
   makeRefreshingFetch,
   type PersistTokens,
+  type TokenSet,
 } from "./token-source.js";
 import { SupabaseCommentStore, type SupabaseLike } from "./store.js";
 import { registerTools, type McpServerLike } from "./tools.js";
@@ -80,7 +81,10 @@ const SERVER_VERSION = "0.0.0";
  */
 export async function createSupabaseStore(
   binding: ProjectBinding,
-  deps: { persist?: PersistTokens } = {},
+  deps: {
+    persist?: PersistTokens;
+    reload?: () => Promise<TokenSet | null>;
+  } = {},
 ): Promise<SupabaseCommentStore> {
   // Never attach the member token to an unexpected host (security review #4).
   assertAllowedSupabaseUrl(binding.supabaseUrl);
@@ -107,7 +111,10 @@ export async function createSupabaseStore(
       ...(binding.refreshToken ? { refreshToken: binding.refreshToken } : {}),
       ...(exp !== undefined ? { expiresAt: exp } : {}),
     },
-    { ...(deps.persist ? { persist: deps.persist } : {}) },
+    {
+      ...(deps.persist ? { persist: deps.persist } : {}),
+      ...(deps.reload ? { reload: deps.reload } : {}),
+    },
   );
 
   const mod = await importOptional("@supabase/supabase-js");
@@ -186,8 +193,31 @@ export async function runMcpServer(): Promise<void> {
         logStderr("access token refreshed; binding updated");
       };
 
+  // Re-read the shared binding file so concurrent MCP processes (the overlay is
+  // user-scoped, so every workspace runs one) adopt each other's refreshed
+  // tokens instead of colliding on the single-use refresh token and revoking
+  // the session. Only for file bindings — an env binding has no file to share.
+  const reload: (() => Promise<TokenSet | null>) | undefined = envBinding
+    ? undefined
+    : async () => {
+        try {
+          const fresh = await loadProjectBinding();
+          return {
+            accessToken: fresh.token,
+            ...(fresh.refreshToken ? { refreshToken: fresh.refreshToken } : {}),
+            ...(() => {
+              const e = decodeJwtExp(fresh.token);
+              return e !== undefined ? { expiresAt: e } : {};
+            })(),
+          };
+        } catch {
+          return null;
+        }
+      };
+
   const store = await createSupabaseStore(binding, {
     ...(persist ? { persist } : {}),
+    ...(reload ? { reload } : {}),
   });
 
   // Dynamic import keeps the SDK optional for build/test of unrelated code.

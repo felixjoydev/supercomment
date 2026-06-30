@@ -90,6 +90,14 @@ export interface TokenSourceOptions {
   now?: () => number;
   /** Refresh this many ms BEFORE the token actually expires. Default 60s. */
   marginMs?: number;
+  /**
+   * Re-read the latest tokens from the shared binding (file). Lets concurrent
+   * MCP processes COOPERATE instead of fighting over the single-use refresh
+   * token: when one process refreshes + persists, the others adopt its fresh
+   * token rather than reusing the now-rotated one (which Supabase would treat as
+   * token reuse and revoke the whole session). Returns null when unavailable.
+   */
+  reload?: () => Promise<TokenSet | null>;
 }
 
 /**
@@ -110,16 +118,66 @@ export class RefreshingTokenSource {
 
   /** A currently-valid access token (refreshing first if near expiry). */
   async getAccessToken(): Promise<string> {
-    if (!this.tokens.refreshToken || !this.needsRefresh()) {
+    if (!this.needsRefresh()) {
       return this.tokens.accessToken;
     }
     if (!this.inflight) {
-      this.inflight = this.refresh().finally(() => {
+      this.inflight = this.refreshOrReload().finally(() => {
         this.inflight = null;
       });
     }
     await this.inflight;
     return this.tokens.accessToken;
+  }
+
+  /**
+   * Get a fresh token while cooperating with other processes that share the
+   * binding file (R-multi-process):
+   *   1. adopt a newer on-disk token if another process already refreshed,
+   *   2. else refresh ourselves,
+   *   3. if our refresh fails because a concurrent process rotated the
+   *      single-use refresh token first, re-read the file and adopt the winner's
+   *      token instead of surfacing an error.
+   * Only a token that is ALSO stale on disk is treated as a genuine failure.
+   */
+  private async refreshOrReload(): Promise<void> {
+    await this.reloadFromDisk();
+    if (!this.needsRefresh()) {
+      return; // another process already refreshed; we adopted its token
+    }
+    if (!this.tokens.refreshToken) {
+      return; // env/manual binding: nothing to refresh
+    }
+    try {
+      await this.refresh();
+    } catch (err) {
+      await this.reloadFromDisk();
+      if (this.needsRefresh()) {
+        throw err; // disk is also stale → genuine session failure (re-login)
+      }
+    }
+  }
+
+  /** Adopt a newer token pair another process persisted to the binding file. */
+  private async reloadFromDisk(): Promise<void> {
+    if (!this.opts.reload) return;
+    let latest: TokenSet | null;
+    try {
+      latest = await this.opts.reload();
+    } catch {
+      return;
+    }
+    if (!latest?.accessToken) return;
+    const exp = latest.expiresAt ?? decodeJwtExp(latest.accessToken);
+    const ourExp = this.tokens.expiresAt ?? 0;
+    // Never go backwards: only adopt a token that expires later than ours.
+    if (exp !== undefined && exp > ourExp) {
+      this.tokens = {
+        accessToken: latest.accessToken,
+        ...(latest.refreshToken ? { refreshToken: latest.refreshToken } : {}),
+        expiresAt: exp,
+      };
+    }
   }
 
   private needsRefresh(): boolean {
