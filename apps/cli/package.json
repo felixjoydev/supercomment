@@ -1,27 +1,45 @@
 {
   "name": "@supercomment/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "SuperComment CLI — authorize your machine and run the local MCP server so your coding agent (Claude Code) can read and resolve visual review comments.",
+  "keywords": [
+    "supercomment",
+    "mcp",
+    "claude",
+    "claude-code",
+    "code-review",
+    "visual-feedback",
+    "cli"
+  ],
+  "license": "UNLICENSED",
   "type": "module",
   "bin": {
     "supercomment": "./dist/bin/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx src/bin/index.ts",
     "build": "tsup",
     "start": "node dist/bin/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm --filter @supercomment/shared build && pnpm build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",
     "@supabase/supabase-js": "^2.58.0",
-    "@supercomment/shared": "workspace:*",
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@supercomment/shared": "workspace:*",
     "@types/node": "25.9.1",
     "tsup": "8.5.1",
     "tsx": "4.22.3",
