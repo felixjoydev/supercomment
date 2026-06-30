@@ -325,8 +325,12 @@ export type McpComment = z.infer<typeof mcpCommentSchema>;
 /** Input for `list_open_comments` / `get_all_open`. */
 export const listOpenCommentsInputSchema = z.object({
   previewId: z.uuid().optional(),
-  /** When false (default), guest-authored comments are excluded (R23). */
-  includeGuests: z.boolean().default(false),
+  /**
+   * When true (default), guest-authored comments are included (they're labeled
+   * with trust_level and the result is marked untrusted). Set false to exclude
+   * guests; `excludedGuestCount` then reports how many were withheld (R23).
+   */
+  includeGuests: z.boolean().default(true),
 });
 export type ListOpenCommentsInput = z.infer<typeof listOpenCommentsInputSchema>;
 

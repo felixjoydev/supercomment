@@ -112,7 +112,7 @@ describe("applyTrustGuard (R23)", () => {
 // ---------------------------------------------------------------------------
 
 describe("handleListOpenComments", () => {
-  it("returns open MEMBER comments, excludes guests by default, surfaces count + trust", async () => {
+  it("returns ALL open comments (members + guests) by default, with trust labels", async () => {
     const store = new InMemoryCommentStore([
       makeComment({ number: 1, trustLevel: "member" }),
       makeComment({ number: 2, trustLevel: "guest" }),
@@ -120,15 +120,13 @@ describe("handleListOpenComments", () => {
       makeComment({ number: 4, trustLevel: "guest" }),
     ]);
     const out = await handleListOpenComments(store);
-    expect(out.comments.map((c) => c.number)).toEqual([1, 3]);
-    expect(out.excludedGuestCount).toBe(2);
-    // trust level is always visible on returned items
-    for (const c of out.comments) {
-      expect(c.trustLevel).toBe("member");
-    }
+    expect(out.comments.map((c) => c.number)).toEqual([1, 2, 3, 4]);
+    expect(out.excludedGuestCount).toBe(0);
+    // trust level is always visible so guest-authored comments are clearly marked
+    expect(out.comments.find((c) => c.number === 2)?.trustLevel).toBe("guest");
   });
 
-  it("the opt-in path includes guests", async () => {
+  it("the opt-in flag (includeGuests: true) also includes guests", async () => {
     const store = new InMemoryCommentStore([
       makeComment({ number: 1, trustLevel: "member" }),
       makeComment({ number: 2, trustLevel: "guest" }),
@@ -139,12 +137,12 @@ describe("handleListOpenComments", () => {
     expect(out.comments.find((c) => c.number === 2)?.trustLevel).toBe("guest");
   });
 
-  it("does not include a guest comment that holds the lowest open number", async () => {
+  it("can still exclude guests on demand with includeGuests: false", async () => {
     const store = new InMemoryCommentStore([
       makeComment({ number: 1, trustLevel: "guest" }),
       makeComment({ number: 2, trustLevel: "member" }),
     ]);
-    const out = await handleListOpenComments(store);
+    const out = await handleListOpenComments(store, { includeGuests: false });
     expect(out.comments.map((c) => c.number)).toEqual([2]);
     expect(out.excludedGuestCount).toBe(1);
   });
@@ -283,16 +281,16 @@ describe("registerTools", () => {
 
     expect([...registered.keys()].sort()).toEqual([...TOOL_NAMES].sort());
 
-    // list_open_comments excludes the guest by default
+    // list_open_comments includes the guest by default (labeled untrusted)
     const list = await registered.get("list_open_comments")!({});
     const listOut = list.structuredContent as {
       comments: McpComment[];
       excludedGuestCount: number;
     };
-    expect(listOut.comments.map((c) => c.number)).toEqual([1]);
-    expect(listOut.excludedGuestCount).toBe(1);
+    expect(listOut.comments.map((c) => c.number)).toEqual([1, 2]);
+    expect(listOut.excludedGuestCount).toBe(0);
 
-    // get_all_open includes the guest
+    // get_all_open is now an alias — same result
     const all = await registered.get("get_all_open")!({});
     const allOut = all.structuredContent as { comments: McpComment[] };
     expect(allOut.comments.map((c) => c.number)).toEqual([1, 2]);
@@ -376,7 +374,7 @@ describe("R23 prompt-injection labeled handoff", () => {
     expect(payload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
   });
 
-  it("still EXCLUDES guests from the default fix-all set (R23 guard intact)", async () => {
+  it("includes a guest injection note in the default set but LABELED as untrusted data", async () => {
     const store = new InMemoryCommentStore([
       { ...makeComment({ number: 1, trustLevel: "guest" }), note: INJECTION_NOTE },
       makeComment({ number: 2, trustLevel: "member" }),
@@ -387,10 +385,16 @@ describe("R23 prompt-injection labeled handoff", () => {
     const payload = list.structuredContent as {
       comments: McpComment[];
       excludedGuestCount: number;
+      securityNotice?: string;
     };
-    // The guest injection comment is NOT in the default set.
-    expect(payload.comments.map((c) => c.number)).toEqual([2]);
-    expect(payload.excludedGuestCount).toBe(1);
-    expect(payload.comments.some((c) => c.note === INJECTION_NOTE)).toBe(false);
+    // The guest injection comment IS in the default set now...
+    expect(payload.comments.map((c) => c.number)).toEqual([1, 2]);
+    expect(payload.excludedGuestCount).toBe(0);
+    // ...delivered verbatim as DATA, with the guest clearly marked...
+    const guest = payload.comments.find((c) => c.number === 1);
+    expect(guest?.trustLevel).toBe("guest");
+    expect(guest?.note).toBe(INJECTION_NOTE);
+    // ...and the untrusted-input label present so the agent never obeys it.
+    expect(payload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
   });
 });
