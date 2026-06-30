@@ -96,6 +96,10 @@ export async function runInit(opts: RunInitOptions = {}): Promise<InitResult> {
     previewId: target.previewId,
     projectId: target.projectId,
     ...(binding.anonKey ? { anonKey: binding.anonKey } : {}),
+    // CRITICAL: preserve the refresh token. Dropping it here leaves the MCP
+    // unable to auto-renew the ~1h access token, so it expires with no recovery
+    // and forces a re-login (the bug that made switching projects break auth).
+    ...(binding.refreshToken ? { refreshToken: binding.refreshToken } : {}),
     ...(binding.backendOrigin ? { backendOrigin: binding.backendOrigin } : {}),
     ...(target.linkSecret ? { linkSecret: target.linkSecret } : {}),
   };
