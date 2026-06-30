@@ -26,4 +26,5 @@ export {
   bindingFromEnv,
   loadProjectBinding,
   resolveBindingPath,
+  writeProjectBinding,
 } from "../config/binding.js";

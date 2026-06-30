@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  bindingFromEnv,
   clearProjectBinding,
   loadProjectBinding,
   resolveBindingPath,
@@ -179,5 +180,79 @@ describe("writeProjectBinding -> loadProjectBinding round trip (real fs)", () =>
     await expect(clearProjectBinding({ env })).resolves.toBe(
       env.SUPERCOMMENT_BINDING_PATH,
     );
+  });
+});
+
+describe("binding extras (anonKey / linkSecret / backendOrigin)", () => {
+  const makeFakeFs = (files: Map<string, string>) => ({
+    mkdir: async () => undefined,
+    writeFile: async (p: string, data: string) => {
+      files.set(p, data);
+    },
+    rename: async (from: string, to: string) => {
+      files.set(to, files.get(from)!);
+      files.delete(from);
+    },
+  });
+
+  it("round-trips anonKey, linkSecret, and backendOrigin", async () => {
+    const files = new Map<string, string>();
+    const fs = makeFakeFs(files);
+    const full: ProjectBinding = {
+      ...SAMPLE,
+      anonKey: "anon-publishable-key",
+      refreshToken: "refresh-token-value",
+      linkSecret: "sk_guest_secret",
+      backendOrigin: "https://app.supercomment.dev",
+    };
+    await writeProjectBinding(full, { env: {}, home: "/h", fs });
+    const loaded = await loadProjectBinding({
+      env: {},
+      home: "/h",
+      readTextFile: async (p) => files.get(p) ?? Promise.reject("ENOENT"),
+    });
+    expect(loaded).toEqual(full);
+  });
+
+  it("omits each extra when not provided (no null/undefined leakage)", async () => {
+    const files = new Map<string, string>();
+    const fs = makeFakeFs(files);
+    await writeProjectBinding(SAMPLE, { env: {}, home: "/h", fs });
+    const written = JSON.parse(files.get("/h/.supercomment/binding.json")!);
+    expect(written).not.toHaveProperty("anonKey");
+    expect(written).not.toHaveProperty("refreshToken");
+    expect(written).not.toHaveProperty("linkSecret");
+    expect(written).not.toHaveProperty("backendOrigin");
+  });
+
+  it("bindingFromEnv reads the anon key + extras alongside the core trio", () => {
+    const fromEnv = bindingFromEnv({
+      SUPERCOMMENT_SUPABASE_URL: "https://ref.supabase.co",
+      SUPERCOMMENT_TOKEN: "member-jwt",
+      SUPERCOMMENT_PREVIEW_ID: "33333333-3333-3333-3333-333333333333",
+      SUPERCOMMENT_ANON_KEY: "anon-from-env",
+      SUPERCOMMENT_REFRESH_TOKEN: "refresh-from-env",
+      SUPERCOMMENT_LINK_SECRET: "sk_from_env",
+      SUPERCOMMENT_BACKEND_ORIGIN: "https://staging.example.com",
+    });
+    expect(fromEnv).toEqual({
+      supabaseUrl: "https://ref.supabase.co",
+      token: "member-jwt",
+      previewId: "33333333-3333-3333-3333-333333333333",
+      anonKey: "anon-from-env",
+      refreshToken: "refresh-from-env",
+      linkSecret: "sk_from_env",
+      backendOrigin: "https://staging.example.com",
+    });
+  });
+
+  it("bindingFromEnv returns undefined when the core trio is incomplete", () => {
+    expect(
+      bindingFromEnv({
+        SUPERCOMMENT_SUPABASE_URL: "https://ref.supabase.co",
+        SUPERCOMMENT_ANON_KEY: "anon-from-env",
+        // missing TOKEN + PREVIEW_ID
+      }),
+    ).toBeUndefined();
   });
 });

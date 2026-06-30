@@ -22,7 +22,20 @@
  *     -- supercomment mcp
  * which writes the server into the project's `.mcp.json`.
  */
-import { loadProjectBinding, type ProjectBinding } from "./binding.js";
+import {
+  bindingFromEnv,
+  loadProjectBinding,
+  writeProjectBinding,
+  type ProjectBinding,
+} from "./binding.js";
+import { assertAllowedSupabaseUrl } from "../config/supabase-url.js";
+import { findRepoLink, applyRepoLink } from "../config/repo-link.js";
+import { decodeJwtExp } from "../auth/identity.js";
+import {
+  RefreshingTokenSource,
+  makeRefreshingFetch,
+  type PersistTokens,
+} from "./token-source.js";
 import { SupabaseCommentStore, type SupabaseLike } from "./store.js";
 import { registerTools, type McpServerLike } from "./tools.js";
 
@@ -51,22 +64,64 @@ const SERVER_VERSION = "0.0.0";
 /**
  * Build a Supabase client from the binding. Dynamically imports
  * `@supabase/supabase-js` so this module doesn't hard-require it at type time.
- * The developer-scoped token is sent as the Authorization bearer so RLS applies
- * the member identity (R25 — not the guest path). Realtime/auth persistence are
- * disabled: the MCP server only does request/response reads + RPC calls.
+ *
+ * Two distinct credentials, and conflating them is the classic failure (R25):
+ *   - `apikey`        = the project ANON key (a valid publishable API key). The
+ *                       PostgREST gateway authenticates the REQUEST with this;
+ *                       a user JWT here is rejected with "Invalid API key".
+ *   - `Authorization` = `Bearer <member JWT>`. This is what RLS reads, so the
+ *                       developer's member identity (not the anon/guest path)
+ *                       governs every row the MCP server can see.
+ *
+ * The anon key comes from the binding (written by `supercomment login`), falling
+ * back to SUPERCOMMENT_ANON_KEY so a hand-rolled env binding still works.
+ * Realtime/auth persistence are disabled: the MCP server only does
+ * request/response reads + RPC calls.
  */
 export async function createSupabaseStore(
   binding: ProjectBinding,
+  deps: { persist?: PersistTokens } = {},
 ): Promise<SupabaseCommentStore> {
+  // Never attach the member token to an unexpected host (security review #4).
+  assertAllowedSupabaseUrl(binding.supabaseUrl);
+  const anonKey = binding.anonKey ?? process.env.SUPERCOMMENT_ANON_KEY;
+  if (!anonKey) {
+    throw new Error(
+      "No Supabase anon key available. Re-run `supercomment login` (it stores " +
+        "the anon key in the binding), or set SUPERCOMMENT_ANON_KEY. The member " +
+        "JWT in the binding is NOT a valid Supabase apikey.",
+    );
+  }
+
+  // Keep the access token fresh across a long session: the source refreshes the
+  // short-lived token from the binding's refresh token when it nears expiry and
+  // persists the rotation back. A custom fetch injects the CURRENT bearer (and
+  // the anon apikey) on every request, so freshness does not depend on
+  // supabase-js's auth manager.
+  const exp = decodeJwtExp(binding.token);
+  const source = new RefreshingTokenSource(
+    binding.supabaseUrl,
+    anonKey,
+    {
+      accessToken: binding.token,
+      ...(binding.refreshToken ? { refreshToken: binding.refreshToken } : {}),
+      ...(exp !== undefined ? { expiresAt: exp } : {}),
+    },
+    { ...(deps.persist ? { persist: deps.persist } : {}) },
+  );
+
   const mod = await importOptional("@supabase/supabase-js");
   const createClient = mod.createClient as (
     url: string,
     key: string,
     opts?: unknown,
   ) => SupabaseLike;
-  const client = createClient(binding.supabaseUrl, binding.token, {
+  const client = createClient(binding.supabaseUrl, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${binding.token}` } },
+    global: {
+      headers: { apikey: anonKey },
+      fetch: makeRefreshingFetch(source, anonKey),
+    },
   });
   return new SupabaseCommentStore(client, binding.previewId);
 }
@@ -90,7 +145,50 @@ export async function runMcpServer(): Promise<void> {
     `binding loaded (preview ${binding.previewId}); connecting to Supabase`,
   );
 
-  const store = await createSupabaseStore(binding);
+  // Per-repo project selection (cwd-aware). An explicit env binding wins; else a
+  // committed `supercomment.json` resolved from the working directory overrides
+  // which preview's comments this session reads, so different repos map to
+  // different projects without a global switch. Credentials stay from the global
+  // binding. Best-effort: a link-file problem never blocks the server.
+  const envBinding = bindingFromEnv(process.env);
+  if (!envBinding) {
+    try {
+      const found = await findRepoLink(process.cwd());
+      if (found) {
+        binding = applyRepoLink(binding, found.link);
+        logStderr(
+          `repo link ${found.path} -> preview ${binding.previewId}` +
+            (found.link.project ? ` (${found.link.project})` : ""),
+        );
+      } else {
+        logStderr(
+          `no supercomment.json found from ${process.cwd()}; using global ` +
+            `binding preview ${binding.previewId} ` +
+            "(run `supercomment link` to bind this repo to a project)",
+        );
+      }
+    } catch {
+      // best-effort: a repo-link resolution failure must never block the server
+    }
+  }
+
+  // Persist refreshed tokens back to the binding, but ONLY when it came from a
+  // file. An env-provided binding (SUPERCOMMENT_*) has no file to own, so its
+  // refresh stays in-memory for the life of the process.
+  const persist: PersistTokens | undefined = envBinding
+    ? undefined
+    : async ({ accessToken, refreshToken }) => {
+        await writeProjectBinding({
+          ...binding,
+          token: accessToken,
+          refreshToken,
+        });
+        logStderr("access token refreshed; binding updated");
+      };
+
+  const store = await createSupabaseStore(binding, {
+    ...(persist ? { persist } : {}),
+  });
 
   // Dynamic import keeps the SDK optional for build/test of unrelated code.
   // VERIFY IN REAL ENV: the live Claude-Code <-> stdio JSON-RPC handshake and a

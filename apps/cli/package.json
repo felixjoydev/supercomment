@@ -1,6 +1,6 @@
 {
   "name": "@supercomment/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SuperComment CLI — authorize your machine and run the local MCP server so your coding agent (Claude Code) can read and resolve visual review comments.",
   "keywords": [
     "supercomment",

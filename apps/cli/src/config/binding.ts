@@ -47,6 +47,30 @@ export interface ProjectBinding {
   previewId: string;
   /** The owning project (informational / future multi-preview scoping). */
   projectId?: string;
+  /**
+   * Public anon/publishable key for `supabaseUrl`. REQUIRED as the Supabase
+   * `apikey` header on every request — the member JWT in `token` is NOT a valid
+   * apikey (PostgREST rejects it with "Invalid API key"); the JWT travels only in
+   * the `Authorization` bearer so RLS still applies the member identity. Written
+   * by `supercomment login`; the MCP server falls back to SUPERCOMMENT_ANON_KEY
+   * when a (pre-anonKey) binding lacks it.
+   */
+  anonKey?: string;
+  /**
+   * Supabase refresh token. Lets the MCP server mint a fresh access token when
+   * the short-lived `token` is near expiry, so the workflow keeps working
+   * without re-running `supercomment login`. MORE sensitive than the access
+   * token (longer-lived) — stored 0600 and rotated in place on each refresh.
+   */
+  refreshToken?: string;
+  /**
+   * Guest link secret for the bound review link. Lets `supercomment start`
+   * inject the guest-submit path without a separate SUPERCOMMENT_LINK_SECRET.
+   * Sensitive (authorizes guest writes) — stored 0600 alongside the token.
+   */
+  linkSecret?: string;
+  /** The SuperComment app origin this binding was created against (share URL + CSP base). */
+  backendOrigin?: string;
 }
 
 /** Narrow runtime guard so a malformed binding file fails loudly, not silently. */
@@ -60,7 +84,11 @@ function isProjectBinding(value: unknown): value is ProjectBinding {
     v.token.length > 0 &&
     typeof v.previewId === "string" &&
     v.previewId.length > 0 &&
-    (v.projectId === undefined || typeof v.projectId === "string")
+    (v.projectId === undefined || typeof v.projectId === "string") &&
+    (v.anonKey === undefined || typeof v.anonKey === "string") &&
+    (v.refreshToken === undefined || typeof v.refreshToken === "string") &&
+    (v.linkSecret === undefined || typeof v.linkSecret === "string") &&
+    (v.backendOrigin === undefined || typeof v.backendOrigin === "string")
   );
 }
 
@@ -101,7 +129,20 @@ export function bindingFromEnv(
   const previewId = env.SUPERCOMMENT_PREVIEW_ID;
   if (!supabaseUrl || !token || !previewId) return undefined;
   const projectId = env.SUPERCOMMENT_PROJECT_ID;
-  return { supabaseUrl, token, previewId, ...(projectId ? { projectId } : {}) };
+  const anonKey = env.SUPERCOMMENT_ANON_KEY;
+  const refreshToken = env.SUPERCOMMENT_REFRESH_TOKEN;
+  const linkSecret = env.SUPERCOMMENT_LINK_SECRET;
+  const backendOrigin = env.SUPERCOMMENT_BACKEND_ORIGIN;
+  return {
+    supabaseUrl,
+    token,
+    previewId,
+    ...(projectId ? { projectId } : {}),
+    ...(anonKey ? { anonKey } : {}),
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(linkSecret ? { linkSecret } : {}),
+    ...(backendOrigin ? { backendOrigin } : {}),
+  };
 }
 
 /** Injectable dependencies so tests don't touch the real fs/env/home. */
@@ -134,9 +175,9 @@ export async function loadProjectBinding(
     raw = await readTextFile(path);
   } catch {
     throw new BindingNotFoundError(
-      `No SuperComment project binding found. Run \`supercomment start\` to ` +
-        `create ${path}, or set SUPERCOMMENT_SUPABASE_URL / SUPERCOMMENT_TOKEN ` +
-        `/ SUPERCOMMENT_PREVIEW_ID.`,
+      `No SuperComment project binding found. Run \`supercomment login\` to ` +
+        `create ${path}, or set SUPERCOMMENT_SUPABASE_URL / SUPERCOMMENT_TOKEN / ` +
+        `SUPERCOMMENT_ANON_KEY / SUPERCOMMENT_PREVIEW_ID.`,
     );
   }
 
@@ -221,6 +262,10 @@ export async function writeProjectBinding(
     token: binding.token,
     previewId: binding.previewId,
     ...(binding.projectId ? { projectId: binding.projectId } : {}),
+    ...(binding.anonKey ? { anonKey: binding.anonKey } : {}),
+    ...(binding.refreshToken ? { refreshToken: binding.refreshToken } : {}),
+    ...(binding.linkSecret ? { linkSecret: binding.linkSecret } : {}),
+    ...(binding.backendOrigin ? { backendOrigin: binding.backendOrigin } : {}),
   };
   const json = `${JSON.stringify(payload, null, 2)}\n`;
 
