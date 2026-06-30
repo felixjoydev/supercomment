@@ -47,3 +47,5 @@ apps/cli/.dev-live-session.mts
 
 # Planning / brainstorming scratch — never commit
 plans/
+.vercel
+.env*
