@@ -66,9 +66,16 @@ export async function updateSession(request: NextRequest) {
     pathname === '/';
 
   if (!claims && !isPublic) {
+    // Preserve the FULL destination (path + query) in `next` so post-login we
+    // return to the exact page — e.g. /cli-auth?port=…&state=… would otherwise
+    // lose its handoff params. Capture before mutating, and clear the original
+    // query so it isn't duplicated onto the /login URL. `next` is sanitized by
+    // safeNextPath where it is consumed.
+    const nextPath = pathname + request.nextUrl.search;
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = '/login';
-    redirectUrl.searchParams.set('next', pathname);
+    redirectUrl.search = '';
+    redirectUrl.searchParams.set('next', nextPath);
     return NextResponse.redirect(redirectUrl);
   }
 

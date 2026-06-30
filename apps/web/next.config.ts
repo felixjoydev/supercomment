@@ -51,6 +51,19 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        // Clickjacking defense (security review, finding 1): no SuperComment
+        // dashboard page should ever be framed. This is what stops a malicious
+        // site from iframing /cli-auth and clickjacking "Authorize CLI" to ship
+        // the live session token to an attacker-chosen loopback port.
+        // `frame-ancestors` only governs framing, so it does NOT affect the
+        // cross-origin <script> embed surfaces (/sc/*, /sc-loader) or fetch/XHR.
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
     ];
   },
 };

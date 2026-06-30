@@ -44,3 +44,6 @@ skills-lock.json
 
 # Live-DB dev harness (carries credentials — never commit)
 apps/cli/.dev-live-session.mts
+
+# Planning / brainstorming scratch — never commit
+plans/

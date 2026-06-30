@@ -20,7 +20,14 @@ type Mode = 'signin' | 'signup';
  * Password auth is the dev/demo default — Supabase's built-in mailer is
  * rate-limited, so the email paths are secondary.
  */
-export function AuthForm({ showAuthError }: { showAuthError: boolean }) {
+export function AuthForm({
+  showAuthError,
+  next,
+}: {
+  showAuthError: boolean;
+  /** Same-origin path to return to after sign-in (e.g. /cli-auth?…). */
+  next?: string;
+}) {
   const [mode, setMode] = useState<Mode>('signin');
   const [pwState, pwSignIn, pwPending] = useActionState(signInWithPassword, {});
   const [suState, pwSignUp, suPending] = useActionState(signUpWithPassword, {});
@@ -74,6 +81,7 @@ export function AuthForm({ showAuthError }: { showAuthError: boolean }) {
                 ) : null}
 
                 <form className="auth-form">
+                  {next ? <input type="hidden" name="next" value={next} /> : null}
                   <div className="field">
                     <label className="field-label" htmlFor="email">
                       Email
@@ -169,6 +177,7 @@ export function AuthForm({ showAuthError }: { showAuthError: boolean }) {
 
                 <div className="auth-alt">
                   <form action={magicLink}>
+                    {next ? <input type="hidden" name="next" value={next} /> : null}
                     <MagicLinkButton pending={mlPending} />
                   </form>
                   <form action={signInWithGitHub}>

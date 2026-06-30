@@ -11,7 +11,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
-  const { error } = await searchParams;
+  const { error, next } = await searchParams;
   const claims = await getVerifiedClaims();
   if (claims && claims.is_anonymous !== true) {
     redirect('/dashboard');
@@ -19,7 +19,7 @@ export default async function LoginPage({
 
   return (
     <main className="auth-screen">
-      <AuthForm showAuthError={error === 'auth'} />
+      <AuthForm showAuthError={error === 'auth'} next={next} />
     </main>
   );
 }
