@@ -23,13 +23,13 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.58.0
         version: 2.106.2
-      '@supercomment/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       zod:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
+      '@supercomment/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@types/node':
         specifier: 25.9.1
         version: 25.9.1
