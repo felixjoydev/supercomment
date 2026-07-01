@@ -18,7 +18,7 @@
  * live DOM has moved on) and report `stale` so the caller shows the stored
  * screenshot instead of a misleading live re-apply.
  */
-import type { EditTarget, VisualChangeSet } from "@supercomment/shared";
+import type { ChangeOp, EditTarget, VisualChangeSet } from "@supercomment/shared";
 
 import { resolveAnchors } from "../capture/reanchor.js";
 import { applyStylePreview, applyTextPreview } from "./style-edits.js";
@@ -45,11 +45,22 @@ export interface ApplyOptions {
   resolve?: (target: EditTarget, doc: Document) => Element | null;
 }
 
+/** The per-op outcome of a re-apply, for the applied/skipped summary (R9). */
+export interface OpOutcome {
+  opId: string;
+  type: ChangeOp["type"];
+  applied: boolean;
+  /** Why an op was skipped: its target didn't resolve, or it was inapplicable. */
+  reason?: "unresolved" | "inapplicable";
+}
+
 export interface ApplyResult {
   /** Ops applied to a resolved element. */
   applied: number;
   /** Ops skipped (target not confidently resolved, or op not applicable). */
   skipped: number;
+  /** Per-op outcome — which edits applied on this page and which were skipped (R9). */
+  results: OpOutcome[];
   /** True when the change-set targets a DIFFERENT build → nothing was applied. */
   stale: boolean;
   /** Restore the live DOM to its pre-apply state (deselect). */
@@ -58,10 +69,17 @@ export interface ApplyResult {
   reassert(): void;
 }
 
-/** The reanchor-backed default resolver: corroborated anchor, else the selector. */
+/**
+ * The default target resolver. When the op carries anchors they are AUTHORITATIVE
+ * — corroborate-or-stale via reanchor, and if it can't confidently resolve we
+ * return null (skip), NEVER fall back to a selector's first match (that would
+ * "guess" an ambiguous target across pages, R9). Only an anchor-less target
+ * (e.g. an area/text edit) uses the best-effort selector.
+ */
 function defaultResolve(target: EditTarget, doc: Document): Element | null {
-  const byAnchor = resolveAnchors(target.anchors ?? [], doc).element;
-  if (byAnchor) return byAnchor;
+  if (target.anchors && target.anchors.length > 0) {
+    return resolveAnchors(target.anchors, doc).element;
+  }
   try {
     return doc.querySelector(target.selector);
   } catch {
@@ -88,6 +106,7 @@ export function applyChangeSet(
     return {
       applied: 0,
       skipped: changeSet.ops.length,
+      results: [],
       stale: true,
       revert() {},
       reassert() {},
@@ -96,6 +115,7 @@ export function applyChangeSet(
 
   const resolve = options.resolve ?? defaultResolve;
   const bindings: OpBinding[] = [];
+  const results: OpOutcome[] = [];
   let applied = 0;
   let skipped = 0;
 
@@ -103,21 +123,25 @@ export function applyChangeSet(
     const el = resolve(op.target, doc);
     if (!el) {
       skipped++;
+      results.push({ opId: op.opId, type: op.type, applied: false, reason: "unresolved" });
       continue;
     }
     const binding = bindOp(op, el, doc);
     if (!binding) {
       skipped++;
+      results.push({ opId: op.opId, type: op.type, applied: false, reason: "inapplicable" });
       continue;
     }
     binding.apply();
     bindings.push(binding);
     applied++;
+    results.push({ opId: op.opId, type: op.type, applied: true });
   }
 
   return {
     applied,
     skipped,
+    results,
     stale: false,
     revert() {
       // Reverse order so nested/dependent changes unwind cleanly.
