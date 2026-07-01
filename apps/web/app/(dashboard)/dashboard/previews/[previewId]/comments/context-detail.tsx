@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+
 import type { CommentView } from '@/lib/comments/types';
 import {
   a11yPathLabel,
@@ -9,6 +11,12 @@ import {
   networkLabel,
   surfaceLabel,
 } from '@/lib/comments/context-summary';
+import {
+  classifyCaptureRef,
+  resolveCaptureSrc,
+  type CaptureSigner,
+} from '@/lib/comments/capture-ref';
+import { createClient } from '@/lib/supabase/client';
 
 /**
  * Inline expandable view of a comment's captured context: the capture-time
@@ -72,30 +80,65 @@ export function ContextDetail({ comment }: { comment: CommentView }) {
 }
 
 /**
- * The capture-time "before" artifact (U9, R15): the targeted element as it looked
- * when the comment was made — the "before" half of before/after across redeploys.
+ * The capture-time "before" artifact (U9, R15) / modified-state screenshot (U13,
+ * R17): the targeted element as it looked at comment time.
  *
- * A real raster is an image (a `data:image/*` URL or an image storage ref) and
- * renders inline. The element-subtree DOM snapshot FALLBACK is a non-image data
- * URL (`data:application/json,...`); rather than render a broken `<img>`, it shows
- * a compact "snapshot captured" indicator. (Rendering the snapshot itself as a
- * visual before/after is follow-up work; here it confirms a before was captured.)
+ * Three source shapes (U7 read-resolution):
+ *  - an inline `data:image/*` URL or an http(s) URL → rendered directly;
+ *  - a PRIVATE `captures` bucket object PATH (`<previewId>/<uuid>.<ext>`) → signed
+ *    on mount into a short-lived URL with the member session (0027 RLS SELECT),
+ *    since a bare path in a private bucket is not directly loadable;
+ *  - the non-image DOM-snapshot fallback (`data:application/json,…`) or a failed
+ *    signing → a compact "snapshot captured" indicator instead of a broken img.
  */
 function BeforeArtifact({ src, number }: { src: string; number: number }) {
-  // Image when it's an image data URL or any non-`data:` ref (a storage URL);
-  // a non-image `data:` URL is the DOM-snapshot fallback.
-  const isImage = src.startsWith('data:image/') || !src.startsWith('data:');
+  const kind = classifyCaptureRef(src);
+  // Inline/URL images render immediately; a private-bucket ref is signed on mount.
+  const [resolved, setResolved] = useState<string | null>(
+    kind === 'image-url' ? src : null,
+  );
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (kind !== 'image-ref') return;
+    let active = true;
+    const signer: CaptureSigner = async (bucket, path) => {
+      // VERIFY IN REAL ENV: the signed-URL round-trip (0027 RLS SELECT via the
+      // member session) can't run in the sandbox.
+      const { data } = await createClient()
+        .storage.from(bucket)
+        .createSignedUrl(path, 3600);
+      return data?.signedUrl ?? null;
+    };
+    void resolveCaptureSrc(src, signer).then((url) => {
+      if (!active) return;
+      if (url) setResolved(url);
+      else setFailed(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [src, kind]);
+
+  const showImage =
+    (kind === 'image-url' || kind === 'image-ref') && !!resolved && !failed;
+  const showLoading = kind === 'image-ref' && !resolved && !failed;
 
   return (
     <figure className="context-before">
       <figcaption className="context-before-cap">Before · at comment time</figcaption>
-      {isImage ? (
+      {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={src}
+          src={resolved as string}
           alt={`Captured “before” for comment ${number}`}
           className="context-shot"
         />
+      ) : showLoading ? (
+        <span className="context-snapshot" role="img" aria-label="Loading screenshot">
+          <SnapshotGlyph />
+          Loading screenshot…
+        </span>
       ) : (
         <span
           className="context-snapshot"
