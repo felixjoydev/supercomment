@@ -110,7 +110,11 @@ begin
 end;
 $$;
 
-revoke all on function public.purge_orphaned_captures() from public;
+-- Owner-only: this SECURITY DEFINER fn deletes objects and has no internal auth
+-- check, so it must NOT be a callable RPC. Supabase default-grants EXECUTE on new
+-- public functions to anon + authenticated, so revoking from `public` alone is
+-- insufficient (the 0008 grant post-mortem) — revoke from all three.
+revoke all on function public.purge_orphaned_captures() from public, anon, authenticated;
 
 -- Scheduling: pg_cron is NOT installed on this project, so we do not schedule the
 -- purge here (a bare `cron.schedule` would fail). Once pg_cron is enabled, run:

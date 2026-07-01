@@ -54,7 +54,7 @@ create index if not exists comments_template_idx
 -- Signature change (adds p_kind), so drop the exact 0020 signature first.
 drop function if exists public.create_review_comment(uuid, text, text, text, jsonb, text);
 
-create function public.create_review_comment(
+create or replace function public.create_review_comment(
   p_preview_id uuid,
   p_intent     text,
   p_severity   text,
