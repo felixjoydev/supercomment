@@ -150,6 +150,16 @@ export class FakeElement {
     return this.children.length;
   }
 
+  /** Element node type (always 1); lets capture code walk this double like a real tree. */
+  get nodeType(): number {
+    return 1;
+  }
+
+  /** The parent element, mirroring the real DOM accessor used by selector/anchor capture. */
+  get parentElement(): FakeElement | null {
+    return this.parent;
+  }
+
   contains(node: FakeElement | null): boolean {
     if (!node) return false;
     if (node === this) return true;
@@ -177,6 +187,11 @@ export class FakeElement {
     const list = this.listeners.get(type) ?? [];
     list.push(fn);
     this.listeners.set(type, list);
+  }
+
+  removeEventListener(type: string, fn: Listener): void {
+    const list = this.listeners.get(type);
+    if (list) this.listeners.set(type, list.filter((f) => f !== fn));
   }
 
   dispatch(type: string, event: unknown): void {
@@ -260,6 +275,11 @@ export class FakeDocument {
     this.docListeners.set(type, list);
   }
 
+  removeEventListener(type: string, fn: Listener): void {
+    const list = this.docListeners.get(type);
+    if (list) this.docListeners.set(type, list.filter((f) => f !== fn));
+  }
+
   dispatch(type: string, event: unknown): void {
     for (const fn of this.docListeners.get(type) ?? []) fn(event);
   }
@@ -276,6 +296,11 @@ export class FakeWindow {
     const list = this.listeners.get(type) ?? [];
     list.push(fn);
     this.listeners.set(type, list);
+  }
+
+  removeEventListener(type: string, fn: Listener): void {
+    const list = this.listeners.get(type);
+    if (list) this.listeners.set(type, list.filter((f) => f !== fn));
   }
 
   dispatch(type: string, event: unknown): void {

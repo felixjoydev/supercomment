@@ -26,6 +26,9 @@ const ICONS: Record<SelectionMode, string> = {
     '<svg viewBox="0 0 14 14" fill="none"><path d="M2.5 3.5V2h9v1.5M7 2v10M5 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   multi:
     '<svg viewBox="0 0 14 14" fill="none"><rect x="1.5" y="1.5" width="7.5" height="7.5" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M12.5 5v4.5A3 3 0 0 1 9.5 12.5H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  // Pencil — the visual-editor mode (U9). Distinct from the annotation modes.
+  edit:
+    '<svg viewBox="0 0 14 14" fill="none"><path d="M9.4 2.3l2.3 2.3M8.2 3.5 2.6 9.1l-.6 2.9 2.9-.6 5.6-5.6-2.3-2.3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
 const MODES: ModeDef[] = [
@@ -33,6 +36,7 @@ const MODES: ModeDef[] = [
   { mode: "area", label: "Area", icon: ICONS.area },
   { mode: "text", label: "Text", icon: ICONS.text },
   { mode: "multi", label: "Multi", icon: ICONS.multi },
+  { mode: "edit", label: "Edit", icon: ICONS.edit },
 ];
 
 export interface ToolbarCallbacks {

@@ -14,8 +14,13 @@ import type {
   DeviceSurface,
 } from "@supercomment/shared";
 
-/** The four selection modes the toolbar exposes (R9). */
-export type SelectionMode = "element" | "area" | "text" | "multi";
+/**
+ * The toolbar modes (R9). The first four are annotation modes (pick a
+ * target, drop a comment); `edit` is the visual-editor mode (U9) — picking an
+ * element opens the properties panel instead of the comment form, and edits are
+ * buffered into the controller's `EditSession` until the reviewer submits.
+ */
+export type SelectionMode = "element" | "area" | "text" | "multi" | "edit";
 
 /** A rectangle in document (page) coordinates, CSS pixels. */
 export interface Rect {

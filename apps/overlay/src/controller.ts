@@ -34,6 +34,9 @@ import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
+import { EditSession } from "./editor/edit-session.js";
+import { buildEditTarget } from "./editor/edit-target.js";
+import { PropertiesPanel } from "./editor/panel.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
 import { filterBySurface, countBySurface } from "./device/surface-filter.js";
@@ -85,8 +88,19 @@ export class OverlayController {
   private readonly markers: MarkerLayer;
   private readonly guestStore: GuestNameStore;
 
+  /**
+   * The durable visual-edit buffer (U9). Lives on the controller — not the
+   * selection state — so it survives setMode/clear/Esc (G13/R7); it is discarded
+   * only on an explicit reviewer action, never by mode churn.
+   */
+  readonly editSession: EditSession;
+  /** Teardown callbacks for every listener this controller binds (plans/008). */
+  private readonly disposers: Array<() => void> = [];
+
   private form: CommentForm | null = null;
   private modal: GuestModal | null = null;
+  /** The visual-editor properties panel (U9); open only while editing an element. */
+  private editPanel: PropertiesPanel | null = null;
   /** A selection + draft waiting on a guest name before submission. */
   private deferredTarget: SelectionTarget | null = null;
   private deferredDraft: CommentDraft | null = null;
@@ -164,11 +178,24 @@ export class OverlayController {
       this.deviceToolbar = null;
     }
 
+    this.editSession = new EditSession();
     this.bindEvents();
   }
 
-  /** Remove the overlay from the page. */
+  /**
+   * Remove the overlay from the page and unbind every listener it registered
+   * (plans/008). Full teardown drops the edit buffer too — unlike Esc, which
+   * dismisses the panel UI but preserves the buffer (G13).
+   */
   destroy(): void {
+    for (const dispose of this.disposers.splice(0)) {
+      try {
+        dispose();
+      } catch {
+        /* teardown is best-effort — one failure must not skip the rest */
+      }
+    }
+    this.dismissEditPanel();
     this.deviceMode?.exit();
     this.shell.destroy();
   }
@@ -300,6 +327,9 @@ export class OverlayController {
 
   changeMode(mode: SelectionMode): void {
     this.dismissForm();
+    // Leaving (or re-entering) a mode closes the editor panel UI but keeps the
+    // edit buffer — the reviewer can switch modes mid-edit and come back (G13).
+    this.dismissEditPanel();
     this.selection.setMode(mode);
     this.highlights.clear();
     this.toolbar.setMode(mode);
@@ -313,6 +343,17 @@ export class OverlayController {
     const target = this.selection.selectElement(el);
     this.highlights.showElements([target.rect]);
     this.openFormForTarget(target);
+  }
+
+  /**
+   * Edit mode (U9): select an element and open the properties panel bound to it,
+   * instead of the comment form. The edit buffer already lives on the controller,
+   * so re-targeting a different element keeps every prior edit.
+   */
+  handleEditClick(el: Element): void {
+    const target = this.selection.selectElement(el);
+    this.highlights.showElements([target.rect]);
+    this.openEditPanel(el);
   }
 
   /** Multi mode: toggle membership; clicking a selected element deselects it. */
@@ -478,6 +519,9 @@ export class OverlayController {
   cancelSelection(): void {
     this.dismissForm();
     this.dismissModal();
+    // Esc dismisses the editor panel UI but PRESERVES the edit buffer (G13/R7) —
+    // the reviewer can reopen it by picking an element again in edit mode.
+    this.dismissEditPanel();
     // Esc also closes an open comment popover (Shadow DOM retargets cross-boundary
     // clicks, so there is no doc-level "click outside" close — see bindEvents).
     this.markers.closePopover();
@@ -500,6 +544,32 @@ export class OverlayController {
     this.modal = null;
   }
 
+  // --- Visual editor (U9) -------------------------------------------------
+
+  /**
+   * Open (or re-target) the properties panel for `el`. The panel records edits
+   * into {@link editSession} via callbacks and previews them ephemerally; the
+   * durable artifact is the change-set folded into `context` at submit (U13).
+   */
+  private openEditPanel(el: Element): void {
+    this.dismissForm();
+    this.dismissEditPanel();
+    const target = buildEditTarget(el, this.doc);
+    this.editPanel = new PropertiesPanel(this.doc, this.shell.layer, el, target, {
+      record: (op) => this.editSession.record(op),
+      revert: (op) => this.editSession.remove(op),
+      discard: () => this.editSession.discard(),
+      count: () => this.editSession.size,
+      onClose: () => this.dismissEditPanel(),
+    });
+  }
+
+  /** Close the editor panel UI. The edit buffer is NOT discarded here (G13/R7). */
+  private dismissEditPanel(): void {
+    this.editPanel?.destroy();
+    this.editPanel = null;
+  }
+
   // --- Native event wiring ------------------------------------------------
 
   private bindEvents(): void {
@@ -511,14 +581,15 @@ export class OverlayController {
     // shadow host, so a naive "am I typing?" guard cannot see the textarea and
     // letters typed into the note field would switch modes and destroy the
     // draft. Modes are mouse-driven from the toolbar.
-    this.doc.addEventListener("keydown", (e) => {
+    this.on(this.doc, "keydown", (e) => {
       const ke = e as KeyboardEvent;
       if (ke.key === "Escape") this.cancelSelection();
     });
 
-    // Clicks on the host page drive element/multi selection. We listen in the
-    // host document (not the shadow layer) and ignore clicks on our own UI.
-    this.doc.addEventListener(
+    // Clicks on the host page drive element/multi/edit selection. We listen in
+    // the host document (not the shadow layer) and ignore clicks on our own UI.
+    this.on(
+      this.doc,
       "click",
       (e) => {
         const target = e.target as Element | null;
@@ -530,30 +601,33 @@ export class OverlayController {
         } else if (mode === "multi") {
           e.preventDefault();
           this.handleMultiClick(target);
+        } else if (mode === "edit") {
+          e.preventDefault();
+          this.handleEditClick(target);
         }
       },
       true,
     );
 
     // Area drag in area mode.
-    this.doc.addEventListener("mousedown", (e) => {
+    this.on(this.doc, "mousedown", (e) => {
       if (this.selection.getMode() !== "area") return;
       const me = e as MouseEvent;
       if (this.isOwnNode(me.target as Element | null)) return;
       this.beginArea(me.clientX, me.clientY);
     });
-    this.doc.addEventListener("mousemove", (e) => {
+    this.on(this.doc, "mousemove", (e) => {
       const me = e as MouseEvent;
       this.updateArea(me.clientX, me.clientY);
     });
-    this.doc.addEventListener("mouseup", (e) => {
+    this.on(this.doc, "mouseup", (e) => {
       if (this.selection.getMode() !== "area") return;
       const me = e as MouseEvent;
       this.endArea(me.clientX, me.clientY);
     });
 
     // Text mode: grab the current selection on mouseup.
-    this.doc.addEventListener("mouseup", () => {
+    this.on(this.doc, "mouseup", () => {
       if (this.selection.getMode() !== "text") return;
       const sel = view.getSelection?.();
       const text = sel?.toString() ?? "";
@@ -566,8 +640,25 @@ export class OverlayController {
     });
 
     // Keep markers anchored on scroll/resize.
-    view.addEventListener("scroll", () => this.markers.render(), true);
-    view.addEventListener("resize", () => this.markers.render());
+    this.on(view, "scroll", () => this.markers.render(), true);
+    this.on(view, "resize", () => this.markers.render());
+  }
+
+  /**
+   * Register an event listener and record its removal in {@link disposers} so
+   * {@link destroy} fully unbinds it (plans/008). Every listener the controller
+   * binds — including the edit-mode dispatch — goes through here.
+   */
+  private on(
+    target: EventTarget,
+    type: string,
+    handler: (e: Event) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    target.addEventListener(type, handler as EventListener, options);
+    this.disposers.push(() =>
+      target.removeEventListener(type, handler as EventListener, options),
+    );
   }
 
   /** True if a node belongs to our own overlay (shadow host). */

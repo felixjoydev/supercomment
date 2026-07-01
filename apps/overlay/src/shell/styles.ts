@@ -698,4 +698,218 @@ textarea:focus-visible {
   z-index: 3;
   animation: sc-fade-in 200ms var(--ease-out) both;
 }
+
+/* Visual editor — properties panel (U9) ------------------------------- */
+/* A right-side inspector bound to one element. Same quiet-gallery language as
+   the form/modal. Direct child of .sc-layer so it opts back into pointer events
+   (also set explicitly below). Clean-room original — no third-party UI. */
+.sc-edit-panel {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 288px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding: 16px;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: sc-panel-in 320ms var(--ease-out) both;
+}
+@keyframes sc-panel-in {
+  from { opacity: 0; transform: translateX(12px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+.sc-ep-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sc-ep-headings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sc-ep-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.sc-ep-target {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
+.sc-ep-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-close:hover { background: var(--soft); color: var(--ink); }
+}
+.sc-ep-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sc-ep-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.sc-ep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.sc-ep-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+.sc-ep-label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.sc-ep-input,
+.sc-ep-number,
+.sc-ep-select {
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  border-radius: 9px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--surface);
+  transition: box-shadow 160ms ease;
+}
+.sc-ep-number {
+  width: 84px;
+  text-align: right;
+}
+.sc-ep-select {
+  min-width: 108px;
+}
+.sc-ep-input:focus,
+.sc-ep-number:focus,
+.sc-ep-select:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 3px var(--accent-ring);
+}
+.sc-ep-textarea {
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+}
+.sc-ep-color {
+  width: 40px;
+  height: 28px;
+  padding: 2px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.sc-ep-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-ep-btn {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 140ms var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-btn:hover { background: rgba(35, 31, 24, 0.04); }
+}
+.sc-ep-btn:active {
+  transform: scale(0.96);
+}
+.sc-ep-insert {
+  flex-wrap: wrap;
+}
+.sc-ep-insert-text {
+  flex: 1;
+  min-width: 96px;
+}
+.sc-ep-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.sc-ep-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.sc-ep-discard {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  padding: 6px 10px;
+  border-radius: 999px;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-discard:hover { color: var(--accent-deep); background: var(--accent-soft); }
+}
+.sc-ep-discard-armed,
+.sc-ep-discard-armed:hover {
+  color: #fff;
+  background: var(--accent);
+}
+.sc-ep-hint {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-edit-panel { animation: none; }
+}
 `;
