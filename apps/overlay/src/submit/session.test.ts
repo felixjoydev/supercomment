@@ -44,6 +44,7 @@ describe("SessionCommentSubmitter.buildArgs", () => {
       p_note: "Button is misaligned",
       p_context: PAYLOAD.context,
       p_fidelity: "live",
+      p_kind: "comment",
     };
     expect(args).toEqual(expected);
     // The session's previewId wins over the payload's (server-scoped).
@@ -51,6 +52,16 @@ describe("SessionCommentSubmitter.buildArgs", () => {
     // No link secret / display name / path keys leak into the args.
     expect(Object.keys(args)).not.toContain("p_link_secret");
     expect(Object.keys(args)).not.toContain("p_display_name");
+  });
+
+  it("threads p_kind='template' for a visual-edit comment (U13)", () => {
+    const submitter = new SessionCommentSubmitter({
+      ...BASE,
+      getAccessToken: () => "jwt",
+      rpc: async () => ({ number: 1 }),
+    });
+    const templatePayload = { ...PAYLOAD, kind: "template" as const };
+    expect(submitter.buildArgs(templatePayload).p_kind).toBe("template");
   });
 
   it("defaults fidelity to 'live' when not provided", () => {

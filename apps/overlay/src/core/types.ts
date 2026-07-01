@@ -142,6 +142,21 @@ export interface SubmitResult {
   message?: string;
 }
 
+/**
+ * U13 SEAM — direct-to-Storage screenshot upload.
+ *
+ * The controller hands the modified-state raster (an `image/*` data URL) to this
+ * seam at submit and stores the returned Storage REF in `context.screenshot`, so
+ * a large PNG never inflates the comment `context` (3 MiB guest cap) or every
+ * MCP read. The real implementation is `submit/upload.ts:CaptureUploader`,
+ * wired with the reviewer's session creds in `index.ts`; absent (tunnel / stub /
+ * tests) the screenshot stays inline. Returns `null` on any failure (never
+ * throws) so an upload problem can never block submission.
+ */
+export interface ScreenshotUploader {
+  uploadDataUrl(dataUrl: string): Promise<string | null>;
+}
+
 /** Everything the overlay needs to be constructed against. */
 export interface OverlayConfig {
   /** The preview this overlay is annotating (R13 numbering scope). */
@@ -153,6 +168,12 @@ export interface OverlayConfig {
   previewKey: string;
   capturer: ContextCapturer;
   submitter: CommentSubmitter;
+  /**
+   * Optional out-of-band screenshot uploader (U13). When present, a modified-state
+   * image data URL captured at submit is uploaded and replaced by its Storage ref;
+   * when absent the screenshot stays inline (tunnel / stub / tests).
+   */
+  uploader?: ScreenshotUploader;
   /** Document to operate on; defaults to the ambient `document` in browsers. */
   doc?: Document;
   /** Storage for the guest name; defaults to `localStorage` in browsers. */

@@ -26,7 +26,7 @@ function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
   const parent = doc.createElement("div"); // stands in for shell.layer
   const el = opts?.el ?? makeLeaf(doc, "button", "Buy");
   const session = new EditSession();
-  const state = { closed: false };
+  const state = { closed: false, saved: false };
   const cb: PanelCallbacks = {
     record: (op) => session.record(op),
     revert: (op) => session.remove(op),
@@ -34,6 +34,9 @@ function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
     count: () => session.size,
     onClose: () => {
       state.closed = true;
+    },
+    onSave: () => {
+      state.saved = true;
     },
   };
   const target = buildEditTarget(el as unknown as Element, doc as unknown as Document);
@@ -224,6 +227,24 @@ describe("PropertiesPanel — discard & teardown (G13/R7, plans/008)", () => {
     // A change dispatched after teardown must NOT record a new op.
     color.value = "#ff0000";
     color.dispatch("input", {});
+    expect(session.size).toBe(1);
+  });
+});
+
+describe("PropertiesPanel — save bridge (U13)", () => {
+  it("enables Save only after an edit and fires onSave without touching the buffer", () => {
+    const { session, q, state } = mount();
+    const save = q(".sc-ep-save");
+    expect(save.disabled).toBe(true); // nothing to save yet
+
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    expect(save.disabled).toBe(false);
+
+    save.dispatch("click", {});
+    expect(state.saved).toBe(true);
+    // Saving hands off to the controller (which folds the buffer in at submit);
+    // the panel itself does not clear or mutate the buffer.
     expect(session.size).toBe(1);
   });
 });

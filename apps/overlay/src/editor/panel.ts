@@ -55,6 +55,8 @@ export interface PanelCallbacks {
   count(): number;
   /** The reviewer closed the panel (keeps the buffer; just dismisses the UI). */
   onClose(): void;
+  /** Finalize the buffered edits as a template comment (opens the comment form). */
+  onSave(): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -105,6 +107,7 @@ export class PropertiesPanel {
 
   private countEl!: HTMLElement;
   private discardBtn!: HTMLButtonElement;
+  private saveBtn!: HTMLButtonElement;
   private discardArmed = false;
 
   private originalText: string | null = null;
@@ -287,6 +290,11 @@ export class PropertiesPanel {
     const hint = this.create("div", "sc-ep-hint");
     hint.textContent = "Edits stay private until you submit them as a comment.";
     this.root.appendChild(hint);
+
+    // The bridge to submission (U13): finalize the buffered edits as a template
+    // comment. Disabled until there is at least one edit to save.
+    this.saveBtn = this.button("sc-ep-save", "Save as comment", () => this.cb.onSave());
+    this.root.appendChild(this.saveBtn);
   }
 
   // --- Recording ----------------------------------------------------------
@@ -425,6 +433,7 @@ export class PropertiesPanel {
   private refreshCount(): void {
     const n = this.cb.count();
     this.countEl.textContent = n === 1 ? "1 edit" : `${n} edits`;
+    this.saveBtn.disabled = n === 0;
   }
 
   /** True for a leaf (no element children) — safe to edit text without clobbering structure. */

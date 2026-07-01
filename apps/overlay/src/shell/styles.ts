@@ -909,6 +909,30 @@ textarea:focus-visible {
   color: var(--ink-3);
   line-height: 1.4;
 }
+.sc-ep-save {
+  appearance: none;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 140ms var(--ease-out), opacity 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-save:hover:not(:disabled) { background: var(--accent-deep); }
+}
+.sc-ep-save:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.sc-ep-save:disabled {
+  background: var(--soft);
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
 @media (prefers-reduced-motion: reduce) {
   .sc-edit-panel { animation: none; }
 }

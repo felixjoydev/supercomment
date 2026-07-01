@@ -208,7 +208,8 @@ export class OverlayController {
     notice.textContent = message;
     this.shell.layer.appendChild(notice);
     const view = this.doc.defaultView;
-    view?.setTimeout(() => notice.remove(), 4000);
+    // Best-effort auto-dismiss: the notice still shows if a timer can't schedule.
+    view?.setTimeout?.(() => notice.remove(), 4000);
   }
 
   /**
@@ -405,38 +406,47 @@ export class OverlayController {
   handleTextSelection(quotedText: string, rect: Rect): void {
     const target = this.selection.selectText(quotedText, rect);
     if (!target) return;
-    this.openFormForTarget(target, quotedText);
+    this.openFormForTarget(target, { seedNote: quotedText });
   }
 
   // --- Form + guest gate --------------------------------------------------
 
-  private openFormForTarget(target: SelectionTarget, seedNote?: string): void {
+  private openFormForTarget(
+    target: SelectionTarget,
+    opts: { seedNote?: string; asTemplate?: boolean } = {},
+  ): void {
     // Guest gate: a name is required before submitting (R5/R24). We open the
     // form regardless (browsing/drafting is fine) and only block at submit if
     // still nameless — but if there is no name at all we prompt up-front so the
     // reviewer isn't surprised.
     this.dismissForm();
     this.form = new CommentForm(this.doc, this.shell.layer, target.rect, {
-      onSubmit: (draft) => this.handleSubmit(target, draft),
+      onSubmit: (draft) =>
+        this.handleSubmit(target, draft, opts.asTemplate ?? false),
       onCancel: () => this.cancelSelection(),
     });
-    if (seedNote) this.form.setNote(seedNote);
+    if (opts.seedNote) this.form.setNote(opts.seedNote);
   }
 
-  private handleSubmit(target: SelectionTarget, draft: CommentDraft): void {
+  private handleSubmit(
+    target: SelectionTarget,
+    draft: CommentDraft,
+    asTemplate = false,
+  ): void {
     if (!this.guestStore.has()) {
       // Defer the submission until a name is provided.
       this.deferredTarget = target;
       this.deferredDraft = draft;
-      this.promptForName(() => this.completeSubmit(target, draft));
+      this.promptForName(() => this.completeSubmit(target, draft, asTemplate));
       return;
     }
-    void this.completeSubmit(target, draft);
+    void this.completeSubmit(target, draft, asTemplate);
   }
 
   private async completeSubmit(
     target: SelectionTarget,
     draft: CommentDraft,
+    asTemplate = false,
   ): Promise<void> {
     const name = this.guestStore.get();
     if (!name) return; // still no name -> stay blocked
@@ -451,6 +461,21 @@ export class OverlayController {
     // raster/snapshot failure can never block submission.
     await attachBeforeArtifact(context, primaryElementOfTarget(target));
 
+    // U13: fold the visual change-set into a `template` comment. ONLY a submit
+    // that came from the editor's "Save as comment" carries the buffer — an
+    // ordinary comment made while edits happen to be buffered must not absorb
+    // them. captureContext already rastered the MODIFIED DOM (previews are still
+    // applied at submit, before any framework revert — G6), so the screenshot is
+    // the modified state (R17).
+    const changeSet = asTemplate ? this.editSession.toChangeSet() : null;
+    if (changeSet) {
+      context.changeSet = changeSet;
+    }
+
+    // U13/U7: push a real raster out-of-band to Storage and keep only the ref, so
+    // a large PNG never inflates `context` (3 MiB cap) or every read.
+    await this.uploadScreenshotRef(context);
+
     const payload: NewCommentInput = newCommentInputSchema.parse({
       previewId: this.config.previewId,
       authorDisplayName: name,
@@ -459,28 +484,83 @@ export class OverlayController {
       note: draft.note.trim(),
       context,
       fidelity: "live",
+      ...(changeSet ? { kind: "template" as const } : {}),
     });
 
     const result = await this.config.submitter.submit(payload);
-    if (result.ok) {
-      this.markers.add({
-        number: result.number,
-        rect: target.rect,
-        content: {
-          note: draft.note.trim(),
-          authorDisplayName: name,
-          intent: draft.intent,
-          severity: draft.severity,
-          status: "new",
-          createdAt: new Date().toISOString(),
-        },
-      });
-      // Keep the toggle counts live: update this controller's own toolbar (if
-      // top-level) and notify the parent (if this is the device-iframe child).
-      this.bumpSurfaceCount(this.surface);
-      this.config.onCommentSubmitted?.(this.surface);
+    if (!result.ok) {
+      // U13/G5: SURFACE the rejection instead of swallowing it, and PRESERVE the
+      // draft + edit buffer so the reviewer can trim/retry (rate_limited /
+      // payload_too_large) or reload (no_review_session). Never cancel here.
+      this.showSubmitError(result.message);
+      return;
     }
+
+    this.markers.add({
+      number: result.number,
+      rect: target.rect,
+      content: {
+        note: draft.note.trim(),
+        authorDisplayName: name,
+        intent: draft.intent,
+        severity: draft.severity,
+        status: "new",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    // Keep the toggle counts live: update this controller's own toolbar (if
+    // top-level) and notify the parent (if this is the device-iframe child).
+    this.bumpSurfaceCount(this.surface);
+    this.config.onCommentSubmitted?.(this.surface);
+    // The edits are now saved as a comment (R7): clear the buffer so they don't
+    // ride a subsequent unrelated comment.
+    if (changeSet) this.editSession.discard();
     this.cancelSelection();
+  }
+
+  /**
+   * Upload a modified-state raster out-of-band and swap the inline data URL for
+   * its Storage ref (U13/U7). Only real `image/*` data URLs are uploaded — the
+   * `data:application/json,...` DOM-snapshot fallback and existing refs stay as
+   * they are. On upload failure the heavy inline raster is DROPPED rather than
+   * shipped (it would risk the 3 MiB `context` cap); submission proceeds either
+   * way. Never throws.
+   */
+  private async uploadScreenshotRef(context: CapturedContext): Promise<void> {
+    const uploader = this.config.uploader;
+    const shot = context.screenshot;
+    if (!uploader || !shot || !shot.startsWith("data:image/")) return;
+    try {
+      const ref = await uploader.uploadDataUrl(shot);
+      if (ref) {
+        context.screenshot = ref;
+      } else {
+        delete context.screenshot;
+      }
+    } catch {
+      delete context.screenshot;
+    }
+  }
+
+  /** Map a raw RPC rejection to a clear, actionable reviewer message (U13/G5/G21). */
+  private mapSubmitError(message?: string): string {
+    const m = (message ?? "").toLowerCase();
+    if (m.includes("rate_limited")) {
+      return "You're commenting too quickly. Wait a moment, then submit again.";
+    }
+    if (m.includes("payload_too_large")) {
+      return "This edit is too large to save. Remove a few changes and submit again.";
+    }
+    if (m.includes("no_review_session") || m.includes("invalid_token")) {
+      // The ~8h review session lapsed; a fresh token needs the /s hop (G21).
+      return "Your review session has expired. Reload the page to keep reviewing.";
+    }
+    return "Couldn't save your comment. Please try again.";
+  }
+
+  /** Surface a submit rejection as a transient notice; the form + buffer stay put. */
+  private showSubmitError(message?: string): void {
+    this.showDeviceNotice(this.mapSubmitError(message));
   }
 
   private async captureContext(
@@ -561,7 +641,20 @@ export class OverlayController {
       discard: () => this.editSession.discard(),
       count: () => this.editSession.size,
       onClose: () => this.dismissEditPanel(),
+      onSave: () => this.beginEditComment(el),
     });
+  }
+
+  /**
+   * Finalize the buffered edits as a template comment (U13): open the comment
+   * form anchored to the edited element so the reviewer adds a note; submitting
+   * it folds the WHOLE change-set into a `template`. No-op when nothing's edited.
+   */
+  private beginEditComment(el: Element): void {
+    if (this.editSession.isEmpty()) return;
+    const target = this.selection.selectElement(el);
+    this.dismissEditPanel();
+    this.openFormForTarget(target, { asTemplate: true });
   }
 
   /** Close the editor panel UI. The edit buffer is NOT discarded here (G13/R7). */

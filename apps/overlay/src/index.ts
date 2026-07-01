@@ -32,6 +32,7 @@ import { StubCommentSubmitter } from "./core/stubs.js";
 import { RealContextCapturer } from "./capture/index.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
+import { CaptureUploader } from "./submit/upload.js";
 import { loadReviewComments, toExistingMarkers } from "./read/load-comments.js";
 import { isDeviceChild } from "./device/device-mode.js";
 import {
@@ -104,6 +105,8 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
     previewKey,
     capturer: overrides.capturer ?? new RealContextCapturer(),
     submitter,
+    // U13: out-of-band screenshot upload (embedded activation wires the real one).
+    uploader: overrides.uploader,
     doc: overrides.doc,
     storage: overrides.storage,
   };
@@ -225,6 +228,18 @@ async function activateSession(
     getAccessToken,
   });
 
+  // U13/U7: the modified-state raster is uploaded out-of-band to the private
+  // `captures` bucket via the SAME session creds (RLS authorizes via the
+  // review_sessions row); the comment stores only the returned ref. The real
+  // DOM→image serializer is still real-env — until it is wired, screenshots are
+  // the element-subtree DOM snapshot (not an image), which this skips uploading.
+  const uploader = new CaptureUploader({
+    supabaseUrl,
+    supabaseAnonKey,
+    previewId: session.previewId,
+    getAccessToken,
+  });
+
   // U12 (read-on-activate): start loading the preview's existing comments NOW,
   // concurrently with DOM-ready, so the network round-trip overlaps document
   // parsing instead of waiting until after mount. Fail-closed: a read failure
@@ -245,6 +260,7 @@ async function activateSession(
     // by host like the tunnel path does.
     previewKey: typeof location !== "undefined" ? location.host : "preview",
     submitter,
+    uploader,
     storage: prefilledNameStorage(session.displayName),
   });
 

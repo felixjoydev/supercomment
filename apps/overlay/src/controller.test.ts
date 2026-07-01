@@ -16,6 +16,7 @@ import type {
   CommentSubmitter,
   SubmitResult,
   NameStorage,
+  ScreenshotUploader,
 } from "./core/types.js";
 
 // Edit-mode (U9) integration over the real controller + panel + EditSession.
@@ -40,6 +41,33 @@ class StubSubmitter implements CommentSubmitter {
   }
 }
 
+/** A submitter that always rejects with a given (RPC-style) message. */
+class FailingSubmitter implements CommentSubmitter {
+  attempts = 0;
+  constructor(private readonly message: string) {}
+  submit(): SubmitResult {
+    this.attempts++;
+    return { ok: false, number: 0, message: this.message };
+  }
+}
+
+/** A capturer that returns a context carrying a real image data URL screenshot. */
+class ImageCapturer implements ContextCapturer {
+  capture(): CapturedContext {
+    return {
+      selector: "stub",
+      anchors: [{ type: "dom-path", value: "stub" }],
+      url: "https://example.test/",
+      consoleErrors: [],
+      screenshot: "data:image/png;base64,AAAA",
+    };
+  }
+}
+
+/** Drain the async submit chain (capture → upload → submit). */
+const flush = (): Promise<void> =>
+  new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 function memoryStorage(seed?: Record<string, string>): NameStorage {
   const map = new Map<string, string>(Object.entries(seed ?? {}));
   return {
@@ -50,20 +78,40 @@ function memoryStorage(seed?: Record<string, string>): NameStorage {
   };
 }
 
-function makeController() {
+function makeController(opts?: {
+  capturer?: ContextCapturer;
+  submitter?: CommentSubmitter;
+  uploader?: ScreenshotUploader;
+}) {
   const { doc, win } = makeFakeDom();
-  const submitter = new StubSubmitter();
+  const submitter = opts?.submitter ?? new StubSubmitter();
   const controller = new OverlayController({
     previewId: "11111111-1111-4111-8111-111111111111",
     previewKey: "preview-a",
-    capturer: new StubCapturer(),
+    capturer: opts?.capturer ?? new StubCapturer(),
     submitter,
+    ...(opts?.uploader ? { uploader: opts.uploader } : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
   const shadow = () => doc.getElementById(HOST_ELEMENT_ID)!.shadowRoot!;
   const q = (sel: string): FakeElement | null => shadow().querySelector(sel);
   return { controller, doc, win, submitter, shadow, q };
+}
+
+/** Drive an element through: edit mode → record a font-size edit → Save as comment. */
+function editAndOpenTemplateForm(
+  controller: OverlayController,
+  el: FakeElement,
+  q: (sel: string) => FakeElement | null,
+  value = "64",
+): void {
+  controller.changeMode("edit");
+  controller.handleEditClick(el as unknown as Element);
+  const fontSize = q(".sc-ep-ctl-font-size")!;
+  fontSize.value = value;
+  fontSize.dispatch("input", {});
+  q(".sc-ep-save")!.dispatch("click", {});
 }
 
 /** A host element with a rect, appended to the page body. */
@@ -162,7 +210,8 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
   });
 
   it("keeps edits private — nothing is submitted while editing (R7)", () => {
-    const { controller, doc, q, submitter } = makeController();
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({ submitter });
     const el = hostEl(doc, "h1", "Hero");
     controller.changeMode("edit");
     controller.handleEditClick(el as unknown as Element);
@@ -173,6 +222,120 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
 
     expect(controller.editSession.size).toBe(2);
     expect(submitter.payloads.length).toBe(0); // nothing left the browser
+  });
+});
+
+describe("OverlayController — template submit (U13)", () => {
+  it("folds the change-set + kind='template' at submit and clears the buffer", async () => {
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({ submitter });
+    const el = hostEl(doc, "h1", "Hero");
+
+    editAndOpenTemplateForm(controller, el, q);
+    // The panel is dismissed; the comment form is open for the note.
+    expect(q(".sc-edit-panel")).toBeNull();
+    const textarea = q("textarea")!;
+    textarea.value = "Make the hero heading bigger";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    expect(submitter.payloads.length).toBe(1);
+    const payload = submitter.payloads[0]!;
+    expect(payload.kind).toBe("template");
+    expect(payload.context.changeSet?.ops.length).toBeGreaterThanOrEqual(1);
+    // The saved edits are cleared so they don't ride a later comment (R7).
+    expect(controller.editSession.isEmpty()).toBe(true);
+  });
+
+  it("does NOT absorb the buffer into an ordinary comment made mid-edit", async () => {
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({ submitter });
+    const el = hostEl(doc, "h1", "Hero");
+    // Buffer an edit, but comment via the ordinary element flow (not "Save").
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+
+    controller.changeMode("element");
+    const other = hostEl(doc, "p", "Body copy");
+    controller.handleElementClick(other as unknown as Element);
+    q("textarea")!.value = "Unrelated note";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    const payload = submitter.payloads[0]!;
+    expect(payload.kind).toBeUndefined(); // ordinary comment
+    expect(payload.context.changeSet).toBeUndefined();
+    expect(controller.editSession.size).toBe(1); // buffer untouched
+  });
+
+  it("surfaces a rate-limit rejection and preserves the form + buffer (G5)", async () => {
+    const submitter = new FailingSubmitter(
+      "create_review_comment failed (429): rate_limited",
+    );
+    const { controller, doc, q, shadow } = makeController({ submitter });
+    const el = hostEl(doc, "h1", "Hero");
+
+    editAndOpenTemplateForm(controller, el, q);
+    q("textarea")!.value = "Bigger hero";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // The error is shown, not swallowed.
+    const notice = shadow().querySelector(".sc-device-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent.toLowerCase()).toContain("quickly");
+    // The form stays open and the buffer survives for a retry.
+    expect(q(".sc-form")).not.toBeNull();
+    expect(controller.editSession.size).toBe(1);
+  });
+
+  it("uploads a real image screenshot out-of-band and stores the ref (U13/U7)", async () => {
+    const uploaded: string[] = [];
+    const uploader: ScreenshotUploader = {
+      uploadDataUrl: async (dataUrl) => {
+        uploaded.push(dataUrl);
+        return "11111111-1111-4111-8111-111111111111/cap-1.png";
+      },
+    };
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      capturer: new ImageCapturer(),
+      uploader,
+    });
+    const el = hostEl(doc, "h1", "Hero");
+
+    editAndOpenTemplateForm(controller, el, q);
+    q("textarea")!.value = "Bigger hero";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    expect(uploaded.length).toBe(1);
+    expect(uploaded[0]).toContain("data:image/png");
+    // The heavy inline data URL is replaced by the lightweight Storage ref.
+    expect(submitter.payloads[0]!.context.screenshot).toBe(
+      "11111111-1111-4111-8111-111111111111/cap-1.png",
+    );
+  });
+
+  it("drops the inline raster when the upload fails (never ships it over the cap)", async () => {
+    const uploader: ScreenshotUploader = { uploadDataUrl: async () => null };
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      capturer: new ImageCapturer(),
+      uploader,
+    });
+    const el = hostEl(doc, "h1", "Hero");
+
+    editAndOpenTemplateForm(controller, el, q);
+    q("textarea")!.value = "Bigger hero";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    expect(submitter.payloads[0]!.context.screenshot).toBeUndefined();
   });
 });
 

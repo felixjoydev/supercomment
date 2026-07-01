@@ -33,6 +33,12 @@ export interface CreateReviewCommentArgs {
   p_note: string;
   p_context: unknown;
   p_fidelity: string;
+  /**
+   * Comment kind — `template` for a visual-edit comment (U13), `comment`
+   * otherwise. The deployed 7-arg RPC (0026) defaults it to `comment`, and
+   * PostgREST uses NAMED args, so this is a purely additive field.
+   */
+  p_kind: string;
 }
 
 /**
@@ -106,7 +112,7 @@ export class SessionCommentSubmitter implements CommentSubmitter {
     }
   }
 
-  /** Map a `NewCommentInput` to `create_review_comment`'s positional arguments. */
+  /** Map a `NewCommentInput` to `create_review_comment`'s named arguments. */
   buildArgs(payload: NewCommentInput): CreateReviewCommentArgs {
     return {
       // The session is scoped to one preview server-side; trust that, not the
@@ -117,6 +123,8 @@ export class SessionCommentSubmitter implements CommentSubmitter {
       p_note: payload.note,
       p_context: payload.context,
       p_fidelity: payload.fidelity ?? "live",
+      // Visual-edit comments carry `template`; ordinary ones default to `comment`.
+      p_kind: payload.kind ?? "comment",
     };
   }
 }
