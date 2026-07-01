@@ -160,6 +160,12 @@ export interface ScreenshotUploader {
   uploadDataUrl(dataUrl: string): Promise<string | null>;
 }
 
+/**
+ * Read a selected reference-image file to a data URL (U17). Injectable so the
+ * composer + submit path are testable without a browser `FileReader`.
+ */
+export type FileReaderFn = (file: Blob) => Promise<string | null>;
+
 /** Everything the overlay needs to be constructed against. */
 export interface OverlayConfig {
   /** The preview this overlay is annotating (R13 numbering scope). */
@@ -177,6 +183,8 @@ export interface OverlayConfig {
    * when absent the screenshot stays inline (tunnel / stub / tests).
    */
   uploader?: ScreenshotUploader;
+  /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
+  readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */
   doc?: Document;
   /** Storage for the guest name; defaults to `localStorage` in browsers. */

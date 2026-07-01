@@ -420,11 +420,17 @@ export class OverlayController {
     // still nameless — but if there is no name at all we prompt up-front so the
     // reviewer isn't surprised.
     this.dismissForm();
-    this.form = new CommentForm(this.doc, this.shell.layer, target.rect, {
-      onSubmit: (draft) =>
-        this.handleSubmit(target, draft, opts.asTemplate ?? false),
-      onCancel: () => this.cancelSelection(),
-    });
+    this.form = new CommentForm(
+      this.doc,
+      this.shell.layer,
+      target.rect,
+      {
+        onSubmit: (draft) =>
+          this.handleSubmit(target, draft, opts.asTemplate ?? false),
+        onCancel: () => this.cancelSelection(),
+      },
+      { readFile: this.config.readFile },
+    );
     if (opts.seedNote) this.form.setNote(opts.seedNote);
   }
 
@@ -475,6 +481,9 @@ export class OverlayController {
     // U13/U7: push a real raster out-of-band to Storage and keep only the ref, so
     // a large PNG never inflates `context` (3 MiB cap) or every read.
     await this.uploadScreenshotRef(context);
+
+    // U17/R19: upload the composer's reference images out-of-band too.
+    await this.uploadReferenceImages(context);
 
     const payload: NewCommentInput = newCommentInputSchema.parse({
       previewId: this.config.previewId,
@@ -542,6 +551,28 @@ export class OverlayController {
     } catch {
       delete context.screenshot;
     }
+  }
+
+  /**
+   * Upload the composer's reference images out-of-band (U17/R19) and store their
+   * Storage refs in `context.referenceImages`. Non-blocking + per-file: a failed
+   * upload is skipped and submission proceeds. Without an uploader (tunnel/stub)
+   * the images are dropped rather than inlined (they would bust the context cap).
+   */
+  private async uploadReferenceImages(context: CapturedContext): Promise<void> {
+    const uploader = this.config.uploader;
+    const dataUrls = this.form?.getReferenceImages() ?? [];
+    if (!uploader || dataUrls.length === 0) return;
+    const refs: string[] = [];
+    for (const dataUrl of dataUrls) {
+      try {
+        const ref = await uploader.uploadDataUrl(dataUrl);
+        if (ref) refs.push(ref);
+      } catch {
+        /* per-file, non-blocking: skip this image */
+      }
+    }
+    if (refs.length > 0) context.referenceImages = refs;
   }
 
   /** Map a raw RPC rejection to a clear, actionable reviewer message (U13/G5/G21). */

@@ -17,6 +17,7 @@ import type {
   SubmitResult,
   NameStorage,
   ScreenshotUploader,
+  FileReaderFn,
 } from "./core/types.js";
 
 // Edit-mode (U9) integration over the real controller + panel + EditSession.
@@ -82,6 +83,7 @@ function makeController(opts?: {
   capturer?: ContextCapturer;
   submitter?: CommentSubmitter;
   uploader?: ScreenshotUploader;
+  readFile?: FileReaderFn;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -91,6 +93,7 @@ function makeController(opts?: {
     capturer: opts?.capturer ?? new StubCapturer(),
     submitter,
     ...(opts?.uploader ? { uploader: opts.uploader } : {}),
+    ...(opts?.readFile ? { readFile: opts.readFile } : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
@@ -355,5 +358,63 @@ describe("OverlayController — teardown (plans/008)", () => {
     controller.destroy();
     expect(clicks()).toBe(0);
     expect(doc.getElementById(HOST_ELEMENT_ID)).toBeNull();
+  });
+});
+
+describe("OverlayController — composer reference images (U17/R19)", () => {
+  function attachReference(q: (sel: string) => FakeElement | null): void {
+    const input = q(".sc-ref-input")!;
+    (input as unknown as { files: unknown }).files = [
+      { name: "ref.png", size: 1000, type: "image/png" },
+    ];
+    input.dispatch("change", {});
+  }
+
+  it("uploads a reference image out-of-band and stores its ref in context.referenceImages", async () => {
+    const submitter = new StubSubmitter();
+    const uploaded: string[] = [];
+    const uploader: ScreenshotUploader = {
+      uploadDataUrl: async (dataUrl) => {
+        uploaded.push(dataUrl);
+        return `preview/ref-${uploaded.length}.png`;
+      },
+    };
+    const readFile: FileReaderFn = async () => "data:image/png;base64,AAAA";
+    const { controller, doc, q } = makeController({ submitter, uploader, readFile });
+    const el = hostEl(doc, "button", "Buy");
+
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    attachReference(q);
+    await flush();
+
+    q("textarea")!.value = "See the attached mock";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    expect(submitter.payloads.length).toBe(1);
+    expect(submitter.payloads[0]!.context.referenceImages).toEqual([
+      "preview/ref-1.png",
+    ]);
+  });
+
+  it("is non-blocking: a failed upload leaves referenceImages unset and the comment still posts", async () => {
+    const submitter = new StubSubmitter();
+    const uploader: ScreenshotUploader = { uploadDataUrl: async () => null };
+    const readFile: FileReaderFn = async () => "data:image/png;base64,AAAA";
+    const { controller, doc, q } = makeController({ submitter, uploader, readFile });
+    const el = hostEl(doc, "button", "Buy");
+
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    attachReference(q);
+    await flush();
+
+    q("textarea")!.value = "Comment posts even if the upload failed";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    expect(submitter.payloads.length).toBe(1);
+    expect(submitter.payloads[0]!.context.referenceImages).toBeUndefined();
   });
 });

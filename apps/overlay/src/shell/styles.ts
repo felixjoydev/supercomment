@@ -364,6 +364,74 @@ textarea:focus-visible {
   cursor: not-allowed;
 }
 
+/* Reference images (U17) ---------------------------------------------- */
+.sc-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sc-ref-add {
+  appearance: none;
+  border: 0;
+  align-self: flex-start;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--surface);
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ref-add:hover { background: rgba(35, 31, 24, 0.04); color: var(--ink); }
+}
+.sc-ref-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-ref-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+}
+.sc-ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sc-ref-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(35, 31, 24, 0.7);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sc-ref-error {
+  font-size: 11.5px;
+  color: var(--accent-deep);
+}
+.sc-ref-error:empty {
+  display: none;
+}
+
 /* Guest modal --------------------------------------------------------- */
 .sc-modal-backdrop {
   position: fixed;

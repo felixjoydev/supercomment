@@ -6,13 +6,30 @@
  */
 import type { Intent, Severity } from "@supercomment/shared";
 import { intentSchema, severitySchema } from "@supercomment/shared";
-import type { CommentDraft, Rect } from "../core/types.js";
+import type { CommentDraft, FileReaderFn, Rect } from "../core/types.js";
 import { enterCard, exitCard } from "../shell/motion.js";
 
 const FORM_WIDTH = 320;
 const FORM_MARGIN = 12;
 /** Rough height used for edge-aware vertical placement before measuring. */
 const FORM_EST_HEIGHT = 260;
+
+/** Max reference-image size — mirrors the 0027 `captures` bucket cap (also server-enforced). */
+const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
+/** Reference-image MIME types the bucket accepts. */
+const REFERENCE_MIME = /^image\/(png|jpe?g|webp)$/i;
+
+/** The minimal file shape the composer reads (a real `File` satisfies it). */
+export interface ReferenceFile {
+  name: string;
+  size: number;
+  type: string;
+}
+
+export interface CommentFormOptions {
+  /** Read a selected file to a data URL; defaults to a FileReader implementation. */
+  readFile?: FileReaderFn;
+}
 
 export interface CommentFormCallbacks {
   onSubmit(draft: CommentDraft): void;
@@ -28,12 +45,20 @@ export class CommentForm {
   private flippedAbove = false;
   private destroyed = false;
 
+  /** Reference-image data URLs the reviewer attached (uploaded out-of-band at submit, U17). */
+  private readonly referenceDataUrls: string[] = [];
+  private readonly readFile: FileReaderFn;
+  private refThumbs: HTMLElement | null = null;
+  private refError: HTMLElement | null = null;
+
   constructor(
     private readonly doc: Document,
     parent: HTMLElement,
     anchor: Rect,
     private readonly callbacks: CommentFormCallbacks,
+    options: CommentFormOptions = {},
   ) {
+    this.readFile = options.readFile ?? defaultReadFile;
     this.el = doc.createElement("div");
     this.el.className = "sc-form";
     this.el.setAttribute("role", "dialog");
@@ -80,7 +105,13 @@ export class CommentForm {
 
     this.textarea.addEventListener("input", () => this.syncSubmitState());
 
-    this.el.append(this.textarea, intentRow, severityRow, actions);
+    this.el.append(
+      this.textarea,
+      intentRow,
+      severityRow,
+      this.buildReferenceSection(),
+      actions,
+    );
     parent.appendChild(this.el);
 
     this.place(anchor);
@@ -103,6 +134,97 @@ export class CommentForm {
   setNote(note: string): void {
     this.textarea.value = note;
     this.syncSubmitState();
+  }
+
+  /**
+   * The reference-image data URLs the reviewer attached (U17, R19). The
+   * controller uploads these out-of-band at submit and stores the returned
+   * Storage refs in `context.referenceImages` — bytes never inflate the comment.
+   */
+  getReferenceImages(): string[] {
+    return [...this.referenceDataUrls];
+  }
+
+  /** Build the "add reference image" composer control (U17, R19). */
+  private buildReferenceSection(): HTMLElement {
+    const wrap = this.doc.createElement("div");
+    wrap.className = "sc-ref";
+
+    const input = this.doc.createElement("input") as HTMLInputElement;
+    input.type = "file";
+    input.className = "sc-ref-input";
+    input.setAttribute("accept", "image/png,image/jpeg,image/webp");
+    input.setAttribute("multiple", "true");
+    input.style.display = "none";
+    input.addEventListener("change", () => {
+      const list = (input as unknown as { files?: ArrayLike<ReferenceFile> | null })
+        .files;
+      const files = list ? Array.from(list) : [];
+      void this.handleFiles(files);
+      // Allow re-selecting the same file after a removal.
+      try {
+        input.value = "";
+      } catch {
+        /* some engines forbid clearing a file input's value */
+      }
+    });
+
+    const add = this.doc.createElement("button");
+    add.type = "button";
+    add.className = "sc-ref-add";
+    add.textContent = "Add reference image";
+    add.addEventListener("click", () => input.click?.());
+
+    this.refThumbs = this.doc.createElement("div");
+    this.refThumbs.className = "sc-ref-thumbs";
+    this.refError = this.doc.createElement("div");
+    this.refError.className = "sc-ref-error";
+
+    wrap.append(add, input, this.refThumbs, this.refError);
+    return wrap;
+  }
+
+  /** Validate + read each selected file to a data URL. Best-effort, per-file. */
+  private async handleFiles(files: ReferenceFile[]): Promise<void> {
+    for (const file of files) {
+      const label = file.name || "image";
+      if (!isValidReferenceImage(file)) {
+        this.showRefError(`"${label}" skipped — PNG/JPEG/WebP up to 10 MB only.`);
+        continue;
+      }
+      const dataUrl = await this.readFile(file as unknown as Blob);
+      if (!dataUrl) {
+        this.showRefError(`"${label}" couldn't be read.`);
+        continue;
+      }
+      this.referenceDataUrls.push(dataUrl);
+      this.addThumb(label, dataUrl);
+    }
+  }
+
+  private addThumb(name: string, dataUrl: string): void {
+    if (!this.refThumbs) return;
+    const chip = this.doc.createElement("div");
+    chip.className = "sc-ref-thumb";
+    const img = this.doc.createElement("img") as HTMLImageElement;
+    img.src = dataUrl;
+    img.alt = name;
+    const remove = this.doc.createElement("button");
+    remove.type = "button";
+    remove.className = "sc-ref-remove";
+    remove.setAttribute("aria-label", `Remove ${name}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      const idx = this.referenceDataUrls.indexOf(dataUrl);
+      if (idx >= 0) this.referenceDataUrls.splice(idx, 1);
+      chip.remove();
+    });
+    chip.append(img, remove);
+    this.refThumbs.appendChild(chip);
+  }
+
+  private showRefError(message: string): void {
+    if (this.refError) this.refError.textContent = message;
   }
 
   destroy(): void {
@@ -185,4 +307,27 @@ export class CommentForm {
     this.el.style.left = `${left}px`;
     this.el.style.top = `${top}px`;
   }
+}
+
+/** True when a file is an accepted reference image within the size cap (client-side UX). */
+function isValidReferenceImage(file: ReferenceFile): boolean {
+  const type = (file.type ?? "").toLowerCase();
+  if (!REFERENCE_MIME.test(type)) return false;
+  if (typeof file.size === "number" && file.size > MAX_REFERENCE_BYTES) return false;
+  return true;
+}
+
+/** Default file→data-URL reader (browser FileReader); resolves null on failure. */
+function defaultReadFile(file: Blob): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () =>
+        resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    } catch {
+      resolve(null);
+    }
+  });
 }
