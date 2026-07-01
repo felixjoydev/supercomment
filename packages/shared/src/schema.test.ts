@@ -5,6 +5,8 @@ import {
   newCommentInputSchema,
   listOpenCommentsOutputSchema,
   resolveCommentInputSchema,
+  visualChangeSetSchema,
+  changeOpSchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,144 @@ describe("MCP tool I/O schemas", () => {
 
   it("rejects a resolveCommentInput with a non-positive number", () => {
     const result = resolveCommentInputSchema.safeParse({ number: 0 });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Visual change-set + comment kind (U1: R11–R14)
+// ---------------------------------------------------------------------------
+
+const styleChangeSet = {
+  authoredCommit: "abc1234",
+  ops: [
+    {
+      opId: "op-1",
+      type: "setStyle",
+      target: {
+        selector: "h1.hero",
+        anchors: [{ type: "data-testid", value: "hero-heading" }],
+        source: { file: "src/components/Hero.tsx", line: 12, column: 6 },
+      },
+      property: "font-size",
+      before: "32px",
+      after: "48px",
+      valueToken: "text-5xl",
+      responsive: "mobile",
+    },
+    {
+      opId: "op-2",
+      type: "insertNode",
+      target: {
+        selector: "section.hero",
+        anchors: [{ type: "dom-path", value: "body>main>section:nth-child(1)" }],
+        sourceUnknown: true,
+      },
+      insertion: {
+        parent: {
+          selector: "section.hero",
+          anchors: [{ type: "data-testid", value: "hero" }],
+          source: { file: "src/components/Hero.tsx", line: 10, column: 4 },
+        },
+        position: "append",
+      },
+      node: { tag: "button", text: "Buy now", attrs: { class: "cta" } },
+    },
+  ],
+};
+
+const templateComment = {
+  ...baseComment,
+  kind: "template",
+  context: {
+    ...genericContext,
+    changeSet: styleChangeSet,
+    referenceImages: ["proj-1/preview-1/ref-1.png"],
+  },
+};
+
+describe("visual change-set + comment kind", () => {
+  it("parses a template comment carrying a multi-op change-set", () => {
+    const result = commentSchema.safeParse(templateComment);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.kind).toBe("template");
+      expect(result.data.context.changeSet?.ops).toHaveLength(2);
+      expect(result.data.context.referenceImages).toEqual([
+        "proj-1/preview-1/ref-1.png",
+      ]);
+    }
+  });
+
+  it("defaults kind to 'comment' when omitted (existing comments unaffected)", () => {
+    const result = commentSchema.safeParse(baseComment);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.kind).toBe("comment");
+    }
+  });
+
+  it("leaves an ordinary context without a change-set", () => {
+    const result = capturedContextSchema.safeParse(genericContext);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.changeSet).toBeUndefined();
+    }
+  });
+
+  it("accepts an op with sourceUnknown and no source location", () => {
+    const result = changeOpSchema.safeParse({
+      opId: "op-x",
+      type: "setText",
+      target: {
+        selector: "p.lead",
+        anchors: [{ type: "text", value: "Hi" }],
+        sourceUnknown: true,
+      },
+      before: "Hi",
+      after: "Hello there",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts responsive + pseudo-state qualifiers", () => {
+    const result = changeOpSchema.safeParse({
+      opId: "op-y",
+      type: "setStyle",
+      target: { selector: "a.link", anchors: [{ type: "id", value: "link" }] },
+      property: "color",
+      before: "rgb(0, 0, 0)",
+      after: "rgb(10, 132, 255)",
+      responsive: "tablet",
+      state: "hover",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("carries a concrete insertion point + node for insertNode", () => {
+    // Covers AE5: an add-element edit hands the agent a concrete insertion point.
+    const result = changeOpSchema.safeParse(styleChangeSet.ops[1]);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.insertion?.position).toBe("append");
+      expect(result.data.insertion?.parent?.source?.file).toBe(
+        "src/components/Hero.tsx",
+      );
+      expect(result.data.node?.tag).toBe("button");
+    }
+  });
+
+  it("rejects an unknown op type", () => {
+    const result = changeOpSchema.safeParse({
+      opId: "op-z",
+      type: "recolorEverything",
+      target: { selector: "x", anchors: [] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a change-set with no ops", () => {
+    const result = visualChangeSetSchema.safeParse({ ops: [] });
     expect(result.success).toBe(false);
   });
 });
