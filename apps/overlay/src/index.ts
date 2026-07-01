@@ -30,6 +30,8 @@
 import { OverlayController } from "./controller.js";
 import { StubCommentSubmitter } from "./core/stubs.js";
 import { RealContextCapturer } from "./capture/index.js";
+import { domToPng } from "modern-screenshot";
+import { createLiveRasterizer, type DomToPng } from "./capture/rasterize-live.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { CaptureUploader } from "./submit/upload.js";
@@ -103,7 +105,15 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
   const config: OverlayConfig = {
     previewId,
     previewKey,
-    capturer: overrides.capturer ?? new RealContextCapturer(),
+    // U6 real-env wiring: capture a real PNG of the (modified) element via
+    // modern-screenshot; on any failure it falls back to the DOM snapshot.
+    capturer:
+      overrides.capturer ??
+      new RealContextCapturer({
+        screenshot: {
+          rasterize: createLiveRasterizer(domToPng as unknown as DomToPng),
+        },
+      }),
     submitter,
     // U13: out-of-band screenshot upload (embedded activation wires the real one).
     uploader: overrides.uploader,
