@@ -298,6 +298,28 @@ function prefilledNameStorage(displayName: string): NameStorage {
   };
 }
 
+/** How the overlay may activate on this page load (R18/R21). */
+export type BootMode = "tunnel" | "embedded" | "dormant";
+
+/**
+ * The activation GATE (R18/R21, G23): given the page's boot config, the review
+ * token in the URL, and any persisted session, decide whether — and how — the
+ * overlay activates. Every editor / upload / capture listener mounts ONLY for a
+ * non-`dormant` result, so a bare production page (no link secret, no token, no
+ * live session) stays completely inert. Pure + exported so the gate is locked by
+ * a test — a regression that activated the editor on a production page would
+ * flip this to `embedded`.
+ */
+export function evaluateBoot(input: {
+  linkSecret?: string | null;
+  token: string | null;
+  hasLiveSession: boolean;
+}): BootMode {
+  if (input.linkSecret) return "tunnel";
+  if (input.token || input.hasLiveSession) return "embedded";
+  return "dormant";
+}
+
 /**
  * The dormant-by-default entry. Tunnel mode (link secret present) keeps the old
  * unconditional auto-mount. Embedded mode reads + strips the token synchronously
@@ -313,28 +335,33 @@ function bootstrap(): void {
 
   const boot = window.__SUPERCOMMENT__ || {};
 
-  // TUNNEL MODE: a link secret means the dev is proxying their own app.
-  if (boot.linkSecret) {
-    autoMountTunnel();
-    return;
-  }
-
-  // EMBEDDED MODE.
-  // 1) SYNCHRONOUS token read + strip — BEFORE any async/await below.
+  // SYNCHRONOUS token read + strip — BEFORE any async/await below (embedded
+  // mode). A tunnel / production page carries no `#sc_token`, so this is a no-op
+  // there; reading it up-front lets the single gate below decide the mode.
   const token = readTokenFromHash(location);
   if (token) {
     stripTokenFromHash({ location, history });
   }
 
-  // 2) Dormant unless there is a token or an unexpired persisted session.
   const persisted = restoreSession();
   const haveLiveSession = !!persisted && !isExpired(persisted.expiresAt);
-  if (!token && !haveLiveSession) {
+
+  // THE GATE. Editor / upload / capture listeners mount ONLY past this point.
+  const mode = evaluateBoot({
+    linkSecret: boot.linkSecret,
+    token,
+    hasLiveSession: haveLiveSession,
+  });
+  if (mode === "tunnel") {
+    autoMountTunnel();
+    return;
+  }
+  if (mode === "dormant") {
     if (persisted) clearSession(); // tidy an expired session
     return; // DORMANT: mount nothing, bind nothing.
   }
 
-  // 3) Activate asynchronously (token already stripped synchronously above).
+  // EMBEDDED: activate asynchronously (token already stripped synchronously).
   void activateSession(boot, token, persisted);
 }
 

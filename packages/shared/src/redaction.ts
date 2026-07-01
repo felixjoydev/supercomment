@@ -22,6 +22,8 @@
  *     substring, so re-running over already-redacted text is a no-op.
  */
 
+import type { CapturedContext, ChangeOp, VisualChangeSet } from "./schema.js";
+
 /** What we substitute in place of a detected secret/PII run. */
 export const REDACTION_PLACEHOLDER = "[redacted]";
 
@@ -131,6 +133,56 @@ export function redactSecrets(text: string): string {
     }
   }
   return out;
+}
+
+/**
+ * Redact secret/PII-shaped runs from a single visual change-set op's FREE-TEXT
+ * (U8): the before/after values, the nearest design token, and any inserted-node
+ * text or attribute values. Structure — op type, target selector/anchors/source,
+ * property name, breakpoint/state — is untouched (it carries no free text).
+ * Returns a NEW op; pure + idempotent.
+ */
+function redactOp(op: ChangeOp): ChangeOp {
+  const next: ChangeOp = { ...op };
+  if (typeof next.before === "string") next.before = redactSecrets(next.before);
+  if (typeof next.after === "string") next.after = redactSecrets(next.after);
+  if (next.valueToken) next.valueToken = redactSecrets(next.valueToken);
+  if (next.node) {
+    const node = { ...next.node };
+    if (typeof node.text === "string") node.text = redactSecrets(node.text);
+    if (node.attrs) {
+      const attrs: Record<string, string> = {};
+      for (const [k, v] of Object.entries(node.attrs)) {
+        attrs[k] = redactSecrets(v);
+      }
+      node.attrs = attrs;
+    }
+    next.node = node;
+  }
+  return next;
+}
+
+/**
+ * Redact a whole visual change-set's free-text (U8). Returns a NEW change-set
+ * with every op's values scrubbed; anchors + structure preserved. Pure.
+ */
+export function redactChangeSet(changeSet: VisualChangeSet): VisualChangeSet {
+  return { ...changeSet, ops: changeSet.ops.map(redactOp) };
+}
+
+/**
+ * Redact the reviewer-authored change-set free-text a comment carries (U8),
+ * returning a NEW context. This is the server/trusted-side pass the redaction
+ * docstring assumes exists: applied at the MCP delivery boundary (the untrusted
+ * -input sink), it scrubs a token typed into an edit before it can reach the
+ * agent even if a malicious client skipped the client-side redaction. Other
+ * context free-text (surrounding HTML, console) is already redacted at capture.
+ */
+export function redactContextChangeSet(
+  context: CapturedContext,
+): CapturedContext {
+  if (!context.changeSet) return context;
+  return { ...context, changeSet: redactChangeSet(context.changeSet) };
 }
 
 /** True when a string contains at least one secret-/PII-shaped substring. */

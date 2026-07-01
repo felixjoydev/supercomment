@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import type { CapturedContext, VisualChangeSet } from "./schema.js";
 import {
   redactSecrets,
+  redactChangeSet,
+  redactContextChangeSet,
   containsSecret,
   shannonEntropy,
   SECRET_PATTERNS,
@@ -122,5 +125,82 @@ describe("SECRET_PATTERNS", () => {
       expect(typeof p.name).toBe("string");
       expect(p.regex).toBeInstanceOf(RegExp);
     }
+  });
+});
+
+const SECRET = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+describe("redactChangeSet (U8)", () => {
+  it("scrubs secret-shaped free-text in op values, node text + attrs; keeps structure", () => {
+    const cs: VisualChangeSet = {
+      authoredCommit: "deadbeef",
+      ops: [
+        {
+          opId: "o1",
+          type: "setText",
+          target: { selector: "h1", anchors: [{ type: "id", value: "hero" }] },
+          before: "Welcome",
+          after: `Contact ${SECRET}`,
+        },
+        {
+          opId: "o2",
+          type: "insertNode",
+          target: { selector: "section", anchors: [] },
+          insertion: { position: "append" },
+          node: {
+            tag: "a",
+            text: `key ${SECRET}`,
+            attrs: { href: `https://x?token=${SECRET}`, title: "Ok" },
+          },
+        },
+      ],
+    };
+
+    const out = redactChangeSet(cs);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    // Non-secret free-text and all structure are preserved.
+    expect(out.ops[0]!.before).toBe("Welcome");
+    expect(out.ops[0]!.after).toContain("[redacted]");
+    expect(out.ops[0]!.target.selector).toBe("h1");
+    expect(out.ops[1]!.node!.attrs!.title).toBe("Ok");
+    expect(out.authoredCommit).toBe("deadbeef");
+    // Pure: the input is not mutated.
+    expect(cs.ops[0]!.after).toBe(`Contact ${SECRET}`);
+  });
+});
+
+describe("redactContextChangeSet (U8)", () => {
+  it("redacts the change-set inside a context", () => {
+    const ctx = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1", anchors: [] },
+            property: "content",
+            before: null,
+            after: SECRET,
+          },
+        ],
+      },
+    } as unknown as CapturedContext;
+
+    const out = redactContextChangeSet(ctx);
+    expect(JSON.stringify(out.changeSet)).not.toContain(SECRET);
+  });
+
+  it("returns the context unchanged (same reference) when there is no change-set", () => {
+    const plain = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+    } as unknown as CapturedContext;
+    expect(redactContextChangeSet(plain)).toBe(plain);
   });
 });

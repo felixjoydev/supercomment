@@ -125,6 +125,43 @@ describe("SupabaseCommentStore", () => {
     expect(first.previewId).toBe(PREVIEW_ID);
   });
 
+  it("redacts reviewer-authored free-text (note + change-set) at the agent boundary (U8)", async () => {
+    const secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 7,
+          note: `please rotate ${secret}`,
+          context: {
+            selector: "h1",
+            anchors: [],
+            url: "https://x",
+            consoleErrors: [],
+            changeSet: {
+              ops: [
+                {
+                  opId: "o1",
+                  type: "setText",
+                  target: { selector: "h1", anchors: [] },
+                  before: "Welcome",
+                  after: `Contact ${secret}`,
+                },
+              ],
+            },
+          },
+        }),
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c] = await store.listOpenComments({ includeGuests: true });
+    expect(c!.note).not.toContain(secret);
+    expect(c!.note).toContain("[redacted]");
+    const op = c!.context?.changeSet?.ops[0];
+    expect(op?.before).toBe("Welcome"); // non-secret free-text preserved
+    expect(op?.after).not.toContain(secret);
+    expect(op?.after).toContain("[redacted]");
+  });
+
   it("getComment returns null for a missing number", async () => {
     const client = fakeClient({ rows: [row({ number: 1 })] });
     const store = new SupabaseCommentStore(client, PREVIEW_ID);

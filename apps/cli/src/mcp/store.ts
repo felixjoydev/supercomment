@@ -14,6 +14,7 @@
  * the tool ask for the unfiltered set when the developer explicitly opts in.
  */
 import type { McpComment, TrustLevel } from "@supercomment/shared";
+import { redactContextChangeSet, redactSecrets } from "@supercomment/shared";
 
 /** A project the developer can read, with its default review link + open count. */
 export interface ProjectSummary {
@@ -212,7 +213,14 @@ interface CommentRow {
 
 /** Map a DB row to the MCP comment shape. Display name falls back gracefully. */
 function rowToMcpComment(row: CommentRow): McpComment {
-  const context = (row.context ?? {}) as McpComment["context"];
+  // U8: this is the agent-facing (untrusted-input) delivery boundary. Redact
+  // reviewer-authored free-text — the visual change-set values AND the note —
+  // through the canonical redactor so a token typed into an edit or note can't
+  // reach the coding agent even if a malicious client skipped its own pass. The
+  // rest of `context` (surrounding HTML, console) is already redacted at capture.
+  const context = redactContextChangeSet(
+    (row.context ?? {}) as McpComment["context"],
+  );
   return {
     id: row.id,
     previewId: row.preview_id,
@@ -223,7 +231,7 @@ function rowToMcpComment(row: CommentRow): McpComment {
     },
     intent: row.intent,
     severity: row.severity,
-    note: row.note,
+    note: redactSecrets(row.note),
     context,
     status: row.status,
     fidelity: row.fidelity,
