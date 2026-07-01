@@ -133,7 +133,15 @@ export class SupabaseCommentSubmitter implements CommentSubmitter {
     }
   }
 
-  /** Map a `NewCommentInput` to the RPC's positional arguments. */
+  /**
+   * Map a `NewCommentInput` to the RPC's positional arguments.
+   *
+   * NOTE: the legacy tunnel RPC `create_guest_comment` has no `p_kind` (0026 only
+   * added it to the embedded `create_review_comment`), so a `template` saved on
+   * the tunnel path is persisted as `comment` — its change-set still rides
+   * `context` and reaches the agent, but it won't get the dashboard/marker
+   * Template treatment. Embedded review mode (the primary path) labels it.
+   */
   buildArgs(payload: NewCommentInput): CreateGuestCommentArgs {
     return {
       p_link_secret: this.linkSecret,

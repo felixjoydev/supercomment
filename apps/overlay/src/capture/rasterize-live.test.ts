@@ -26,17 +26,39 @@ describe("createLiveRasterizer", () => {
     expect(await rasterize(el("div"))).toBeNull();
   });
 
-  it("drops password inputs but keeps other nodes (G1 filter)", async () => {
-    let filter: ((n: Node) => boolean) | undefined;
+  it("blanks sensitive field values on each cloned node (G1)", async () => {
+    let hook: ((node: Node) => void) | undefined;
     const serialize: DomToPng = async (_node, opts) => {
-      filter = opts?.filter;
+      hook = opts?.onCloneEachNode;
       return "data:image/png;base64,AAAA";
     };
     await createLiveRasterizer(serialize)(el("section"));
+    expect(hook).toBeDefined();
 
-    expect(filter).toBeDefined();
-    expect(filter!(el("input", { type: "password" }) as unknown as Node)).toBe(false);
-    expect(filter!(el("input", { type: "text" }) as unknown as Node)).toBe(true);
-    expect(filter!(el("div") as unknown as Node)).toBe(true);
+    const field = (tag: string, type?: string) =>
+      ({
+        tagName: tag.toUpperCase(),
+        value: "typed-secret",
+        textContent: "typed-secret",
+        getAttribute: (n: string) => (n === "type" ? (type ?? null) : null),
+        removeAttribute: () => {},
+      }) as unknown as Node & { value: string; textContent: string };
+
+    const text = field("input", "text");
+    hook!(text);
+    expect(text.value).toBe(""); // typed text/email/etc. blanked, not just passwords
+
+    const pwd = field("input", "password");
+    hook!(pwd);
+    expect(pwd.value).toBe("");
+
+    const area = field("textarea");
+    hook!(area);
+    expect(area.textContent).toBe("");
+
+    // A non-field node is left untouched and never throws.
+    const div = field("div");
+    expect(() => hook!(div)).not.toThrow();
+    expect(div.value).toBe("typed-secret");
   });
 });

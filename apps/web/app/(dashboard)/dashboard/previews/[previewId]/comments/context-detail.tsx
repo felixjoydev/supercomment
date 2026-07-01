@@ -100,7 +100,19 @@ function BeforeArtifact({ src, number }: { src: string; number: number }) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (kind !== 'image-ref') return;
+    // Re-sync whenever the src/kind changes on a reused instance (the useState
+    // initializer only runs once). Inline/URL images resolve to src directly;
+    // a private-bucket ref is signed; anything else has no image.
+    setFailed(false);
+    if (kind === 'image-url') {
+      setResolved(src);
+      return;
+    }
+    if (kind !== 'image-ref') {
+      setResolved(null);
+      return;
+    }
+    setResolved(null);
     let active = true;
     const signer: CaptureSigner = async (bucket, path) => {
       // VERIFY IN REAL ENV: the signed-URL round-trip (0027 RLS SELECT via the

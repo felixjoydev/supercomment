@@ -466,6 +466,7 @@ function templateComment(number: number, trustLevel: TrustLevel): McpComment {
     context: {
       ...ctx(),
       screenshot: "3fb218bf-0000-4000-8000-000000000000/cap-1.png",
+      referenceImages: ["3fb218bf-0000-4000-8000-000000000000/ref-1.png"],
       changeSet: {
         ops: [
           {
@@ -489,10 +490,13 @@ describe("MCP template delivery (U16, R14)", () => {
     expect(out.comment?.kind).toBe("template");
     expect(out.comment?.changeSetSummary).toContain("font-size 32px→48px");
     expect(out.comment?.context?.changeSet?.ops).toHaveLength(1); // structured too
-    // Member content is trusted — the raster passes through.
+    // Member content is trusted — both rasters pass through.
     expect(out.comment?.context?.screenshot).toBe(
       "3fb218bf-0000-4000-8000-000000000000/cap-1.png",
     );
+    expect(out.comment?.context?.referenceImages).toEqual([
+      "3fb218bf-0000-4000-8000-000000000000/ref-1.png",
+    ]);
     // Signals note both the change-set and the screenshot.
     expect(out.comment?.contextSignals).toContain("change-set");
     expect(out.comment?.contextSignals).toContain("screenshot");
@@ -504,8 +508,9 @@ describe("MCP template delivery (U16, R14)", () => {
     // The change-set (structured + prose) flows, labeled untrusted.
     expect(out.comment?.changeSetSummary).toContain("font-size");
     expect(out.comment?.context?.changeSet?.ops).toHaveLength(1);
-    // The raster is a sensitive channel — withheld for an untrusted author.
+    // Both raster channels are withheld for an untrusted author (G1).
     expect(out.comment?.context?.screenshot).toBeUndefined();
+    expect(out.comment?.context?.referenceImages).toBeUndefined();
     // Its existence is still visible so a member can surface it deliberately.
     expect(out.comment?.contextSignals).toContain("screenshot");
   });

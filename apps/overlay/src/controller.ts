@@ -465,7 +465,8 @@ export class OverlayController {
     // element-subtree DOM snapshot); this backstop covers a capturer that didn't,
     // using the snapshot fallback. It is fully best-effort and NEVER throws, so a
     // raster/snapshot failure can never block submission.
-    await attachBeforeArtifact(context, primaryElementOfTarget(target));
+    const element = primaryElementOfTarget(target);
+    await attachBeforeArtifact(context, element);
 
     // U13: fold the visual change-set into a `template` comment. ONLY a submit
     // that came from the editor's "Save as comment" carries the buffer — an
@@ -478,12 +479,13 @@ export class OverlayController {
       context.changeSet = changeSet;
     }
 
-    // U13/U7: push a real raster out-of-band to Storage and keep only the ref, so
-    // a large PNG never inflates `context` (3 MiB cap) or every read.
-    await this.uploadScreenshotRef(context);
-
-    // U17/R19: upload the composer's reference images out-of-band too.
-    await this.uploadReferenceImages(context);
+    // U13/U7 + U17/R19: push the real raster + any reference images out-of-band
+    // to Storage in PARALLEL (independent I/O) and keep only their refs, so a
+    // large PNG never inflates `context` (3 MiB cap) or every read.
+    await Promise.all([
+      this.uploadScreenshotRef(context, element),
+      this.uploadReferenceImages(context),
+    ]);
 
     const payload: NewCommentInput = newCommentInputSchema.parse({
       previewId: this.config.previewId,
@@ -537,20 +539,28 @@ export class OverlayController {
    * shipped (it would risk the 3 MiB `context` cap); submission proceeds either
    * way. Never throws.
    */
-  private async uploadScreenshotRef(context: CapturedContext): Promise<void> {
+  private async uploadScreenshotRef(
+    context: CapturedContext,
+    element: Element | null,
+  ): Promise<void> {
     const uploader = this.config.uploader;
     const shot = context.screenshot;
     if (!uploader || !shot || !shot.startsWith("data:image/")) return;
+    let ref: string | null = null;
     try {
-      const ref = await uploader.uploadDataUrl(shot);
-      if (ref) {
-        context.screenshot = ref;
-      } else {
-        delete context.screenshot;
-      }
+      ref = await uploader.uploadDataUrl(shot);
     } catch {
-      delete context.screenshot;
+      ref = null;
     }
+    if (ref) {
+      context.screenshot = ref;
+      return;
+    }
+    // Upload failed: don't ship a heavy inline PNG (3 MiB cap), but don't lose the
+    // before/modified artifact either — fall back to the small, capped DOM
+    // snapshot so every comment still carries an artifact (R15).
+    delete context.screenshot;
+    await attachBeforeArtifact(context, element);
   }
 
   /**
@@ -563,15 +573,16 @@ export class OverlayController {
     const uploader = this.config.uploader;
     const dataUrls = this.form?.getReferenceImages() ?? [];
     if (!uploader || dataUrls.length === 0) return;
-    const refs: string[] = [];
-    for (const dataUrl of dataUrls) {
-      try {
-        const ref = await uploader.uploadDataUrl(dataUrl);
-        if (ref) refs.push(ref);
-      } catch {
-        /* per-file, non-blocking: skip this image */
-      }
-    }
+    const results = await Promise.all(
+      dataUrls.map(async (dataUrl) => {
+        try {
+          return await uploader.uploadDataUrl(dataUrl);
+        } catch {
+          return null; // per-file, non-blocking: skip this image
+        }
+      }),
+    );
+    const refs = results.filter((r): r is string => !!r);
     if (refs.length > 0) context.referenceImages = refs;
   }
 

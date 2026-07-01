@@ -255,6 +255,21 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     expect(tag!.textContent).toContain("Template");
   });
 
+  it("keeps the template treatment on a stale template pin (composed classes)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(doc as unknown as Document, parent as unknown as HTMLElement);
+    layer.add({
+      number: 3,
+      rect: makeRect(100, 100, 0, 0),
+      isStale: true,
+      content: { note: "edit", authorDisplayName: "A", kind: "template" },
+    });
+    const pin = parent.querySelector(".sc-marker.sc-template");
+    expect(pin).not.toBeNull(); // template treatment not lost to stale
+    expect(pin!.className).toContain("sc-stale"); // still marked stale too
+  });
+
   it("keeps an ordinary comment pin plain (no template class/tag)", () => {
     const { doc } = makeFakeDom();
     const parent = doc.createElement("div");

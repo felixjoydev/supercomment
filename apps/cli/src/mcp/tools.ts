@@ -70,10 +70,10 @@ function curateForTriage(comment: McpComment): McpComment {
  * Prepare a comment for AGENT delivery (U16, R14):
  *  - attach the deterministic change-set PROSE alongside the structured
  *    `context.changeSet`, so the agent reads a `template`'s intent both ways;
- *  - GATE the RASTER: a guest's screenshot is a sensitive, un-redactable channel
- *    (G1), so it is stripped from an untrusted author's agent payload (its
- *    existence still shows in contextSignals; a member surfaces it deliberately).
- * Member rasters pass through. Pure — the input is not mutated.
+ *  - GATE THE RASTERS: a guest's screenshot AND reference images are sensitive,
+ *    un-redactable channels (G1), so BOTH are stripped from an untrusted author's
+ *    agent payload (their existence still shows in contextSignals; a member
+ *    surfaces them deliberately). Member rasters pass through. Pure — not mutated.
  */
 function forAgent(comment: McpComment): McpComment {
   let next = comment;
@@ -81,8 +81,16 @@ function forAgent(comment: McpComment): McpComment {
   if (summary) {
     next = { ...next, changeSetSummary: summary };
   }
-  if (next.trustLevel === "guest" && next.context?.screenshot) {
-    const { screenshot: _withheld, ...rest } = next.context;
+  if (
+    next.trustLevel === "guest" &&
+    next.context &&
+    (next.context.screenshot || next.context.referenceImages)
+  ) {
+    const {
+      screenshot: _screenshot,
+      referenceImages: _referenceImages,
+      ...rest
+    } = next.context;
     next = { ...next, context: rest as McpComment["context"] };
   }
   return next;

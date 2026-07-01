@@ -325,7 +325,7 @@ describe("OverlayController — template submit (U13)", () => {
     );
   });
 
-  it("drops the inline raster when the upload fails (never ships it over the cap)", async () => {
+  it("falls back to a DOM snapshot when the raster upload fails (never ships the inline PNG, never loses the artifact)", async () => {
     const uploader: ScreenshotUploader = { uploadDataUrl: async () => null };
     const submitter = new StubSubmitter();
     const { controller, doc, q } = makeController({
@@ -340,7 +340,11 @@ describe("OverlayController — template submit (U13)", () => {
     q(".sc-btn-primary")!.dispatch("click", {});
     await flush();
 
-    expect(submitter.payloads[0]!.context.screenshot).toBeUndefined();
+    const shot = submitter.payloads[0]!.context.screenshot;
+    // The heavy inline PNG is NOT shipped (would risk the 3 MiB cap)...
+    expect(shot).not.toBe("data:image/png;base64,AAAA");
+    // ...but the before-artifact is NOT lost — it falls back to the DOM snapshot.
+    expect(shot?.startsWith("data:application/json")).toBe(true);
   });
 });
 

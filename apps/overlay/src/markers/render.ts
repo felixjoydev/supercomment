@@ -127,12 +127,15 @@ export class MarkerLayer {
       const el = this.doc.createElement("div");
       if (cluster.isCluster) {
         el.className = "sc-marker sc-cluster";
-      } else if (staleNumbers.has(cluster.numbers[0]!)) {
-        el.className = "sc-marker sc-stale";
-      } else if (templateNumbers.has(cluster.numbers[0]!)) {
-        el.className = "sc-marker sc-template";
       } else {
-        el.className = "sc-marker";
+        // A single pin can be BOTH a template and stale — compose the classes so
+        // a stale visual-edit template keeps its distinct treatment (R11) rather
+        // than collapsing to the plain stale pin.
+        const n = cluster.numbers[0]!;
+        let cls = "sc-marker";
+        if (templateNumbers.has(n)) cls += " sc-template";
+        if (staleNumbers.has(n)) cls += " sc-stale";
+        el.className = cls;
       }
       el.style.left = `${cluster.point.x}px`;
       el.style.top = `${cluster.point.y}px`;
