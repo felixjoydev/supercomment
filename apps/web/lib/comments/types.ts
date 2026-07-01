@@ -14,6 +14,7 @@ import type {
   CommentStatus,
   CaptureFidelity,
   CapturedContext,
+  CommentKind,
 } from "@supercomment/shared";
 
 /** Latest "Send to Claude" queue state for a comment (null = never sent). */
@@ -30,6 +31,8 @@ export interface CommentView {
   note: string;
   status: CommentStatus;
   fidelity: CaptureFidelity;
+  /** `comment` (ordinary) or `template` (carries a visual change-set), R11. */
+  kind: CommentKind;
   /** True when re-anchoring could not resolve the element on the live deploy (R13). */
   isStale: boolean;
   context: CapturedContext | null;
@@ -61,6 +64,8 @@ export interface CommentRow {
   note: string;
   status: CommentStatus;
   fidelity?: CaptureFidelity | null;
+  /** Present once migration 0026 adds the column (U3); defaults to `comment`. */
+  kind?: CommentKind | null;
   is_stale?: boolean | null;
   context?: unknown;
   path?: string | null;

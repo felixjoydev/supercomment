@@ -454,3 +454,70 @@ describe("list_projects / use_project", () => {
     expect(out.message).toContain("no review link");
   });
 });
+
+// ---------------------------------------------------------------------------
+// U16 — template change-set delivery + raster gating
+// ---------------------------------------------------------------------------
+
+function templateComment(number: number, trustLevel: TrustLevel): McpComment {
+  return {
+    ...makeComment({ number, trustLevel }),
+    kind: "template",
+    context: {
+      ...ctx(),
+      screenshot: "3fb218bf-0000-4000-8000-000000000000/cap-1.png",
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1.hero", anchors: [] },
+            property: "font-size",
+            before: "32px",
+            after: "48px",
+          },
+        ],
+      },
+    },
+  };
+}
+
+describe("MCP template delivery (U16, R14)", () => {
+  it("delivers a member template's change-set prose alongside the structured form, keeping the raster", async () => {
+    const store = new InMemoryCommentStore([templateComment(1, "member")]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.kind).toBe("template");
+    expect(out.comment?.changeSetSummary).toContain("font-size 32px→48px");
+    expect(out.comment?.context?.changeSet?.ops).toHaveLength(1); // structured too
+    // Member content is trusted — the raster passes through.
+    expect(out.comment?.context?.screenshot).toBe(
+      "3fb218bf-0000-4000-8000-000000000000/cap-1.png",
+    );
+    // Signals note both the change-set and the screenshot.
+    expect(out.comment?.contextSignals).toContain("change-set");
+    expect(out.comment?.contextSignals).toContain("screenshot");
+  });
+
+  it("withholds a GUEST template's raster from the agent but still delivers the labeled change-set (G1)", async () => {
+    const store = new InMemoryCommentStore([templateComment(1, "guest")]);
+    const out = await handleGetComment(store, { number: 1 });
+    // The change-set (structured + prose) flows, labeled untrusted.
+    expect(out.comment?.changeSetSummary).toContain("font-size");
+    expect(out.comment?.context?.changeSet?.ops).toHaveLength(1);
+    // The raster is a sensitive channel — withheld for an untrusted author.
+    expect(out.comment?.context?.screenshot).toBeUndefined();
+    // Its existence is still visible so a member can surface it deliberately.
+    expect(out.comment?.contextSignals).toContain("screenshot");
+  });
+
+  it("surfaces the change-set prose through the triage list too", async () => {
+    const store = new InMemoryCommentStore([templateComment(1, "member")]);
+    const out = await handleListOpenComments(store, { includeGuests: true });
+    expect(out.comments[0]?.changeSetSummary).toContain("font-size");
+  });
+
+  it("extends the untrusted-input notice to cover change-sets", () => {
+    expect(UNTRUSTED_INPUT_NOTICE).toMatch(/change_set/i);
+    expect(UNTRUSTED_INPUT_NOTICE.toLowerCase()).toContain("proposed");
+  });
+});

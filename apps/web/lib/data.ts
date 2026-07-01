@@ -144,7 +144,7 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   const { data, error } = await supabase
     .from('comments')
     .select(
-      'id, preview_id, number, author_participant, trust_level, intent, severity, note, status, fidelity, is_stale, context, path, resolved_summary, created_at, participants:author_participant(display_name)',
+      'id, preview_id, number, author_participant, trust_level, intent, severity, note, status, fidelity, kind, is_stale, context, path, resolved_summary, created_at, participants:author_participant(display_name)',
     )
     .eq('preview_id', previewId)
     .order('created_at', { ascending: false });

@@ -455,6 +455,13 @@ export const mcpCommentSchema = commentSchema.extend({
    * `get_comment`.
    */
   contextSignals: z.string().optional(),
+  /**
+   * Deterministic plain-language rendering of a `template` comment's visual
+   * change-set (U16), delivered ALONGSIDE the structured `context.changeSet` so
+   * the agent reads the intent both ways. Proposed intent — requiring source /
+   * human verification — never an instruction to apply verbatim.
+   */
+  changeSetSummary: z.string().optional(),
 });
 export type McpComment = z.infer<typeof mcpCommentSchema>;
 

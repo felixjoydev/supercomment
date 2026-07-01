@@ -37,6 +37,7 @@ export function toCommentView(
     note: row.note,
     status: row.status,
     fidelity: (row.fidelity ?? "live") as CommentView["fidelity"],
+    kind: row.kind ?? "comment",
     isStale: row.is_stale ?? false,
     context: coerceContext(row.context),
     path: row.path ?? null,

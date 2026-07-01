@@ -114,6 +114,13 @@ export class MarkerLayer {
     const staleNumbers = new Set<number>(
       this.markers.filter((m) => m.isStale).map((m) => m.number),
     );
+    // U16 (R11): numbers whose comment is a visual-edit `template` — a distinct
+    // marker treatment so templates read differently from ordinary comments.
+    const templateNumbers = new Set<number>(
+      this.markers
+        .filter((m) => m.content?.kind === "template")
+        .map((m) => m.number),
+    );
 
     const clusters = clusterMarkers(visible, this.thresholdPx);
     for (const cluster of clusters) {
@@ -122,6 +129,8 @@ export class MarkerLayer {
         el.className = "sc-marker sc-cluster";
       } else if (staleNumbers.has(cluster.numbers[0]!)) {
         el.className = "sc-marker sc-stale";
+      } else if (templateNumbers.has(cluster.numbers[0]!)) {
+        el.className = "sc-marker sc-template";
       } else {
         el.className = "sc-marker";
       }
@@ -271,6 +280,14 @@ export class MarkerLayer {
       meta.className = "sc-comment-meta";
       meta.textContent = metaParts.join(" · "); // ·
       entry.appendChild(meta);
+    }
+
+    // U16 (R11): mark a visual-edit template distinctly in the popover.
+    if (m.content?.kind === "template") {
+      const tag = this.doc.createElement("div");
+      tag.className = "sc-comment-tag";
+      tag.textContent = "Template · visual edit";
+      entry.appendChild(tag);
     }
 
     const noteText = m.content?.note ?? "";

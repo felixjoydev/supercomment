@@ -4,6 +4,7 @@ import type { CapturedContext } from "./schema.js";
 import {
   detectConcerns,
   curateContextForAgent,
+  summarizeChangeSet,
   summarizeContextSignals,
 } from "./relevance.js";
 
@@ -133,5 +134,74 @@ describe("summarizeContextSignals", () => {
         consoleErrors: [],
       }),
     ).toBe("none");
+  });
+
+  it("notes a change-set's edit count in the signals inventory", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          { opId: "o1", type: "setStyle", target: { selector: "h1", anchors: [] }, property: "color", before: "black", after: "red" },
+          { opId: "o2", type: "setText", target: { selector: "h1", anchors: [] }, before: "A", after: "B" },
+        ],
+      },
+    };
+    expect(summarizeContextSignals(context)).toContain("change-set: 2 edit(s)");
+  });
+});
+
+describe("summarizeChangeSet (U16, R14)", () => {
+  it("renders style + insert ops as deterministic prose", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: {
+              selector: "h1.hero",
+              anchors: [],
+              source: { file: "src/Hero.tsx", line: 12, column: 4 },
+            },
+            property: "font-size",
+            before: "32px",
+            after: "48px",
+          },
+          {
+            opId: "o2",
+            type: "insertNode",
+            target: { selector: "section#hero", anchors: [] },
+            insertion: {
+              position: "after",
+              reference: { selector: "h1.hero", anchors: [] },
+            },
+            node: { tag: "button", text: "Buy" },
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context);
+    expect(prose).toContain("font-size 32px→48px on src/Hero.tsx:12");
+    expect(prose).toContain('insert <button> "Buy" after h1.hero');
+    expect(prose).toContain("; "); // ops joined
+  });
+
+  it("returns null when there is no change-set", () => {
+    expect(
+      summarizeChangeSet({
+        selector: "x",
+        anchors: [],
+        url: "https://x",
+        consoleErrors: [],
+      }),
+    ).toBeNull();
+    expect(summarizeChangeSet(null)).toBeNull();
   });
 });

@@ -506,6 +506,8 @@ export class OverlayController {
         severity: draft.severity,
         status: "new",
         createdAt: new Date().toISOString(),
+        // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly.
+        ...(changeSet ? { kind: "template" as const } : {}),
       },
     });
     // Keep the toggle counts live: update this controller's own toolbar (if

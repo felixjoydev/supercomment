@@ -54,6 +54,12 @@ export function CommentCard({
             <span className={comment.trustLevel === 'guest' ? 'badge is-guest' : 'badge is-member'}>
               {trustLabel(comment.trustLevel)}
             </span>
+            {comment.kind === 'template' && (
+              <span className="badge is-template" title="A visual edit — carries a change-set">
+                <TemplateGlyph />
+                Template
+              </span>
+            )}
             {comment.fidelity === 'snapshot' && <span className="badge is-snapshot">Snapshot</span>}
             {muted && <span className="badge">{statusLabel(comment.status)}</span>}
           </div>
@@ -117,6 +123,27 @@ export function CommentCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function TemplateGlyph() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+      style={{ marginRight: 3, verticalAlign: '-1px' }}
+    >
+      <path
+        d="M9.4 2.3l2.3 2.3M8.2 3.5 2.6 9.1l-.6 2.9 2.9-.6 5.6-5.6-2.3-2.3z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

@@ -1201,6 +1201,14 @@ a.tile:active {
   color: #6b4fa1;
 }
 
+/* A visual-edit "template" comment (R11) — carries a change-set. */
+.badge.is-template {
+  display: inline-flex;
+  align-items: center;
+  background: var(--accent);
+  color: #fff;
+}
+
 /* ════════ Context detail ════════ */
 
 .context-panel {

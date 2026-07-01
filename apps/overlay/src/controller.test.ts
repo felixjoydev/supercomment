@@ -245,6 +245,8 @@ describe("OverlayController — template submit (U13)", () => {
     expect(payload.context.changeSet?.ops.length).toBeGreaterThanOrEqual(1);
     // The saved edits are cleared so they don't ride a later comment (R7).
     expect(controller.editSession.isEmpty()).toBe(true);
+    // R11: the placed pin is the distinct template treatment.
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
   });
 
   it("does NOT absorb the buffer into an ordinary comment made mid-edit", async () => {

@@ -234,3 +234,39 @@ describe("MarkerLayer comment popover (U12)", () => {
     expect(pop.textContent).not.toContain("First note");
   });
 });
+
+describe("MarkerLayer — template treatment (U16/R11)", () => {
+  it("renders a distinct template pin and tags its popover", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(doc as unknown as Document, parent as unknown as HTMLElement);
+    const content: MarkerComment = {
+      note: "Make the hero bigger",
+      authorDisplayName: "Alex",
+      kind: "template",
+    };
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content });
+
+    expect(parent.querySelector(".sc-marker.sc-template")).not.toBeNull();
+
+    layer.showPopover([1], { x: 100, y: 100 });
+    const tag = parent.querySelector(".sc-comment-tag");
+    expect(tag).not.toBeNull();
+    expect(tag!.textContent).toContain("Template");
+  });
+
+  it("keeps an ordinary comment pin plain (no template class/tag)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(doc as unknown as Document, parent as unknown as HTMLElement);
+    layer.add({
+      number: 2,
+      rect: makeRect(100, 100, 0, 0),
+      content: { note: "Ordinary", authorDisplayName: "Sam" },
+    });
+    expect(parent.querySelector(".sc-marker.sc-template")).toBeNull();
+    expect(parent.querySelector(".sc-marker")).not.toBeNull();
+    layer.showPopover([2], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-comment-tag")).toBeNull();
+  });
+});

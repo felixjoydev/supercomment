@@ -452,6 +452,13 @@ textarea:focus-visible {
   box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(138, 133, 120, 0.5);
   opacity: 0.9;
 }
+/* U16 (R11): a visual-edit template pin — a rounded-square ink pin with an
+   accent ring, distinct from the round persimmon comment pin. */
+.sc-marker.sc-template {
+  background: var(--ink);
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--accent-ring), 0 4px 14px rgba(35, 31, 24, 0.4);
+}
 .sc-edge.sc-stale {
   background: var(--muted, #8a8578);
 }
@@ -545,6 +552,16 @@ textarea:focus-visible {
   letter-spacing: 0.02em;
   text-transform: capitalize;
   color: var(--accent-deep);
+}
+.sc-comment-tag {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 .sc-comment-note {
   color: var(--ink);

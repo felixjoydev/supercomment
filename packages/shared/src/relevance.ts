@@ -1,4 +1,9 @@
-import type { CapturedContext } from "./schema.js";
+import type {
+  CapturedContext,
+  ChangeOp,
+  EditTarget,
+  InsertionPoint,
+} from "./schema.js";
 
 /**
  * Relevance curation for the agent-facing comment payload.
@@ -147,10 +152,96 @@ export function summarizeContextSignals(
   if (context.screenshot) {
     parts.push("screenshot");
   }
+  const editCount = context.changeSet?.ops.length ?? 0;
+  if (editCount > 0) {
+    parts.push(`change-set: ${editCount} edit(s)`);
+  }
   if (context.environment?.userAgent) {
     parts.push("environment");
   }
   return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+// ---------------------------------------------------------------------------
+// Visual change-set → prose (U16, R14)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a `template` comment's structured change-set as deterministic plain
+ * language, e.g. "font-size 32px→48px on src/Hero.tsx:12; insert <button>
+ * \"Buy\" after section#hero". Delivered ALONGSIDE the structured change-set so
+ * the agent reads the intent both ways — but it is PROPOSED intent (verify
+ * against source), never an instruction to apply verbatim. Returns `null` when
+ * there is no change-set. Pure + dependency-free.
+ */
+export function summarizeChangeSet(
+  context: CapturedContext | null | undefined,
+): string | null {
+  const ops = context?.changeSet?.ops;
+  if (!ops || ops.length === 0) {
+    return null;
+  }
+  return ops.map(describeOp).join("; ");
+}
+
+function describeOp(op: ChangeOp): string {
+  const where = targetLabel(op.target);
+  switch (op.type) {
+    case "setStyle":
+      return `${op.property ?? "style"} ${valuePair(op.before, op.after)} on ${where}`;
+    case "setAttr":
+      return `${op.property ?? "attribute"} ${valuePair(op.before, op.after)} on ${where}`;
+    case "setText":
+      return `text ${quotedPair(op.before, op.after)} on ${where}`;
+    case "setVisibility":
+      return `${op.after === "hidden" ? "hide" : "show"} ${where}`;
+    case "removeNode":
+      return `remove ${where}`;
+    case "moveNode":
+      return `reorder ${where}${
+        op.order ? ` (position ${op.order.from}→${op.order.to})` : ""
+      }`;
+    case "insertNode": {
+      const node = op.node
+        ? `<${op.node.tag}>${op.node.text ? ` "${truncate(op.node.text)}"` : ""}`
+        : "element";
+      return `insert ${node}${op.insertion ? insertionLabel(op.insertion) : ""}`;
+    }
+    default:
+      return `edit ${where}`;
+  }
+}
+
+/** A short label for a target: exact source location, else selector, else anchor. */
+function targetLabel(target: EditTarget): string {
+  if (target.source) {
+    return `${target.source.file}:${target.source.line}`;
+  }
+  if (target.selector) {
+    return target.selector;
+  }
+  const anchor = target.anchors?.[0];
+  return anchor ? `${anchor.type}=${anchor.value}` : "element";
+}
+
+function insertionLabel(insertion: InsertionPoint): string {
+  const ref = insertion.reference ?? insertion.parent;
+  const where = ref ? ` ${targetLabel(ref)}` : "";
+  return ` ${insertion.position}${where}`;
+}
+
+function valuePair(before?: string | null, after?: string | null): string {
+  return `${before ?? "?"}→${after ?? "?"}`;
+}
+
+function quotedPair(before?: string | null, after?: string | null): string {
+  return `"${truncate(before ?? "")}"→"${truncate(after ?? "")}"`;
+}
+
+/** Cap a free-text fragment so one prose line can't blow up the payload. */
+function truncate(text: string, max = 40): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length <= max ? t : `${t.slice(0, max)}…`;
 }
 
 /**

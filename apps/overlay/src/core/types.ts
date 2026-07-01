@@ -10,6 +10,7 @@ import type {
   Severity,
   NewCommentInput,
   CapturedContext,
+  CommentKind,
   ElementAnchor,
   DeviceSurface,
 } from "@supercomment/shared";
@@ -38,6 +39,8 @@ export interface MarkerComment {
   severity?: string;
   status?: string;
   createdAt?: string;
+  /** `template` = a visual-edit comment; drives the distinct marker treatment (R11). */
+  kind?: CommentKind;
 }
 
 /**
