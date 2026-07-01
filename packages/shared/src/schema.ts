@@ -193,6 +193,12 @@ export const reactContextSchema = z.object({
   sourceFile: z.string().optional(),
   /** Exact 1-based source line from the build-time `data-sc-source` stamp. */
   sourceLine: z.number().int().positive().optional(),
+  /**
+   * Exact 0-based source column from the build-time `data-sc-source` stamp.
+   * Lets an edit point at the attribute, not just the JSX tag (R13). Only set
+   * when `sourceLine` is present.
+   */
+  sourceColumn: z.number().int().nonnegative().optional(),
 });
 export type ReactContext = z.infer<typeof reactContextSchema>;
 
@@ -423,8 +429,11 @@ export const newCommentInputSchema = z.object({
   note: z.string().min(1),
   context: capturedContextSchema,
   fidelity: captureFidelitySchema.default("live"),
-  /** `comment` (default) or `template` for a visual-edit comment (R11). */
-  kind: commentKindSchema.default("comment"),
+  /**
+   * `template` for a visual-edit comment; omitted for an ordinary comment
+   * (the server defaults the persisted column to `comment`), R11.
+   */
+  kind: commentKindSchema.optional(),
 });
 export type NewCommentInput = z.infer<typeof newCommentInputSchema>;
 

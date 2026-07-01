@@ -92,7 +92,7 @@ describe("captureSourceStamp", () => {
 });
 
 describe("mergeSourceStamp", () => {
-  it("populates sourceFile/sourceLine on a React context", () => {
+  it("populates sourceFile/sourceLine/sourceColumn on a React context", () => {
     const react: ReactContext = { componentPath: ["App", "Card"] };
     const merged = mergeSourceStamp(react, {
       file: "src/Card.tsx",
@@ -103,7 +103,33 @@ describe("mergeSourceStamp", () => {
       componentPath: ["App", "Card"],
       sourceFile: "src/Card.tsx",
       sourceLine: 42,
+      sourceColumn: 6,
     });
+  });
+
+  it("persists column 0 (0-based) alongside the line", () => {
+    const react: ReactContext = { componentPath: ["App"] };
+    const merged = mergeSourceStamp(react, { file: "x.tsx", line: 3, column: 0 });
+    expect(merged?.sourceColumn).toBe(0);
+  });
+
+  it("omits sourceColumn when the stamp has a line but no column", () => {
+    const react: ReactContext = { componentPath: ["App"] };
+    const merged = mergeSourceStamp(react, { file: "x.tsx", line: 9 });
+    expect(merged?.sourceLine).toBe(9);
+    expect(merged?.sourceColumn).toBeUndefined();
+  });
+
+  it("clears a stale sourceColumn when re-merging a file-only stamp", () => {
+    const react: ReactContext = {
+      componentPath: ["App"],
+      sourceFile: "stale.tsx",
+      sourceLine: 5,
+      sourceColumn: 2,
+    };
+    const merged = mergeSourceStamp(react, { file: "fresh.tsx" });
+    expect(merged?.sourceLine).toBeUndefined();
+    expect(merged?.sourceColumn).toBeUndefined();
   });
 
   it("overrides any fiber-derived source (stamp is authoritative)", () => {

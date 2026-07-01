@@ -27,10 +27,7 @@ export interface SourceStamp {
   file: string;
   /** 1-based line number, when present and numeric. */
   line?: number;
-  /**
-   * 0-based column number, when present. Parsed for completeness but NOT
-   * currently persisted (the shared schema carries file + line only).
-   */
+  /** 0-based column number, when present. Persisted into the React context (U2). */
   column?: number;
 }
 
@@ -116,8 +113,16 @@ export function mergeSourceStamp(
   react.sourceFile = stamp.file;
   if (typeof stamp.line === "number" && stamp.line > 0) {
     react.sourceLine = stamp.line;
+    // Column is only meaningful alongside a line; persist it when the stamp
+    // carries one so an edit can point at the attribute, not just the tag (R13).
+    if (typeof stamp.column === "number" && stamp.column >= 0) {
+      react.sourceColumn = stamp.column;
+    } else {
+      delete react.sourceColumn;
+    }
   } else {
     delete react.sourceLine;
+    delete react.sourceColumn;
   }
   return react;
 }

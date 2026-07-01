@@ -202,6 +202,8 @@ interface CommentRow {
   context: unknown;
   status: McpComment["status"];
   fidelity: McpComment["fidelity"];
+  /** Present once migration 0026 adds the column (U3); defaults to "comment". */
+  kind?: McpComment["kind"] | null;
   is_stale: boolean;
   resolved_by: string | null;
   resolved_summary: string | null;
@@ -225,6 +227,7 @@ function rowToMcpComment(row: CommentRow): McpComment {
     context,
     status: row.status,
     fidelity: row.fidelity,
+    kind: row.kind ?? "comment",
     isStale: row.is_stale,
     ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
     ...(row.resolved_summary
