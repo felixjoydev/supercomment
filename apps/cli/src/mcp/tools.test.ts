@@ -7,13 +7,15 @@ import type {
   Severity,
   TrustLevel,
 } from "@supercomment/shared";
-import { InMemoryCommentStore } from "./store.js";
+import { InMemoryCommentStore, type ProjectSummary } from "./store.js";
 import {
   applyTrustGuard,
   handleDismissComment,
   handleGetComment,
   handleListOpenComments,
+  handleListProjects,
   handleResolveComment,
+  handleUseProject,
   registerTools,
   TOOL_NAMES,
   UNTRUSTED_INPUT_NOTICE,
@@ -396,5 +398,58 @@ describe("R23 prompt-injection labeled handoff", () => {
     expect(guest?.note).toBe(INJECTION_NOTE);
     // ...and the untrusted-input label present so the agent never obeys it.
     expect(payload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// list_projects / use_project (runtime project switching)
+// ---------------------------------------------------------------------------
+
+describe("list_projects / use_project", () => {
+  const PROJECTS: ProjectSummary[] = [
+    { projectId: "p-web", projectName: "Personal website", previewId: "pv-web", slug: "web", openComments: 1 },
+    { projectId: "p-hpb", projectName: "handpickedby", previewId: "pv-hpb", slug: "hpb", openComments: 0 },
+    { projectId: "p-none", projectName: "No Link", previewId: null, slug: null, openComments: 0 },
+  ];
+
+  it("list_projects returns the projects and the active preview", async () => {
+    const store = new InMemoryCommentStore([], { projects: PROJECTS, activePreview: "pv-web" });
+    const out = await handleListProjects(store);
+    expect(out.projects.map((p) => p.projectName)).toEqual([
+      "Personal website",
+      "handpickedby",
+      "No Link",
+    ]);
+    expect(out.activePreviewId).toBe("pv-web");
+  });
+
+  it("use_project switches the active preview by name", async () => {
+    const store = new InMemoryCommentStore([], { projects: PROJECTS, activePreview: "pv-web" });
+    const out = await handleUseProject(store, { project: "handpickedby" });
+    expect(out.ok).toBe(true);
+    expect(out.active?.previewId).toBe("pv-hpb");
+    expect(store.getActivePreview()).toBe("pv-hpb");
+  });
+
+  it("use_project matches by id too (case-insensitive)", async () => {
+    const store = new InMemoryCommentStore([], { projects: PROJECTS });
+    const out = await handleUseProject(store, { project: "P-WEB" });
+    expect(out.ok).toBe(true);
+    expect(store.getActivePreview()).toBe("pv-web");
+  });
+
+  it("use_project reports an error for an unknown project and does not switch", async () => {
+    const store = new InMemoryCommentStore([], { projects: PROJECTS, activePreview: "pv-web" });
+    const out = await handleUseProject(store, { project: "nope" });
+    expect(out.ok).toBe(false);
+    expect(out.message).toContain("No project matching");
+    expect(store.getActivePreview()).toBe("pv-web"); // unchanged
+  });
+
+  it("use_project refuses a project that has no review link", async () => {
+    const store = new InMemoryCommentStore([], { projects: PROJECTS });
+    const out = await handleUseProject(store, { project: "No Link" });
+    expect(out.ok).toBe(false);
+    expect(out.message).toContain("no review link");
   });
 });

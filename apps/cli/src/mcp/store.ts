@@ -15,6 +15,16 @@
  */
 import type { McpComment, TrustLevel } from "@supercomment/shared";
 
+/** A project the developer can read, with its default review link + open count. */
+export interface ProjectSummary {
+  projectId: string;
+  projectName: string;
+  /** The project's default review link, or null if it has none yet. */
+  previewId: string | null;
+  slug: string | null;
+  openComments: number;
+}
+
 /** Options for listing open comments. */
 export interface ListOpenOptions {
   /**
@@ -45,6 +55,12 @@ export interface CommentStore {
   resolveComment(number: number, summary?: string): Promise<McpComment | null>;
   /** Mark a comment dismissed. Returns the updated comment, or null if missing. */
   dismissComment(number: number, reason?: string): Promise<McpComment | null>;
+  /** Projects the developer can read, each with its default preview + open count. */
+  listProjects(): Promise<ProjectSummary[]>;
+  /** Re-scope subsequent comment reads to a different preview (runtime switch). */
+  setActivePreview(previewId: string): void;
+  /** The currently active preview id the reads are scoped to. */
+  getActivePreview(): string;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,9 +74,26 @@ export interface CommentStore {
  */
 export class InMemoryCommentStore implements CommentStore {
   private readonly comments: Map<number, McpComment> = new Map();
+  private projects: ProjectSummary[] = [];
+  private activePreview = "";
 
-  constructor(seed: McpComment[] = []) {
+  constructor(
+    seed: McpComment[] = [],
+    opts: { projects?: ProjectSummary[]; activePreview?: string } = {},
+  ) {
     for (const c of seed) this.comments.set(c.number, c);
+    this.projects = opts.projects ?? [];
+    this.activePreview = opts.activePreview ?? "";
+  }
+
+  async listProjects(): Promise<ProjectSummary[]> {
+    return this.projects;
+  }
+  setActivePreview(previewId: string): void {
+    this.activePreview = previewId;
+  }
+  getActivePreview(): string {
+    return this.activePreview;
   }
 
   private all(): McpComment[] {
@@ -142,6 +175,11 @@ export interface SupabaseLike {
           opts: { ascending: boolean },
         ) => Promise<{ data: unknown[] | null; error: unknown }>;
       };
+      // Unfiltered listing (projects / previews): select(...).order(...).
+      order: (
+        column: string,
+        opts: { ascending: boolean },
+      ) => Promise<{ data: unknown[] | null; error: unknown }>;
     };
   };
   rpc(
@@ -208,10 +246,77 @@ const COMMENT_COLUMNS =
  * MCP server never writes the `comments` table directly.
  */
 export class SupabaseCommentStore implements CommentStore {
+  private previewId: string;
+
   constructor(
     private readonly client: SupabaseLike,
-    private readonly previewId: string,
-  ) {}
+    previewId: string,
+  ) {
+    this.previewId = previewId;
+  }
+
+  /** Re-scope subsequent reads to a different preview (runtime project switch). */
+  setActivePreview(previewId: string): void {
+    this.previewId = previewId;
+  }
+  getActivePreview(): string {
+    return this.previewId;
+  }
+
+  /**
+   * List the projects the member can read (RLS scopes to their workspaces),
+   * each paired with its default (earliest) review link and its open-comment
+   * count. Three parallel reads, tallied client-side.
+   */
+  async listProjects(): Promise<ProjectSummary[]> {
+    const [projRes, pvRes, openRes] = await Promise.all([
+      this.client.from("projects").select("id, name").order("name", {
+        ascending: true,
+      }),
+      this.client
+        .from("previews")
+        .select("id, slug, project_id")
+        .order("created_at", { ascending: true }),
+      this.client
+        .from("comments")
+        .select("preview_id")
+        .eq("status", "open")
+        .order("preview_id", { ascending: true }),
+    ]);
+    if (projRes.error) throw asError(projRes.error, "Failed to list projects");
+    if (pvRes.error) throw asError(pvRes.error, "Failed to list review links");
+    if (openRes.error) throw asError(openRes.error, "Failed to count comments");
+
+    const projects = (projRes.data ?? []) as { id: string; name: string }[];
+    const previews = (pvRes.data ?? []) as {
+      id: string;
+      slug: string;
+      project_id: string;
+    }[];
+    const openRows = (openRes.data ?? []) as { preview_id: string }[];
+
+    const firstPreview = new Map<string, { id: string; slug: string }>();
+    for (const pv of previews) {
+      if (!firstPreview.has(pv.project_id)) {
+        firstPreview.set(pv.project_id, { id: pv.id, slug: pv.slug });
+      }
+    }
+    const openByPreview = new Map<string, number>();
+    for (const r of openRows) {
+      openByPreview.set(r.preview_id, (openByPreview.get(r.preview_id) ?? 0) + 1);
+    }
+
+    return projects.map((p) => {
+      const pv = firstPreview.get(p.id);
+      return {
+        projectId: p.id,
+        projectName: p.name,
+        previewId: pv?.id ?? null,
+        slug: pv?.slug ?? null,
+        openComments: pv ? (openByPreview.get(pv.id) ?? 0) : 0,
+      };
+    });
+  }
 
   async listOpenComments(opts?: ListOpenOptions): Promise<McpComment[]> {
     // We always fetch all open rows scoped to the preview and let the tool

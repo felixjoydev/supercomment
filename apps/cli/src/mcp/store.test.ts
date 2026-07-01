@@ -98,6 +98,8 @@ function fakeClient(opts: {
                 order: async () => ({ data: rows, error: null }),
               };
             },
+            // Unfiltered select().order() (projects / previews listing).
+            order: async () => ({ data: rows, error: null }),
           };
         },
       };

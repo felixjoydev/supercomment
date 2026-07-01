@@ -252,7 +252,10 @@ export async function runMcpServer(): Promise<void> {
   });
 
   registerTools(server, store);
-  logStderr("tools registered: list_open_comments, get_all_open, get_comment, resolve_comment, dismiss_comment");
+  logStderr(
+    "tools registered: list_open_comments, get_all_open, get_comment, " +
+      "resolve_comment, dismiss_comment, list_projects, use_project",
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

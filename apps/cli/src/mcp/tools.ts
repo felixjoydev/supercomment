@@ -30,7 +30,7 @@ import {
   type McpComment,
   type MutateCommentOutput,
 } from "@supercomment/shared";
-import type { CommentStore } from "./store.js";
+import type { CommentStore, ProjectSummary } from "./store.js";
 
 /**
  * Relevance layer (agent payload curation).
@@ -189,6 +189,73 @@ export async function handleDismissComment(
     ok: true,
     comment: updated,
     message: `Comment #${args.number} dismissed.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Project switching (agent-native: list + switch projects mid-conversation)
+// ---------------------------------------------------------------------------
+
+export interface ListProjectsOutput {
+  projects: ProjectSummary[];
+  activePreviewId: string;
+}
+
+export interface UseProjectOutput {
+  ok: boolean;
+  message: string;
+  active?: { projectId: string; projectName: string; previewId: string };
+}
+
+/** `list_projects` handler — the developer's projects + open-comment counts. */
+export async function handleListProjects(
+  store: CommentStore,
+): Promise<ListProjectsOutput> {
+  const projects = await store.listProjects();
+  return { projects, activePreviewId: store.getActivePreview() };
+}
+
+/**
+ * `use_project` handler — re-scope the session's comment reads to another
+ * project (by name or id). In-memory for THIS session only; it does not modify
+ * any file. `supercomment link` is the way to persist a repo's project.
+ */
+export async function handleUseProject(
+  store: CommentStore,
+  args: { project: string },
+): Promise<UseProjectOutput> {
+  const needle = (args.project ?? "").trim().toLowerCase();
+  if (!needle) {
+    return { ok: false, message: "Provide a project name or id." };
+  }
+  const projects = await store.listProjects();
+  const match = projects.find(
+    (p) =>
+      p.projectId.toLowerCase() === needle ||
+      p.projectName.toLowerCase() === needle,
+  );
+  if (!match) {
+    const names = projects.map((p) => `"${p.projectName}"`).join(", ");
+    return {
+      ok: false,
+      message: `No project matching "${args.project}". Available: ${names || "(none)"}.`,
+    };
+  }
+  if (!match.previewId) {
+    return {
+      ok: false,
+      message: `Project "${match.projectName}" has no review link yet.`,
+    };
+  }
+  store.setActivePreview(match.previewId);
+  return {
+    ok: true,
+    message: `Now reading comments from "${match.projectName}" (${match.openComments} open).`,
+    active: {
+      projectId: match.projectId,
+      projectName: match.projectName,
+      previewId: match.previewId,
+    },
   };
 }
 
@@ -387,6 +454,51 @@ export function registerTools(server: McpServerLike, store: CommentStore): void 
       }
     },
   );
+
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List your SuperComment projects",
+      description:
+        "List the projects you can read, each with its open-comment count, so " +
+        "you can pick which one to read. Use with use_project to switch. " +
+        "Read-only.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return jsonResult(await handleListProjects(store));
+      } catch (err) {
+        return jsonResult({ error: errorMessage(err) }, true);
+      }
+    },
+  );
+
+  server.registerTool(
+    "use_project",
+    {
+      title: "Switch the active project",
+      description:
+        "Switch which project's comments the comment tools read, by name or id, " +
+        "for THIS session (does not modify any file). After switching, " +
+        "list_open_comments / get_comment target the new project. To make a " +
+        "repo's project persist across restarts, run `supercomment link` instead.",
+      inputSchema: {
+        project: z.string().describe("Project name or id to switch to."),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(
+          await handleUseProject(store, {
+            project: String(args.project ?? ""),
+          }),
+        );
+      } catch (err) {
+        return jsonResult({ error: errorMessage(err) }, true);
+      }
+    },
+  );
 }
 
 // --- tiny zod helpers (kept local so handlers stay zod-free) ---
@@ -413,4 +525,6 @@ export const TOOL_NAMES = [
   "get_comment",
   "resolve_comment",
   "dismiss_comment",
+  "list_projects",
+  "use_project",
 ] as const;
