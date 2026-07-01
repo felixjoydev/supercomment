@@ -34,9 +34,12 @@
 --   Supabase in a rolled-back txn before push):
 --   * bucket creation + file_size_limit / allowed_mime_types enforcement,
 --   * the storage.objects RLS (upload within session; read as member/reviewer),
---   * that `is_preview_team_member` is still granted to `authenticated` and
---     resolves post-0024 (team→workspace rename),
---   * pg_cron availability for the orphan-cleanup schedule.
+--   * the storage.objects RLS (upload within session; read as member/reviewer).
+-- Validated against the live supercomment DB (2026-07-01): create_review_comment
+-- is the 6-arg signature, is_preview_workspace_member(uuid) exists + is granted
+-- to `authenticated`, storage.foldername exists, captures bucket absent. pg_cron
+-- is NOT installed on this project, so the orphan-cleanup is NOT auto-scheduled —
+-- the purge function is provided and can be scheduled once pg_cron is enabled.
 -- =============================================================================
 
 -- 1. Private bucket with server-enforced size + mime caps --------------------
@@ -80,7 +83,7 @@ create policy "captures read within session or as workspace member"
         select 1
         from public.previews p
         where p.id::text = (storage.foldername(name))[1]
-          and public.is_preview_team_member(p.id)
+          and public.is_preview_workspace_member(p.id)
       )
     )
   );
@@ -109,12 +112,8 @@ $$;
 
 revoke all on function public.purge_orphaned_captures() from public;
 
--- Schedule daily; guarded so re-applying the migration does not double-schedule.
-select cron.schedule(
-         'purge-orphaned-captures',
-         '17 4 * * *',
-         $$select public.purge_orphaned_captures();$$
-       )
-where not exists (
-  select 1 from cron.job where jobname = 'purge-orphaned-captures'
-);
+-- Scheduling: pg_cron is NOT installed on this project, so we do not schedule the
+-- purge here (a bare `cron.schedule` would fail). Once pg_cron is enabled, run:
+--   select cron.schedule('purge-orphaned-captures', '17 4 * * *',
+--     $$select public.purge_orphaned_captures();$$);
+-- Until then, purge_orphaned_captures() can be invoked manually / from a job.
