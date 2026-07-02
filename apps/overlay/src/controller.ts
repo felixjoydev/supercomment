@@ -441,7 +441,7 @@ export class OverlayController {
 
   private openFormForTarget(
     target: SelectionTarget,
-    opts: { seedNote?: string; asTemplate?: boolean } = {},
+    opts: { seedNote?: string; asTemplate?: boolean; enqueueToAgent?: boolean } = {},
   ): void {
     // Guest gate: a name is required before submitting (R5/R24). We open the
     // form regardless (browsing/drafting is fine) and only block at submit if
@@ -454,7 +454,12 @@ export class OverlayController {
       target.rect,
       {
         onSubmit: (draft) =>
-          this.handleSubmit(target, draft, opts.asTemplate ?? false),
+          this.handleSubmit(
+            target,
+            draft,
+            opts.asTemplate ?? false,
+            opts.enqueueToAgent ?? false,
+          ),
         onCancel: () => this.cancelSelection(),
       },
       { readFile: this.config.readFile },
@@ -466,21 +471,25 @@ export class OverlayController {
     target: SelectionTarget,
     draft: CommentDraft,
     asTemplate = false,
+    enqueueToAgent = false,
   ): void {
     if (!this.guestStore.has()) {
       // Defer the submission until a name is provided.
       this.deferredTarget = target;
       this.deferredDraft = draft;
-      this.promptForName(() => this.completeSubmit(target, draft, asTemplate));
+      this.promptForName(() =>
+        this.completeSubmit(target, draft, asTemplate, enqueueToAgent),
+      );
       return;
     }
-    void this.completeSubmit(target, draft, asTemplate);
+    void this.completeSubmit(target, draft, asTemplate, enqueueToAgent);
   }
 
   private async completeSubmit(
     target: SelectionTarget,
     draft: CommentDraft,
     asTemplate = false,
+    enqueueToAgent = false,
   ): Promise<void> {
     const name = this.guestStore.get();
     if (!name) return; // still no name -> stay blocked
@@ -556,6 +565,15 @@ export class OverlayController {
     // The edits are now saved as a comment (R7): clear the buffer so they don't
     // ride a subsequent unrelated comment.
     if (changeSet) this.editSession.discard();
+
+    // Phase 2: the editor's "Send to agent" action also enqueues the saved
+    // template. Best-effort — a failed enqueue never breaks the save (the member
+    // can still send it from the dashboard). The enqueue_review_comment RPC
+    // re-verifies the member session + send-to-agent grant server-side.
+    if (enqueueToAgent && changeSet && result.id && this.config.enqueuer) {
+      await this.config.enqueuer.enqueue(result.id);
+    }
+
     this.cancelSelection();
   }
 
@@ -768,6 +786,10 @@ export class OverlayController {
       count: () => this.editSession.size,
       onClose: () => this.closeEditor(),
       onSave: () => this.beginEditComment(el),
+      // Phase 2: a permitted member session also gets "Send to agent" (save +
+      // enqueue). Guests / non-permitted members see only "Save comment".
+      canSendToAgent: this.config.canSendToAgent === true,
+      onSendToAgent: () => this.beginEditComment(el, { enqueue: true }),
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
@@ -840,11 +862,14 @@ export class OverlayController {
    * form anchored to the edited element so the reviewer adds a note; submitting
    * it folds the WHOLE change-set into a `template`. No-op when nothing's edited.
    */
-  private beginEditComment(el: Element): void {
+  private beginEditComment(el: Element, opts: { enqueue?: boolean } = {}): void {
     if (this.editSession.isEmpty()) return;
     const target = this.selection.selectElement(el);
     this.dismissEditPanel();
-    this.openFormForTarget(target, { asTemplate: true });
+    this.openFormForTarget(target, {
+      asTemplate: true,
+      enqueueToAgent: opts.enqueue ?? false,
+    });
   }
 
   /** Close the editor panel UI. The edit buffer is NOT discarded here (G13/R7). */

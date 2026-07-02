@@ -170,6 +170,20 @@ export interface ScreenshotUploader {
 }
 
 /**
+ * Phase 2 SEAM — hand a just-created comment to the coding agent.
+ *
+ * The editor footer's "Send to agent" action (member sessions with the grant)
+ * folds the change-set into a `template` comment AND enqueues it. The enqueue
+ * goes through the `enqueue_review_comment` RPC, which server-side re-verifies
+ * the caller's member review session + send-to-agent grant (the footer button is
+ * UX only). Returns false on any failure (never throws) so a failed enqueue can't
+ * break the save. Absent (guest / tunnel / tests) the action just saves.
+ */
+export interface AgentEnqueuer {
+  enqueue(commentId: string): Promise<boolean>;
+}
+
+/**
  * Read a selected reference-image file to a data URL (U17). Injectable so the
  * composer + submit path are testable without a browser `FileReader`.
  */
@@ -192,6 +206,18 @@ export interface OverlayConfig {
    * when absent the screenshot stays inline (tunnel / stub / tests).
    */
   uploader?: ScreenshotUploader;
+  /**
+   * Phase 2: whether THIS session may send comments to the coding agent. True
+   * only for a member review session whose member holds the grant; guests never.
+   * Drives the editor footer's conditional "Send to agent" button.
+   */
+  canSendToAgent?: boolean;
+  /**
+   * Phase 2: enqueues a saved template to the agent (the "Send to agent" action).
+   * Wired in embedded activation with the reviewer's session creds; absent (guest
+   * / tunnel / tests) the action just saves the comment.
+   */
+  enqueuer?: AgentEnqueuer;
   /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
   readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */

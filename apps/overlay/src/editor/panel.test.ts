@@ -42,12 +42,16 @@ function withSiblings(
   return { el: b, parent };
 }
 
-function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
+function mount(opts?: {
+  el?: FakeElement;
+  doc?: FakeDocument;
+  canSendToAgent?: boolean;
+}) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
   const el = opts?.el ?? makeEl(doc, "button", "Buy");
   const session = new EditSession();
-  const state = { closed: false, saved: false };
+  const state = { closed: false, saved: false, sentToAgent: false };
   const cb: PanelCallbacks = {
     record: (op) => session.record(op),
     removeEdit: (op) => session.remove(op),
@@ -62,6 +66,14 @@ function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
     onSave: () => {
       state.saved = true;
     },
+    ...(opts?.canSendToAgent
+      ? {
+          canSendToAgent: true,
+          onSendToAgent: () => {
+            state.sentToAgent = true;
+          },
+        }
+      : {}),
   };
   const target = buildEditTarget(el as unknown as Element, doc as unknown as Document);
   const panel = new PropertiesPanel(
@@ -351,6 +363,26 @@ describe("PropertiesPanel — footer (N edits · Undo · Save comment)", () => {
     q(".sc-ep-save").dispatch("click", {});
     expect(state.saved).toBe(true);
     expect(session.size).toBe(1);
+  });
+
+  it("shows NO 'Send to agent' button without the grant (guest / non-permitted)", () => {
+    const { doc } = makeFakeDom();
+    const { maybe } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    expect(maybe(".sc-ep-send")).toBeNull();
+    expect(maybe(".sc-ep-save")).not.toBeNull(); // Save is always present
+  });
+
+  it("shows 'Send to agent' ALONGSIDE Save for a permitted member session (Phase 2)", () => {
+    const { doc } = makeFakeDom();
+    const { q, maybe, state } = mount({
+      el: makeEl(doc, "h1", "Hero"),
+      doc,
+      canSendToAgent: true,
+    });
+    expect(maybe(".sc-ep-send")).not.toBeNull();
+    expect(maybe(".sc-ep-save")).not.toBeNull();
+    q(".sc-ep-send").dispatch("click", {});
+    expect(state.sentToAgent).toBe(true);
   });
 });
 

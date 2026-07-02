@@ -315,7 +315,27 @@ describe("network steps (injected fetch seam)", () => {
       previewId: "pid",
       role: "guest",
       displayName: "Guest",
+      canSendToAgent: false, // absent in the response → false (Phase 2)
     });
+  });
+
+  it("exchangeReviewToken parses canSendToAgent for a permitted member (Phase 2)", async () => {
+    const fetchImpl = vi.fn<FetchFn>(async () =>
+      okResponse({
+        previewId: "pid",
+        role: "member",
+        displayName: "Dev",
+        canSendToAgent: true,
+      }),
+    );
+    const result = await exchangeReviewToken({
+      backendOrigin: "https://app.supercomment.dev",
+      accessToken: "a",
+      token: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(result.role).toBe("member");
+    expect(result.canSendToAgent).toBe(true);
   });
 
   it("exchangeReviewToken includes turnstileToken in the body only when provided", async () => {

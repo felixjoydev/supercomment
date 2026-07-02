@@ -18,6 +18,7 @@ import type {
   NameStorage,
   ScreenshotUploader,
   FileReaderFn,
+  AgentEnqueuer,
 } from "./core/types.js";
 
 // Edit-mode (U9) integration over the real controller + panel + EditSession.
@@ -85,6 +86,8 @@ function makeController(opts?: {
   uploader?: ScreenshotUploader;
   readFile?: FileReaderFn;
   onExit?: () => void;
+  canSendToAgent?: boolean;
+  enqueuer?: AgentEnqueuer;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -96,6 +99,8 @@ function makeController(opts?: {
     ...(opts?.uploader ? { uploader: opts.uploader } : {}),
     ...(opts?.readFile ? { readFile: opts.readFile } : {}),
     ...(opts?.onExit ? { onExit: opts.onExit } : {}),
+    ...(opts?.canSendToAgent ? { canSendToAgent: true } : {}),
+    ...(opts?.enqueuer ? { enqueuer: opts.enqueuer } : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
@@ -256,6 +261,71 @@ describe("OverlayController — inline text edit (requirement E)", () => {
     el.textContent = "Changed";
     el.dispatch("blur", {});
     expect(controller.editSession.isEmpty()).toBe(true);
+  });
+});
+
+describe("OverlayController — send to agent (Phase 2)", () => {
+  class IdSubmitter implements CommentSubmitter {
+    payloads: NewCommentInput[] = [];
+    submit(payload: NewCommentInput): SubmitResult {
+      this.payloads.push(payload);
+      return { ok: true, number: this.payloads.length, id: `cmt-${this.payloads.length}` };
+    }
+  }
+
+  function editHero(controller: OverlayController, doc: FakeDocument, q: (s: string) => FakeElement | null) {
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+  }
+
+  it("a non-permitted session shows no 'Send to agent' button, only 'Save comment'", () => {
+    const { controller, doc, q } = makeController();
+    editHero(controller, doc, q);
+    expect(q(".sc-ep-send")).toBeNull();
+    expect(q(".sc-ep-save")).not.toBeNull();
+  });
+
+  it("a permitted member session saves the template AND enqueues it", async () => {
+    const enqueued: string[] = [];
+    const enqueuer: AgentEnqueuer = {
+      enqueue: async (id) => {
+        enqueued.push(id);
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({ submitter, canSendToAgent: true, enqueuer });
+    editHero(controller, doc, q);
+    expect(q(".sc-ep-send")).not.toBeNull();
+    q(".sc-ep-send")!.dispatch("click", {});
+    q("textarea")!.value = "Make the hero bigger";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(submitter.payloads[0]!.kind).toBe("template");
+    expect(enqueued).toEqual(["cmt-1"]);
+    expect(controller.editSession.isEmpty()).toBe(true);
+  });
+
+  it("'Save comment' does NOT enqueue, even for a permitted session", async () => {
+    const enqueued: string[] = [];
+    const enqueuer: AgentEnqueuer = {
+      enqueue: async (id) => {
+        enqueued.push(id);
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({ submitter, canSendToAgent: true, enqueuer });
+    editHero(controller, doc, q);
+    q(".sc-ep-save")!.dispatch("click", {}); // Save, not Send
+    q("textarea")!.value = "Just save it";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(submitter.payloads[0]!.kind).toBe("template");
+    expect(enqueued).toEqual([]); // Save must not enqueue
   });
 });
 

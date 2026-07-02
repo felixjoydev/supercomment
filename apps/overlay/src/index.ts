@@ -37,6 +37,7 @@ import { domToPng } from "modern-screenshot";
 import { createLiveRasterizer, type DomToPng } from "./capture/rasterize-live.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
+import { SessionAgentEnqueuer } from "./submit/enqueue.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { loadReviewComments, toExistingMarkers } from "./read/load-comments.js";
 import { isDeviceChild } from "./device/device-mode.js";
@@ -118,6 +119,9 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
     submitter,
     // U13: out-of-band screenshot upload (embedded activation wires the real one).
     uploader: overrides.uploader,
+    // Phase 2: send-to-agent grant + enqueuer (embedded activation wires these).
+    canSendToAgent: overrides.canSendToAgent,
+    enqueuer: overrides.enqueuer,
     // U18: session-teardown hook fired on confirmed Exit (embedded wires it).
     onExit: overrides.onExit,
     doc: overrides.doc,
@@ -191,6 +195,8 @@ async function activateSession(
         previewId: exchanged.previewId,
         role: exchanged.role,
         displayName: exchanged.displayName,
+        // Phase 2: whether this member session may send to the coding agent.
+        canSendToAgent: exchanged.canSendToAgent,
         expiresAt: auth.expiresAt,
         // Stamp the activation origin so a restore on a different origin is
         // refused (domain guard); localStorage is already origin-scoped.
@@ -280,6 +286,15 @@ async function activateSession(
     getAccessToken,
   });
 
+  // Phase 2: the editor's "Send to agent" enqueues a saved template via the same
+  // session creds; the enqueue_review_comment RPC re-verifies the member session
+  // + grant server-side. Only actually offered when the session carries the grant.
+  const enqueuer = new SessionAgentEnqueuer({
+    supabaseUrl,
+    supabaseAnonKey,
+    getAccessToken,
+  });
+
   // U12 (read-on-activate): start loading the preview's existing comments NOW,
   // concurrently with DOM-ready, so the network round-trip overlaps document
   // parsing instead of waiting until after mount. Fail-closed: a read failure
@@ -301,6 +316,9 @@ async function activateSession(
     previewKey: typeof location !== "undefined" ? location.host : "preview",
     submitter,
     uploader,
+    // Phase 2: carry the member's send-to-agent grant into the editor footer.
+    canSendToAgent: session.canSendToAgent === true,
+    enqueuer,
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),

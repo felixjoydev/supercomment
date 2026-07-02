@@ -51,6 +51,13 @@ export interface PersistedSession {
   previewId: string;
   role: string;
   displayName: string;
+  /**
+   * Phase 2: whether this MEMBER session may send comments/templates to the
+   * coding agent (guests are always false). Drives the overlay editor footer's
+   * conditional "Send to agent" button. Optional for backward-compat with
+   * sessions persisted before it existed (treated as false).
+   */
+  canSendToAgent?: boolean;
   /** Epoch milliseconds when the access token expires. */
   expiresAt: number;
   /**
@@ -77,6 +84,8 @@ export interface ExchangeResult {
   previewId: string;
   role: string;
   displayName: string;
+  /** Phase 2: member session's send-to-agent grant (guests always false). */
+  canSendToAgent: boolean;
 }
 
 interface HashLike {
@@ -332,6 +341,7 @@ export async function exchangeReviewToken(cfg: {
       typeof data.displayName === "string" && data.displayName
         ? data.displayName
         : "Guest",
+    canSendToAgent: data.canSendToAgent === true,
   };
 }
 

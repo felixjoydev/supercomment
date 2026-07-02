@@ -53,6 +53,13 @@ export interface PanelCallbacks {
   onClose(): void;
   /** Finalize the buffered edits as a template comment (opens the comment form). */
   onSave(): void;
+  /**
+   * Phase 2: true when this session may send to the coding agent — renders the
+   * extra "Send to agent" footer button. Guests / non-permitted members: false.
+   */
+  canSendToAgent?: boolean;
+  /** Phase 2: "Send to agent" — save the template AND enqueue it for the agent. */
+  onSendToAgent?(): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -101,6 +108,7 @@ export class PropertiesPanel {
   private countEl!: HTMLElement;
   private undoBtn!: HTMLButtonElement;
   private saveBtn!: HTMLButtonElement;
+  private sendBtn: HTMLButtonElement | null = null;
 
   constructor(
     private readonly doc: Document,
@@ -525,6 +533,14 @@ export class PropertiesPanel {
     });
     this.saveBtn = this.button("sc-ep-save", "Save comment", () => this.cb.onSave());
     footer.append(this.countEl, this.undoBtn, this.saveBtn);
+    // Phase 2: permitted member sessions also get "Send to agent" (save + enqueue),
+    // ALONGSIDE "Save comment". Guests / non-permitted members never see it.
+    if (this.cb.canSendToAgent && this.cb.onSendToAgent) {
+      this.sendBtn = this.button("sc-ep-send", "Send to agent", () =>
+        this.cb.onSendToAgent!(),
+      );
+      footer.append(this.sendBtn);
+    }
     this.root.appendChild(footer);
   }
 
@@ -730,6 +746,7 @@ export class PropertiesPanel {
     this.countEl.textContent = n === 1 ? "1 edit" : `${n} edits`;
     this.saveBtn.disabled = n === 0;
     this.undoBtn.disabled = n === 0;
+    if (this.sendBtn) this.sendBtn.disabled = n === 0;
   }
 
   private section(title: string): HTMLElement {

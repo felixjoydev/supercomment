@@ -192,7 +192,12 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const row = (Array.isArray(data) ? data[0] : data) as
-    | { preview_id?: string; role?: string; display_name?: string }
+    | {
+        preview_id?: string;
+        role?: string;
+        display_name?: string;
+        can_send_to_agent?: boolean;
+      }
     | undefined;
   if (!row?.preview_id) {
     return jsonError("exchange_failed", 400, cors);
@@ -203,6 +208,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       previewId: row.preview_id,
       role: row.role ?? "guest",
       displayName: row.display_name ?? "Guest",
+      // Phase 2: a MEMBER session may carry send-to-agent; establish_review_session
+      // computes it from the token's member (guests always get false).
+      canSendToAgent: row.can_send_to_agent === true,
     },
     { status: 200, headers: cors },
   );
