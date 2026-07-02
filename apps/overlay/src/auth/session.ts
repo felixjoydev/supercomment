@@ -15,9 +15,12 @@
  *   2. Anonymous sign-in (POST /auth/v1/signup) → anon access/refresh JWT.
  *   3. Exchange the token (POST /api/review-token/exchange, anon bearer) →
  *      { previewId, role, displayName }.
- *   4. Persist { tokens, previewId, role, displayName, expiresAt } in
- *      sessionStorage (reload — which triggers redeploy-reconcile — restores it
- *      with no token in the URL) and mount.
+ *   4. Persist { tokens, previewId, role, displayName, expiresAt, origin } in
+ *      localStorage and mount. localStorage (NOT sessionStorage) is deliberate:
+ *      it is shared across ALL tabs of the origin and survives full-page loads,
+ *      so the toolbar re-appears with no token in the URL after same-tab
+ *      navigation, in a newly-opened tab, and on reload (which also triggers
+ *      redeploy-reconcile). The stored `origin` is re-checked on restore.
  *   5. Refresh (POST /auth/v1/token?grant_type=refresh_token) before a write
  *      when the access token is near expiry.
  *
@@ -30,16 +33,18 @@
 export const REVIEW_TOKEN_HASH_KEY = "sc_token";
 
 /**
- * sessionStorage key for the persisted session. sessionStorage is per-origin, so
- * one deploy origin (= one preview in this model) stores one current session;
- * the value carries `previewId` for server-scoped reads/writes.
+ * localStorage key for the persisted session. localStorage is per-origin AND
+ * shared across every tab of that origin, so one deploy origin (= one preview in
+ * this model) stores one current session that any page/tab on the same origin
+ * can restore; the value carries `previewId` for server-scoped reads/writes and
+ * `origin` for the restore-time domain guard.
  */
 export const REVIEW_SESSION_STORAGE_KEY = "supercomment:review-session";
 
 /** Refresh the access token when it is within this window of expiry. */
 export const REFRESH_SKEW_MS = 60_000;
 
-/** What we persist across reloads (sessionStorage). */
+/** What we persist across reloads / tabs (localStorage). */
 export interface PersistedSession {
   accessToken: string;
   refreshToken: string;
@@ -48,6 +53,14 @@ export interface PersistedSession {
   displayName: string;
   /** Epoch milliseconds when the access token expires. */
   expiresAt: number;
+  /**
+   * The origin (scheme+host+port) this session was activated on. Stamped at
+   * persist time and re-checked on restore as a defense-in-depth DOMAIN GUARD:
+   * localStorage is already origin-partitioned by the browser, but this makes
+   * the "only activate on the domain the review link was for" rule explicit.
+   * Optional for backward-compat with sessions persisted before it existed.
+   */
+  origin?: string;
 }
 
 /** Result of an anon sign-in / refresh (tokens normalised to epoch-ms expiry). */
@@ -81,7 +94,7 @@ interface HistoryLike {
   replaceState(state: unknown, unused: string, url?: string | null): void;
 }
 
-/** Minimal storage surface (sessionStorage) so persistence is testable. */
+/** Minimal storage surface (localStorage) so persistence is testable. */
 export interface SessionStorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -156,8 +169,18 @@ export function persistSession(
   }
 }
 
+/**
+ * Restore the persisted session, or null if absent/invalid.
+ *
+ * `expectedOrigin` (when provided) enforces the DOMAIN GUARD: a stored session
+ * whose `origin` does not match is refused, so a stale session never activates
+ * on a different origin that happens to share this browser profile. A legacy
+ * session with no stored origin is allowed through. Expiry is checked by the
+ * caller against `expiresAt` (see index.ts).
+ */
 export function restoreSession(
   storage: SessionStorageLike = defaultStorage(),
+  expectedOrigin?: string,
 ): PersistedSession | null {
   let raw: string | null = null;
   try {
@@ -168,7 +191,15 @@ export function restoreSession(
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return isValidSession(parsed) ? parsed : null;
+    if (!isValidSession(parsed)) return null;
+    if (
+      expectedOrigin !== undefined &&
+      parsed.origin !== undefined &&
+      parsed.origin !== expectedOrigin
+    ) {
+      return null; // domain guard: session belongs to a different origin
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -196,6 +227,34 @@ export function isExpired(
 ): boolean {
   if (!Number.isFinite(expiresAt)) return true;
   return expiresAt - skewMs <= now;
+}
+
+/**
+ * Whether a persisted session is RESTORABLE on this page load: its access token
+ * is still valid, OR it carries a refresh token we can trade for a fresh one.
+ * This is what lets the toolbar survive a long idle followed by navigation —
+ * not just the ~1h access-token window. `activateSession` (index.ts) does the
+ * actual refresh (async) and fails closed if the refresh token is also dead.
+ */
+export function hasRestorableSession(
+  persisted: PersistedSession | null,
+  now: number = Date.now(),
+): boolean {
+  if (!persisted) return false;
+  return !isExpired(persisted.expiresAt, now) || !!persisted.refreshToken;
+}
+
+/**
+ * Whether, at restore time, we should refresh BEFORE mounting: the access token
+ * is expired (or within the skew window) AND a refresh token is available. When
+ * false, the persisted access token is used as-is.
+ */
+export function shouldRefreshOnRestore(
+  session: Pick<PersistedSession, "expiresAt" | "refreshToken">,
+  now: number = Date.now(),
+  skewMs: number = REFRESH_SKEW_MS,
+): boolean {
+  return isExpired(session.expiresAt, now, skewMs) && !!session.refreshToken;
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +586,8 @@ function isValidSession(value: unknown): value is PersistedSession {
     typeof s.previewId === "string" &&
     typeof s.role === "string" &&
     typeof s.displayName === "string" &&
-    typeof s.expiresAt === "number"
+    typeof s.expiresAt === "number" &&
+    (s.origin === undefined || typeof s.origin === "string")
   );
 }
 
@@ -547,7 +607,7 @@ function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-/** In-memory fallback used when sessionStorage is unavailable (privacy mode / node). */
+/** In-memory fallback used when localStorage is unavailable (privacy mode / node). */
 function memoryStorage(): SessionStorageLike {
   const map = new Map<string, string>();
   return {
@@ -563,9 +623,18 @@ function memoryStorage(): SessionStorageLike {
 
 const sharedMemoryStorage = memoryStorage();
 
+/**
+ * The persistence backend: localStorage (NOT sessionStorage), so a review
+ * session is shared across every tab of the origin and survives full-page
+ * navigation — the toolbar re-activates itself on the next page / in a new tab
+ * without the token. localStorage is per-origin, so a felixjoy.me session is
+ * invisible on any other site; that origin isolation is the browser-enforced
+ * half of the domain guard. Falls back to an in-memory store when localStorage
+ * is unavailable (privacy mode / node).
+ */
 function defaultStorage(): SessionStorageLike {
   try {
-    if (typeof sessionStorage !== "undefined") return sessionStorage;
+    if (typeof localStorage !== "undefined") return localStorage;
   } catch {
     // Access can throw under strict privacy settings.
   }

@@ -19,10 +19,13 @@
  *        reporters / Referer).
  *     2. No token AND no unexpired persisted session → stay dormant (return).
  *     3. Else: anon sign-in → exchange the token for a preview-scoped session →
- *        persist it (sessionStorage) → mount with the `SessionCommentSubmitter`
- *        (writes authorize via the anon session JWT, NOT anon-key + link secret).
- *     4. On reload (no token) the persisted session is restored and re-mounted —
- *        reload is what triggers redeploy-reconcile, so persistence is mandatory.
+ *        persist it (localStorage, origin-stamped) → mount with the
+ *        `SessionCommentSubmitter` (writes authorize via the anon session JWT,
+ *        NOT anon-key + link secret).
+ *     4. With no token, the persisted session is restored and re-mounted — on
+ *        reload (which triggers redeploy-reconcile) AND after same-origin
+ *        navigation or in a newly-opened tab, since localStorage is shared
+ *        across tabs. A session stored for a different origin is refused.
  *
  * Seams (overridable via `mount(config)`): `ContextCapturer` (U7) and
  * `CommentSubmitter` (see `core/types.ts`).
@@ -43,11 +46,13 @@ import {
   clearSession,
   exchangeReviewToken,
   getTurnstileToken,
+  hasRestorableSession,
   isExpired,
   persistSession,
   readTokenFromHash,
   refreshAccessToken,
   restoreSession,
+  shouldRefreshOnRestore,
   stripTokenFromHash,
   type PersistedSession,
 } from "./auth/session.js";
@@ -113,6 +118,8 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
     submitter,
     // U13: out-of-band screenshot upload (embedded activation wires the real one).
     uploader: overrides.uploader,
+    // U18: session-teardown hook fired on confirmed Exit (embedded wires it).
+    onExit: overrides.onExit,
     doc: overrides.doc,
     storage: overrides.storage,
   };
@@ -185,10 +192,37 @@ async function activateSession(
         role: exchanged.role,
         displayName: exchanged.displayName,
         expiresAt: auth.expiresAt,
+        // Stamp the activation origin so a restore on a different origin is
+        // refused (domain guard); localStorage is already origin-scoped.
+        ...(typeof location !== "undefined" ? { origin: location.origin } : {}),
       };
       persistSession(session);
-    } else if (persisted && !isExpired(persisted.expiresAt)) {
-      session = persisted;
+    } else if (persisted) {
+      // No token: restore the persisted session. If its access token is expired
+      // or within the refresh skew, trade the refresh token for a fresh one NOW
+      // so the toolbar re-activates after a long idle + navigation (up to the
+      // refresh token's own lifetime); fail closed if the refresh token is dead.
+      if (shouldRefreshOnRestore(persisted)) {
+        try {
+          const refreshed = await refreshAccessToken({
+            supabaseUrl,
+            anonKey: supabaseAnonKey,
+            refreshToken: persisted.refreshToken,
+          });
+          session = {
+            ...persisted,
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresAt,
+          };
+          persistSession(session);
+        } catch {
+          clearSession(); // refresh token expired/invalid → review session over
+          return;
+        }
+      } else {
+        session = persisted;
+      }
     }
   } catch {
     // Token invalid/expired/reused, sign-in/exchange failed, or network error:
@@ -262,11 +296,14 @@ async function activateSession(
 
   const controller = mount({
     previewId: session.previewId,
-    // sessionStorage is origin-scoped; namespace the cosmetic guest-name store
+    // localStorage is origin-scoped; namespace the cosmetic guest-name store
     // by host like the tunnel path does.
     previewKey: typeof location !== "undefined" ? location.host : "preview",
     submitter,
     uploader,
+    // U18: Exit clears the persisted review session so the overlay stays dormant
+    // on reload / navigation; the controller tears its own UI down.
+    onExit: () => clearSession(),
     // Embedded-only: capture a real PNG of the (modified) element. The uploader
     // above offloads it to Storage so it never inflates `context`; on any failure
     // (cross-origin taint, etc.) it falls back to the DOM snapshot.
@@ -357,8 +394,17 @@ function bootstrap(): void {
     stripTokenFromHash({ location, history });
   }
 
-  const persisted = restoreSession();
-  const haveLiveSession = !!persisted && !isExpired(persisted.expiresAt);
+  // Restore any persisted session for THIS origin (localStorage, shared across
+  // tabs). Passing the current origin enforces the domain guard: a session
+  // stored for another origin is refused.
+  const currentOrigin =
+    typeof location !== "undefined" ? location.origin : undefined;
+  const persisted = restoreSession(undefined, currentOrigin);
+  // Restorable = access token still valid OR a refresh token we can trade in;
+  // activateSession does the refresh and fails closed if it's dead too. This is
+  // what lets the toolbar survive a long idle + navigation, not just the ~1h
+  // access-token window.
+  const haveLiveSession = hasRestorableSession(persisted);
 
   // THE GATE. Editor / upload / capture listeners mount ONLY past this point.
   const mode = evaluateBoot({

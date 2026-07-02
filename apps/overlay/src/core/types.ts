@@ -16,12 +16,21 @@ import type {
 } from "@supercomment/shared";
 
 /**
- * The toolbar modes (R9). The first four are annotation modes (pick a
- * target, drop a comment); `edit` is the visual-editor mode (U9) — picking an
- * element opens the properties panel instead of the comment form, and edits are
- * buffered into the controller's `EditSession` until the reviewer submits.
+ * The toolbar modes (R9). `browse` is the passive default: the overlay
+ * intercepts nothing, so the reviewer clicks links/buttons and navigates the
+ * app normally while existing comment pins stay visible and clickable. The
+ * middle four are annotation modes (pick a target, drop a comment); `edit` is
+ * the visual-editor mode (U9) — picking an element opens the properties panel
+ * instead of the comment form, and edits are buffered into the controller's
+ * `EditSession` until the reviewer submits.
  */
-export type SelectionMode = "element" | "area" | "text" | "multi" | "edit";
+export type SelectionMode =
+  | "browse"
+  | "element"
+  | "area"
+  | "text"
+  | "multi"
+  | "edit";
 
 /** A rectangle in document (page) coordinates, CSS pixels. */
 export interface Rect {
@@ -207,6 +216,13 @@ export interface OverlayConfig {
    * per-surface counts live (incl. comments made inside the device iframe).
    */
   onCommentSubmitted?: (surface: DeviceSurface) => void;
+  /**
+   * Called after the reviewer confirms "Exit" (U18): clears the persisted review
+   * session so the overlay stays dormant on reload / navigation (the embedded
+   * bootstrap wires this to `clearSession`). The controller tears its own UI down
+   * regardless; when absent (tunnel / stub / tests) Exit just closes the overlay.
+   */
+  onExit?: () => void;
 }
 
 /** Minimal storage surface so the guest store is testable without a browser. */

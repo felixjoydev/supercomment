@@ -194,6 +194,31 @@ textarea:focus-visible {
   transform: scale(0.96);
 }
 
+/* Exit (U18) ---------------------------------------------------------- */
+.sc-exit {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  padding: 5px 10px;
+  margin-left: 2px;
+  border-radius: 999px;
+  transition: background-color 160ms ease, color 160ms ease, transform 140ms var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-exit:hover {
+    background: rgba(35, 31, 24, 0.04);
+    color: var(--ink);
+  }
+}
+.sc-exit:active {
+  transform: scale(0.96);
+}
+
 /* Multi confirm ------------------------------------------------------- */
 .sc-multi-confirm {
   appearance: none;
@@ -362,6 +387,27 @@ textarea:focus-visible {
   background: var(--soft);
   color: var(--ink-3);
   cursor: not-allowed;
+}
+.sc-btn-danger {
+  appearance: none;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 140ms var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-btn-danger:hover {
+    background: var(--accent-deep);
+  }
+}
+.sc-btn-danger:active {
+  transform: scale(0.96);
 }
 
 /* Reference images (U17) ---------------------------------------------- */

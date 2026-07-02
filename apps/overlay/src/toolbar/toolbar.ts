@@ -1,5 +1,5 @@
 /**
- * The mode-switching toolbar (R9). Four selection modes with a spring-sliding
+ * The mode-switching toolbar (R9). Selection modes with a spring-sliding
  * active indicator, plus the reviewer chip and the multi-mode "Annotate N"
  * confirm. Pure presentation + callbacks; the active mode and the multi count
  * are pushed in by the controller.
@@ -18,6 +18,9 @@ interface ModeDef {
 
 /** Minimal 13px stroke icons (currentColor) for each selection mode. */
 const ICONS: Record<SelectionMode, string> = {
+  // Cursor arrow — the passive Browse mode (click through, navigate normally).
+  browse:
+    '<svg viewBox="0 0 14 14" fill="none"><path d="M2.8 2 L2.8 10.8 L5.2 8.5 L6.9 11.9 L8.3 11.2 L6.6 7.9 L10 7.9 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>',
   element:
     '<svg viewBox="0 0 14 14" fill="none"><rect x="1.5" y="1.5" width="11" height="11" rx="2.5" stroke="currentColor" stroke-width="1.5"/></svg>',
   area:
@@ -32,6 +35,7 @@ const ICONS: Record<SelectionMode, string> = {
 };
 
 const MODES: ModeDef[] = [
+  { mode: "browse", label: "Browse", icon: ICONS.browse },
   { mode: "element", label: "Element", icon: ICONS.element },
   { mode: "area", label: "Area", icon: ICONS.area },
   { mode: "text", label: "Text", icon: ICONS.text },
@@ -43,6 +47,8 @@ export interface ToolbarCallbacks {
   onModeChange(mode: SelectionMode): void;
   onConfirmMulti(): void;
   onChangeName(): void;
+  /** Fired when the reviewer clicks "Exit". Absent → the Exit button is hidden. */
+  onExit?(): void;
 }
 
 export class Toolbar {
@@ -116,6 +122,20 @@ export class Toolbar {
     chip.append(reviewing, this.chipName, change);
 
     this.el.append(this.confirmBtn, sep, chip);
+
+    // Exit (U18) — ends the review session. Only rendered when the host wired an
+    // onExit handler (top-level embedded / tunnel; never the device-mode child).
+    if (callbacks.onExit) {
+      const exit = doc.createElement("button");
+      exit.type = "button";
+      exit.className = "sc-exit";
+      exit.title = "End review session";
+      exit.setAttribute("aria-label", "End review session");
+      exit.textContent = "Exit";
+      exit.addEventListener("click", () => callbacks.onExit?.());
+      this.el.appendChild(exit);
+    }
+
     parent.appendChild(this.el);
 
     // Keep the indicator aligned if the viewport/layout shifts.

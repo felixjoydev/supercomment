@@ -6,11 +6,13 @@ import {
   clearSession,
   exchangeReviewToken,
   getTurnstileToken,
+  hasRestorableSession,
   isExpired,
   persistSession,
   readTokenFromHash,
   refreshAccessToken,
   restoreSession,
+  shouldRefreshOnRestore,
   stripTokenFromHash,
   type PersistedSession,
   type SessionStorageLike,
@@ -137,6 +139,37 @@ describe("persist / restore / clear", () => {
   });
 });
 
+describe("restoreSession — domain guard (origin)", () => {
+  const WITH_ORIGIN: PersistedSession = {
+    ...SESSION,
+    origin: "https://felixjoy.me",
+  };
+
+  it("restores when the expected origin matches the stored origin", () => {
+    const storage = fakeStorage();
+    persistSession(WITH_ORIGIN, storage);
+    expect(restoreSession(storage, "https://felixjoy.me")).toEqual(WITH_ORIGIN);
+  });
+
+  it("refuses a session stored for a different origin", () => {
+    const storage = fakeStorage();
+    persistSession(WITH_ORIGIN, storage);
+    expect(restoreSession(storage, "https://evil.example")).toBeNull();
+  });
+
+  it("allows a legacy session that has no stored origin", () => {
+    const storage = fakeStorage();
+    persistSession(SESSION, storage); // no origin field
+    expect(restoreSession(storage, "https://felixjoy.me")).toEqual(SESSION);
+  });
+
+  it("skips the guard entirely when no expected origin is passed", () => {
+    const storage = fakeStorage();
+    persistSession(WITH_ORIGIN, storage);
+    expect(restoreSession(storage)).toEqual(WITH_ORIGIN);
+  });
+});
+
 describe("isExpired", () => {
   it("is true at/after the expiry instant", () => {
     expect(isExpired(1000, 1000)).toBe(true);
@@ -155,6 +188,66 @@ describe("isExpired", () => {
 
   it("fails closed for a non-finite expiry", () => {
     expect(isExpired(Number.NaN, 1000)).toBe(true);
+  });
+});
+
+describe("hasRestorableSession (full review-session lifetime)", () => {
+  it("is false when there is no persisted session", () => {
+    expect(hasRestorableSession(null)).toBe(false);
+  });
+
+  it("is true when the access token is still valid", () => {
+    expect(hasRestorableSession({ ...SESSION, expiresAt: 10_000 }, 1_000)).toBe(
+      true,
+    );
+  });
+
+  it("is true when the access token is expired but a refresh token exists", () => {
+    expect(
+      hasRestorableSession(
+        { ...SESSION, expiresAt: 1_000, refreshToken: "r" },
+        5_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false when expired AND there is no refresh token", () => {
+    expect(
+      hasRestorableSession(
+        { ...SESSION, expiresAt: 1_000, refreshToken: "" },
+        5_000,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldRefreshOnRestore", () => {
+  it("is true when expired and a refresh token is present", () => {
+    expect(
+      shouldRefreshOnRestore({ expiresAt: 1_000, refreshToken: "r" }, 5_000, 0),
+    ).toBe(true);
+  });
+
+  it("is false when the access token is still valid", () => {
+    expect(
+      shouldRefreshOnRestore({ expiresAt: 10_000, refreshToken: "r" }, 1_000, 0),
+    ).toBe(false);
+  });
+
+  it("is false when there is no refresh token, even if expired", () => {
+    expect(
+      shouldRefreshOnRestore({ expiresAt: 1_000, refreshToken: "" }, 5_000, 0),
+    ).toBe(false);
+  });
+
+  it("treats a near-expiry token as refreshable within the skew window", () => {
+    expect(
+      shouldRefreshOnRestore(
+        { expiresAt: 3_000, refreshToken: "r" },
+        1_000,
+        2_000,
+      ),
+    ).toBe(true);
   });
 });
 

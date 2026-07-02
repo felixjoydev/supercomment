@@ -19,7 +19,8 @@ import { unionRect } from "../core/geometry.js";
 export type RectFor = (el: Element) => Rect;
 
 export class SelectionState {
-  private mode: SelectionMode = "element";
+  /** Active mode; starts passive in `browse` (the overlay intercepts nothing). */
+  private mode: SelectionMode = "browse";
   /** Single completed target for element / area / text modes. */
   private pending: SelectionTarget | null = null;
   /** Accumulated elements for multi mode (insertion order preserved). */

@@ -84,6 +84,7 @@ function makeController(opts?: {
   submitter?: CommentSubmitter;
   uploader?: ScreenshotUploader;
   readFile?: FileReaderFn;
+  onExit?: () => void;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -94,6 +95,7 @@ function makeController(opts?: {
     submitter,
     ...(opts?.uploader ? { uploader: opts.uploader } : {}),
     ...(opts?.readFile ? { readFile: opts.readFile } : {}),
+    ...(opts?.onExit ? { onExit: opts.onExit } : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
@@ -138,11 +140,37 @@ beforeEach(() => {
 });
 
 describe("OverlayController — edit mode registration", () => {
-  it("registers Edit as a fifth toolbar mode", () => {
+  it("registers Browse + Edit among the six toolbar modes", () => {
     const { shadow } = makeController();
     const modeButtons = shadow().querySelectorAll(".sc-mode-btn");
-    expect(modeButtons.length).toBe(5);
+    expect(modeButtons.length).toBe(6);
     expect(modeButtons.some((b) => b.textContent === "Edit")).toBe(true);
+    expect(modeButtons.some((b) => b.textContent === "Browse")).toBe(true);
+  });
+
+  it("starts in Browse mode by default (the passive, non-intercepting mode)", () => {
+    const { shadow } = makeController();
+    const browseBtn = shadow()
+      .querySelectorAll(".sc-mode-btn")
+      .find((b) => b.textContent === "Browse")!;
+    expect(browseBtn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("browse mode passes host-page clicks through: no form, no preventDefault", () => {
+    const { doc, q } = makeController();
+    const el = hostEl(doc, "a", "Nav link");
+    let prevented = false;
+    // Default mode is browse; simulate the captured document click the overlay
+    // listens for. Browse must not open a form and must not block navigation.
+    doc.dispatch("click", {
+      target: el,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(q(".sc-form")).toBeNull();
+    expect(q(".sc-edit-panel")).toBeNull();
+    expect(prevented).toBe(false);
   });
 
   it("opens the properties panel (not the comment form) on an edit-mode click", () => {
@@ -362,6 +390,63 @@ describe("OverlayController — teardown (plans/008)", () => {
     controller.destroy();
     expect(clicks()).toBe(0);
     expect(doc.getElementById(HOST_ELEMENT_ID)).toBeNull();
+  });
+});
+
+describe("OverlayController — exit review session (U18)", () => {
+  it("shows an Exit control on the toolbar", () => {
+    const { q } = makeController();
+    expect(q(".sc-exit")).not.toBeNull();
+  });
+
+  it("Exit opens a confirmation dialog and does NOT tear down until confirmed", () => {
+    const { doc, q } = makeController();
+    q(".sc-exit")!.dispatch("click", {});
+    // The danger confirm button is shown; the overlay host is still present.
+    expect(q(".sc-btn-danger")).not.toBeNull();
+    expect(doc.getElementById(HOST_ELEMENT_ID)).not.toBeNull();
+  });
+
+  it("confirming Exit invokes onExit (clears session) and removes the overlay", () => {
+    let cleared = 0;
+    const { doc, q } = makeController({
+      onExit: () => {
+        cleared++;
+      },
+    });
+    q(".sc-exit")!.dispatch("click", {});
+    q(".sc-btn-danger")!.dispatch("click", {}); // confirm
+    expect(cleared).toBe(1);
+    expect(doc.getElementById(HOST_ELEMENT_ID)).toBeNull(); // fully torn down
+  });
+
+  it("cancelling Exit keeps the overlay and does not clear the session", () => {
+    let cleared = 0;
+    const { doc, q } = makeController({
+      onExit: () => {
+        cleared++;
+      },
+    });
+    q(".sc-exit")!.dispatch("click", {});
+    q(".sc-btn-secondary")!.dispatch("click", {}); // cancel
+    expect(cleared).toBe(0);
+    expect(q(".sc-btn-danger")).toBeNull(); // dialog dismissed
+    expect(doc.getElementById(HOST_ELEMENT_ID)).not.toBeNull();
+  });
+
+  it("warns about unsaved edits in the confirm dialog when the buffer is non-empty", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    expect(controller.editSession.size).toBe(1);
+
+    q(".sc-exit")!.dispatch("click", {});
+    expect(q(".sc-modal-hint")!.textContent.toLowerCase()).toContain(
+      "unsaved edits",
+    );
   });
 });
 

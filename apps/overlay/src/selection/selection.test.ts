@@ -125,6 +125,11 @@ beforeEach(() => {
 // --- SelectionState (pure) -------------------------------------------------
 
 describe("SelectionState", () => {
+  it("defaults to the passive browse mode (no interception)", () => {
+    const state = new SelectionState((el) => rectFor(el));
+    expect(state.getMode()).toBe("browse");
+  });
+
   it("element mode selects exactly one element", () => {
     const { doc } = makeFakeDom();
     const state = new SelectionState((el) => rectFor(el));

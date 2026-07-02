@@ -26,6 +26,7 @@ import {
 } from "./core/types.js";
 import { createShellRoot, type ShellRoot } from "./shell/root.js";
 import { Toolbar } from "./toolbar/toolbar.js";
+import { ConfirmModal } from "./shell/confirm.js";
 import { SelectionState, type RectFor } from "./selection/state.js";
 import { HighlightLayer } from "./selection/highlight.js";
 import { CommentForm } from "./selection/form.js";
@@ -99,6 +100,8 @@ export class OverlayController {
 
   private form: CommentForm | null = null;
   private modal: GuestModal | null = null;
+  /** The Exit-confirmation dialog (U18); open only while confirming exit. */
+  private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
   private editPanel: PropertiesPanel | null = null;
   /** A selection + draft waiting on a guest name before submission. */
@@ -138,6 +141,9 @@ export class OverlayController {
       onModeChange: (m) => this.changeMode(m),
       onConfirmMulti: () => this.confirmMulti(),
       onChangeName: () => this.promptForName(null),
+      // Exit ends the whole review session; never on the device-mode child
+      // (which shares the parent's session and lives inside the iframe).
+      ...(config.deviceChild ? {} : { onExit: () => this.requestExit() }),
     });
     this.toolbar.setMode(this.selection.getMode());
     this.toolbar.setReviewerName(this.guestStore.get());
@@ -196,6 +202,7 @@ export class OverlayController {
       }
     }
     this.dismissEditPanel();
+    this.dismissConfirm();
     this.deviceMode?.exit();
     this.shell.destroy();
   }
@@ -637,12 +644,63 @@ export class OverlayController {
     );
   }
 
+  // --- Exit review session (U18) ------------------------------------------
+
+  /**
+   * Reviewer clicked "Exit". Confirm first — this is destructive: it ends the
+   * session and closes the overlay — and warn about any unsaved visual edits.
+   */
+  private requestExit(): void {
+    // Clear transient UI so the confirm dialog is the only thing up.
+    this.dismissForm();
+    this.dismissModal();
+    this.dismissEditPanel();
+    this.markers.closePopover();
+    this.dismissConfirm();
+
+    const unsaved = !this.editSession.isEmpty();
+    const body =
+      (unsaved ? "You have unsaved edits that will be discarded. " : "") +
+      "The toolbar will close on this site. To comment again, open the review " +
+      "link the developer shared with you.";
+
+    this.confirmModal = new ConfirmModal(this.doc, this.shell.layer, {
+      title: "End review session?",
+      body,
+      confirmLabel: "Exit",
+      cancelLabel: "Cancel",
+      onConfirm: () => {
+        this.dismissConfirm();
+        this.performExit();
+      },
+      onCancel: () => this.dismissConfirm(),
+    });
+  }
+
+  /**
+   * Confirmed exit: clear the persisted session (side effect owned by the
+   * embedded bootstrap via `config.onExit`), then fully tear the overlay down.
+   * destroy() unbinds every listener, drops the edit buffer, and removes the
+   * host, so the page returns to its normal state.
+   */
+  private performExit(): void {
+    this.config.onExit?.();
+    this.destroy();
+  }
+
+  private dismissConfirm(): void {
+    this.confirmModal?.destroy();
+    this.confirmModal = null;
+  }
+
   // --- Cancellation -------------------------------------------------------
 
   /** Esc / cancel: drop the in-progress selection + form without committing. */
   cancelSelection(): void {
     this.dismissForm();
     this.dismissModal();
+    // Esc also dismisses the Exit-confirmation dialog if it's open.
+    this.dismissConfirm();
     // Esc dismisses the editor panel UI but PRESERVES the edit buffer (G13/R7) —
     // the reviewer can reopen it by picking an element again in edit mode.
     this.dismissEditPanel();
@@ -732,6 +790,11 @@ export class OverlayController {
         const target = e.target as Element | null;
         if (!target || this.isOwnNode(target)) return;
         const mode = this.selection.getMode();
+        // Browse mode is passive: never preventDefault, so the click falls
+        // through to the page and the reviewer navigates normally (links,
+        // buttons, SPA routers). Pins stay clickable — they are our own nodes,
+        // already excluded by the isOwnNode guard above.
+        if (mode === "browse") return;
         if (mode === "element") {
           e.preventDefault();
           this.handleElementClick(target);
