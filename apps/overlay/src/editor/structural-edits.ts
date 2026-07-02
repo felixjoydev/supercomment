@@ -122,11 +122,71 @@ export function previewShow(el: Element, priorDisplay: string | null): void {
   }
 }
 
-/** Non-destructive reorder preview via CSS `order` (flex/grid). Never throws. */
+/** Non-destructive reorder preview via CSS `order` (flex/grid). Never throws.
+ * Retained for the saved-template re-apply path (apply-change-set.ts); the live
+ * editor uses {@link previewMove} instead, since CSS `order` is a no-op outside a
+ * flex/grid parent (requirement F). */
 export function previewOrder(el: Element, order: number): void {
   try {
     (el as HTMLElement).style?.setProperty?.("order", String(order));
   } catch {
     /* best-effort */
   }
+}
+
+/**
+ * REAL reorder preview (requirement F): actually move `el` before/after
+ * `reference` in the DOM so the reviewer SEES it (CSS `order` does nothing
+ * outside a flex/grid parent). This is deliberately mutating — the durable
+ * artifact is the anchored `moveNode` op, and the mutation is EPHEMERAL: the
+ * returned closure restores `el` to its exact original position (before the
+ * captured original next-sibling, or its original parent), so close/undo/discard
+ * reverts it cleanly. Framework re-renders may still revert the preview (G12);
+ * that's fine — it's throwaway. Never throws; the revert is a no-op if the move
+ * couldn't be applied.
+ */
+export function previewMove(
+  el: Element,
+  reference: Element | null,
+  position: "before" | "after",
+): () => void {
+  let restore: (() => void) | null = null;
+  try {
+    const origParent = el.parentElement;
+    if (!origParent) return () => {};
+    // Snapshot the exact original position for an exact restore.
+    const origNext = (el as { nextSibling?: ChildNode | null }).nextSibling ?? null;
+    restore = () => {
+      try {
+        domInsertBefore(origParent, el, origNext);
+      } catch {
+        /* best-effort restore */
+      }
+    };
+
+    const destParent = reference?.parentElement ?? origParent;
+    const refNext =
+      (reference as { nextSibling?: ChildNode | null } | null)?.nextSibling ?? null;
+    // before → insert at the reference; after → insert at the reference's next
+    // sibling (which, once el is removed, is the slot just past the reference).
+    const anchor =
+      position === "before" ? (reference as ChildNode | null) : refNext;
+    domInsertBefore(destParent, el, anchor);
+  } catch {
+    /* preview is best-effort; keep whatever restore we captured */
+  }
+  return restore ?? (() => {});
+}
+
+/** `parent.insertBefore(node, ref)` with an append fallback (test doubles). */
+function domInsertBefore(
+  parent: Element,
+  node: Element,
+  ref: ChildNode | null,
+): void {
+  const fn = (parent as {
+    insertBefore?: (n: Element, r: ChildNode | null) => void;
+  }).insertBefore;
+  if (typeof fn === "function") fn.call(parent, node, ref);
+  else parent.appendChild(node);
 }

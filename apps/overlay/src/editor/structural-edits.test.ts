@@ -11,7 +11,9 @@ import {
   previewHide,
   previewShow,
   previewOrder,
+  previewMove,
 } from "./structural-edits.js";
+import { makeFakeDom, type FakeElement } from "../test/dom-double.js";
 
 const target: EditTarget = {
   selector: "section.hero",
@@ -107,5 +109,61 @@ describe("non-destructive previews", () => {
     expect(() => previewHide({} as Element)).not.toThrow();
     expect(() => previewShow({} as Element, "block")).not.toThrow();
     expect(() => previewOrder({} as Element, 1)).not.toThrow();
+  });
+});
+
+describe("previewMove — real reorder + exact revert (requirement F)", () => {
+  function tree(): { parent: FakeElement; a: FakeElement; b: FakeElement; c: FakeElement } {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("section");
+    const a = doc.createElement("div");
+    const b = doc.createElement("div");
+    const c = doc.createElement("div");
+    a.textContent = "A";
+    b.textContent = "B";
+    c.textContent = "C";
+    parent.append(a, b, c);
+    return { parent, a, b, c };
+  }
+  const order = (p: FakeElement) => p.children.map((k) => k.textContent).join("");
+
+  it("actually moves the node before a reference (visible reorder, not CSS order)", () => {
+    const { parent, b, a } = tree();
+    // Move B before A → B A C.
+    previewMove(b as unknown as Element, a as unknown as Element, "before");
+    expect(order(parent)).toBe("BAC");
+  });
+
+  it("moves after a reference", () => {
+    const { parent, a, c } = tree();
+    // Move A after C → B C A.
+    previewMove(a as unknown as Element, c as unknown as Element, "after");
+    expect(order(parent)).toBe("BCA");
+  });
+
+  it("the returned closure restores the exact original position", () => {
+    const { parent, b, a } = tree();
+    const revert = previewMove(b as unknown as Element, a as unknown as Element, "before");
+    expect(order(parent)).toBe("BAC");
+    revert();
+    expect(order(parent)).toBe("ABC");
+  });
+
+  it("restores a middle node to its slot even after moving to the end", () => {
+    const { parent, b, c } = tree();
+    const revert = previewMove(b as unknown as Element, c as unknown as Element, "after");
+    expect(order(parent)).toBe("ACB");
+    revert();
+    expect(order(parent)).toBe("ABC");
+  });
+
+  it("never throws for an orphan element and returns a no-op revert", () => {
+    const { doc } = makeFakeDom();
+    const orphan = doc.createElement("div");
+    let revert: () => void = () => {};
+    expect(() => {
+      revert = previewMove(orphan as unknown as Element, null, "before");
+    }).not.toThrow();
+    expect(() => revert()).not.toThrow();
   });
 });

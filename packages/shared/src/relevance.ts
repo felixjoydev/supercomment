@@ -198,7 +198,9 @@ function describeOp(op: ChangeOp): string {
     case "removeNode":
       return `remove ${where}`;
     case "moveNode":
-      return `reorder ${where}${
+      // Requirement F: the agent must be able to act on "move X before/after Y",
+      // so lead with the anchored destination neighbour, not just the indices.
+      return `move ${where}${op.insertion ? insertionLabel(op.insertion) : ""}${
         op.order ? ` (position ${op.order.from}→${op.order.to})` : ""
       }`;
     case "insertNode": {

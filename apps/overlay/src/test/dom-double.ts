@@ -124,6 +124,11 @@ export class FakeElement {
     return this.attributes.get(name) ?? null;
   }
 
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+    if (name === "id") this.id = "";
+  }
+
   appendChild(child: FakeElement): FakeElement {
     child.parent = this;
     this.children.push(child);
@@ -132,6 +137,30 @@ export class FakeElement {
 
   append(...nodes: FakeElement[]): void {
     for (const n of nodes) this.appendChild(n);
+  }
+
+  /**
+   * Insert `child` before `ref` in this element's children (append when `ref` is
+   * null / not a child). Mirrors the real `Node.insertBefore` enough for the
+   * editor's live reorder preview + its exact revert. Re-parents `child` first.
+   */
+  insertBefore(child: FakeElement, ref: FakeElement | null): FakeElement {
+    if (child.parent) {
+      child.parent.children = child.parent.children.filter((c) => c !== child);
+    }
+    child.parent = this;
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx < 0) this.children.push(child);
+    else this.children.splice(idx, 0, child);
+    return child;
+  }
+
+  /** The next element sibling (or null), mirroring the DOM accessor the editor
+   * uses to snapshot an element's original position before a reorder preview. */
+  get nextSibling(): FakeElement | null {
+    if (!this.parent) return null;
+    const i = this.parent.children.indexOf(this);
+    return i >= 0 ? this.parent.children[i + 1] ?? null : null;
   }
 
   replaceChildren(...nodes: FakeElement[]): void {

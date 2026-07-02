@@ -121,4 +121,37 @@ describe("EditSession", () => {
     s.record(styleOp());
     expect(s.toChangeSet()?.authoredCommit).toBeUndefined();
   });
+
+  it("has() reports whether an op's logical key is buffered", () => {
+    const s = new EditSession();
+    const op = styleOp({ property: "gap", after: "48px" });
+    expect(s.has(op)).toBe(false);
+    s.record(op);
+    expect(s.has(op)).toBe(true);
+    // Same logical key (target+property), different opId → still buffered.
+    expect(s.has(styleOp({ property: "gap", opId: "other" }))).toBe(true);
+  });
+
+  it("undoLast() removes the most-recent distinct edit and returns it", () => {
+    const s = new EditSession();
+    s.record(styleOp({ property: "font-size", after: "24px" }));
+    s.record(styleOp({ property: "color", before: "black", after: "blue" }));
+    const undone = s.undoLast();
+    expect(undone?.property).toBe("color");
+    expect(s.size).toBe(1);
+    expect(s.list()[0]?.property).toBe("font-size");
+  });
+
+  it("undoLast() honours coalescing insertion order (re-edit stays in place)", () => {
+    const s = new EditSession();
+    s.record(styleOp({ property: "font-size", after: "24px" })); // slot 0
+    s.record(styleOp({ property: "color", after: "blue" })); // slot 1
+    s.record(styleOp({ property: "font-size", after: "40px" })); // re-edit slot 0
+    // The last DISTINCT edit is still `color`, not the font-size re-nudge.
+    expect(s.undoLast()?.property).toBe("color");
+  });
+
+  it("undoLast() returns null on an empty buffer", () => {
+    expect(new EditSession().undoLast()).toBeNull();
+  });
 });

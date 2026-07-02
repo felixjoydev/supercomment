@@ -7,29 +7,53 @@ import {
   type FakeDocument,
   type FakeElement,
 } from "../test/dom-double.js";
-import { PropertiesPanel, type PanelCallbacks } from "./panel.js";
+import {
+  PropertiesPanel,
+  normalizeHex,
+  rgbToHex,
+  type PanelCallbacks,
+} from "./panel.js";
 import { EditSession } from "./edit-session.js";
 import { buildEditTarget } from "./edit-target.js";
 
-// The panel is exercised against its REAL collaborator — a live EditSession —
-// so these are integration tests over the exact wiring the controller uses.
+// The panel is exercised against its REAL collaborator — a live EditSession — so
+// these are integration tests over the exact wiring the controller uses. The fake
+// DOM has no getComputedStyle, so we assert on RECORDED ops (the durable
+// artifact), not on visual application (per the overlay test guardrails).
 
-function makeLeaf(doc: FakeDocument, tag: string, text: string): FakeElement {
+function makeEl(doc: FakeDocument, tag: string, text = "x"): FakeElement {
   const el = doc.createElement(tag);
   el.textContent = text;
   doc.body.appendChild(el);
   return el;
 }
 
+/** A container element inside a parent that has siblings (so Arrange shows). */
+function withSiblings(
+  doc: FakeDocument,
+  tag: string,
+): { el: FakeElement; parent: FakeElement } {
+  const parent = doc.createElement("section");
+  doc.body.appendChild(parent);
+  const a = doc.createElement(tag);
+  const b = doc.createElement(tag);
+  const c = doc.createElement(tag);
+  parent.append(a, b, c);
+  return { el: b, parent };
+}
+
 function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
-  const el = opts?.el ?? makeLeaf(doc, "button", "Buy");
+  const el = opts?.el ?? makeEl(doc, "button", "Buy");
   const session = new EditSession();
   const state = { closed: false, saved: false };
   const cb: PanelCallbacks = {
     record: (op) => session.record(op),
-    revert: (op) => session.remove(op),
+    removeEdit: (op) => session.remove(op),
+    undo: () => {
+      session.undoLast();
+    },
     discard: () => session.discard(),
     count: () => session.size,
     onClose: () => {
@@ -52,66 +76,90 @@ function mount(opts?: { el?: FakeElement; doc?: FakeDocument }) {
     if (!found) throw new Error(`no element for ${sel}`);
     return found;
   };
-  const btnByLabel = (label: string): FakeElement => {
-    const btn = parent.querySelectorAll(".sc-ep-btn").find((b) => b.textContent === label);
-    if (!btn) throw new Error(`no button "${label}"`);
+  const maybe = (sel: string): FakeElement | null => parent.querySelector(sel);
+  const segByText = (containerSel: string, text: string): FakeElement => {
+    const btn = parent
+      .querySelectorAll(`${containerSel} .sc-ep-seg`)
+      .find((b) => b.textContent === text);
+    if (!btn) throw new Error(`no segment "${text}" in ${containerSel}`);
     return btn;
   };
-  return { doc, parent, el, session, panel, state, q, btnByLabel };
+  return { doc, parent, el, session, panel, state, q, maybe, segByText };
 }
 
-describe("PropertiesPanel — mount", () => {
-  it("mounts the inspector with style + structure controls", () => {
-    const { parent } = mount();
-    expect(parent.querySelector(".sc-edit-panel")).not.toBeNull();
+describe("PropertiesPanel — contextual sections (requirement A + user note)", () => {
+  it("a TEXT element shows Type settings + Colour, not Layout/Spacing/Size", () => {
+    const { doc } = makeFakeDom();
+    const { parent } = mount({ el: makeEl(doc, "h2", "Transparent pricing"), doc });
     expect(parent.querySelector(".sc-ep-ctl-font-size")).not.toBeNull();
-    expect(parent.querySelector(".sc-ep-ctl-color")).not.toBeNull();
-    // Structure actions render.
-    expect(parent.querySelectorAll(".sc-ep-btn").length).toBeGreaterThanOrEqual(4);
+    expect(parent.querySelector(".sc-ep-ctl-font-weight")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-letter-spacing")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-text-align")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-color")).not.toBeNull(); // text colour
+    // No container-only sections:
+    expect(parent.querySelector(".sc-ep-ctl-flex-direction")).toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-width")).toBeNull();
+    expect(parent.querySelector(".sc-ep-cross")).toBeNull();
   });
 
-  it("offers the text control for a leaf but not for an element with children", () => {
-    const leaf = mount();
-    expect(leaf.parent.querySelector(".sc-ep-textarea")).not.toBeNull();
-
+  it("a CONTAINER element shows Layout/Spacing/Size/Position/Colour, not Type", () => {
     const { doc } = makeFakeDom();
-    const div = doc.createElement("div");
-    div.appendChild(doc.createElement("span"));
-    doc.body.appendChild(div);
-    const nonLeaf = mount({ el: div, doc });
-    expect(nonLeaf.parent.querySelector(".sc-ep-textarea")).toBeNull();
+    const { parent } = mount({ el: makeEl(doc, "div", "box"), doc });
+    expect(parent.querySelector(".sc-ep-ctl-flex-direction")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-align-items")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-gap")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-width")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-height")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-cross")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-background-color")).not.toBeNull();
+    // No type controls on a container:
+    expect(parent.querySelector(".sc-ep-ctl-font-size")).toBeNull();
+  });
+
+  it("the tag badge names the element (uppercase)", () => {
+    const { doc } = makeFakeDom();
+    const { q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    expect(q(".sc-ep-tag").textContent).toBe("H2");
   });
 });
 
-describe("PropertiesPanel — content & style edits (R2)", () => {
-  it("records a setStyle op with before→after when a number control changes", () => {
-    const { session, q } = mount();
+describe("PropertiesPanel — Type settings (text)", () => {
+  it("records a setStyle font-size with the px unit", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
     const input = q(".sc-ep-ctl-font-size");
     input.value = "48";
     input.dispatch("input", {});
-
-    expect(session.size).toBe(1);
     const op = session.list()[0]!;
     expect(op.type).toBe("setStyle");
     expect(op.property).toBe("font-size");
     expect(op.after).toBe("48px");
-    // Target carries a selector + anchors for re-resolution.
     expect(op.target.selector.length).toBeGreaterThan(0);
   });
 
-  it("records a select (font-weight) change", () => {
-    const { session, q } = mount();
+  it("records a font-weight select change", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "p", "Copy"), doc });
     const select = q(".sc-ep-ctl-font-weight");
     select.value = "700";
     select.dispatch("change", {});
     const op = session.list()[0]!;
-    expect(op.type).toBe("setStyle");
     expect(op.property).toBe("font-weight");
     expect(op.after).toBe("700");
   });
 
-  it("coalesces repeated nudges of one property into a single edit", () => {
-    const { session, q } = mount();
+  it("records text-align via the segmented control", () => {
+    const { doc } = makeFakeDom();
+    const { session, segByText } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    segByText(".sc-ep-ctl-text-align", "Center").dispatch("click", {});
+    const op = session.list()[0]!;
+    expect(op.property).toBe("text-align");
+    expect(op.after).toBe("center");
+  });
+
+  it("coalesces repeated size nudges into a single edit", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
     const input = q(".sc-ep-ctl-font-size");
     input.value = "40";
     input.dispatch("input", {});
@@ -120,150 +168,248 @@ describe("PropertiesPanel — content & style edits (R2)", () => {
     expect(session.size).toBe(1);
     expect(session.list()[0]!.after).toBe("52px");
   });
+});
 
-  it("records a normalized setText edit and previews it on the element", () => {
-    const { session, el, q } = mount();
-    const textarea = q(".sc-ep-textarea");
-    textarea.value = "  New   copy ";
-    textarea.dispatch("input", {});
-    const op = session.list()[0]!;
-    expect(op.type).toBe("setText");
-    expect(op.after).toBe("New copy"); // whitespace-collapsed
-    expect(el.textContent).toBe("  New   copy "); // ephemeral preview applied verbatim
+describe("PropertiesPanel — Colour + opacity", () => {
+  it("records the colour from the hex field and mirrors it to the swatch", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    const hex = q(".sc-ep-ctl-hex");
+    hex.value = "#123456";
+    hex.dispatch("input", {});
+    const op = session.list().find((o) => o.property === "color")!;
+    expect(op.after).toBe("#123456");
+  });
+
+  it("records opacity as a 0–1 fraction from the percent field", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const op = q(".sc-ep-ctl-opacity");
+    op.value = "50";
+    op.dispatch("input", {});
+    const recorded = session.list().find((o) => o.property === "opacity")!;
+    expect(recorded.after).toBe("0.5");
   });
 });
 
-describe("PropertiesPanel — structural edits (R3)", () => {
-  it("hide then show coalesces to a net no-op in the buffer", () => {
-    const { session, btnByLabel } = mount();
-    btnByLabel("Hide").dispatch("click", {});
-    expect(session.size).toBe(1);
-    expect(session.list()[0]!.type).toBe("setVisibility");
-    // The button flips to "Show"; clicking it cancels the hide.
-    btnByLabel("Show").dispatch("click", {});
-    expect(session.isEmpty()).toBe(true);
-  });
-
-  it("delete records removeNode and undo reverts it (reversible in the buffer)", () => {
-    const { session, btnByLabel } = mount();
-    btnByLabel("Delete").dispatch("click", {});
-    expect(session.list().some((o) => o.type === "removeNode")).toBe(true);
-    btnByLabel("Undo delete").dispatch("click", {});
-    expect(session.isEmpty()).toBe(true);
-  });
-
-  it("reorder records a moveNode with a parent anchor + indices", () => {
+describe("PropertiesPanel — Layout (container) implies display:flex", () => {
+  it("recording a flex-direction also records display:flex for a coherent change-set", () => {
     const { doc } = makeFakeDom();
-    const container = doc.createElement("section");
-    doc.body.appendChild(container);
-    const a = doc.createElement("div");
-    const b = doc.createElement("div");
-    const c = doc.createElement("div");
-    a.textContent = "A";
-    b.textContent = "B";
-    c.textContent = "C";
-    container.append(a, b, c);
+    const { session, segByText } = mount({ el: makeEl(doc, "div", "box"), doc });
+    segByText(".sc-ep-ctl-flex-direction", "Column").dispatch("click", {});
+    const props = session.list().map((o) => o.property);
+    expect(props).toContain("display");
+    expect(props).toContain("flex-direction");
+    expect(session.list().find((o) => o.property === "display")!.after).toBe("flex");
+    expect(session.list().find((o) => o.property === "flex-direction")!.after).toBe("column");
+  });
 
-    const { session, btnByLabel } = mount({ el: b, doc });
-    btnByLabel("Move up").dispatch("click", {});
+  it("records gap in px", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const gap = q(".sc-ep-ctl-gap");
+    gap.value = "48";
+    gap.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "gap")!.after).toBe("48px");
+  });
+});
+
+describe("PropertiesPanel — Spacing (padding/margin toggle + lock)", () => {
+  it("records padding-<side> by default and margin-<side> after toggling", () => {
+    const { doc } = makeFakeDom();
+    const { session, q, segByText } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const top = q(".sc-ep-ctl-top");
+    top.value = "12";
+    top.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "padding-top")!.after).toBe("12px");
+
+    segByText(".sc-ep-spacing-toggle", "Margin").dispatch("click", {});
+    top.value = "8";
+    top.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "margin-top")!.after).toBe("8px");
+  });
+
+  it("with Lock on, editing one side records all four sides", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    q(".sc-ep-lock").dispatch("click", {}); // enable lock
+    const top = q(".sc-ep-ctl-top");
+    top.value = "16";
+    top.dispatch("input", {});
+    const props = session.list().map((o) => o.property).sort();
+    expect(props).toEqual([
+      "padding-bottom",
+      "padding-left",
+      "padding-right",
+      "padding-top",
+    ]);
+  });
+});
+
+describe("PropertiesPanel — Size (Fixed/Auto)", () => {
+  it("records a fixed width in px", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const mode = q(".sc-ep-ctl-width-mode");
+    mode.value = "fixed";
+    mode.dispatch("change", {});
+    const w = q(".sc-ep-ctl-width");
+    w.value = "1228";
+    w.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "width")!.after).toBe("1228px");
+  });
+
+  it("records width:auto when the mode is set to Auto", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const mode = q(".sc-ep-ctl-width-mode");
+    mode.value = "auto";
+    mode.dispatch("change", {});
+    expect(session.list().find((o) => o.property === "width")!.after).toBe("auto");
+  });
+});
+
+describe("PropertiesPanel — Position (place-self cross)", () => {
+  it("records place-self from a cross anchor", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    q(".sc-ep-cross-center").dispatch("click", {});
+    const op = session.list().find((o) => o.property === "place-self")!;
+    expect(op.after).toBe("center center");
+  });
+});
+
+describe("PropertiesPanel — Arrange (functional reorder, requirement F)", () => {
+  it("shows Move up/down only when the element has siblings", () => {
+    const { doc } = makeFakeDom();
+    const lonely = mount({ el: makeEl(doc, "div", "only"), doc });
+    expect(lonely.maybe(".sc-ep-move-up")).toBeNull();
+
+    const { doc: doc2 } = makeFakeDom();
+    const { el } = withSiblings(doc2, "div");
+    const withArrange = mount({ el, doc: doc2 });
+    expect(withArrange.maybe(".sc-ep-move-up")).not.toBeNull();
+  });
+
+  it("records a moveNode with a parent anchor, reference neighbour, and before/after", () => {
+    const { doc } = makeFakeDom();
+    const { el, parent } = withSiblings(doc, "div"); // el is the MIDDLE child (index 1)
+    const { session, q } = mount({ el, doc });
+    q(".sc-ep-move-up").dispatch("click", {});
     const op = session.list().find((o) => o.type === "moveNode")!;
     expect(op).toBeTruthy();
     expect(op.order).toEqual({ from: 1, to: 0 });
-    expect(op.insertion?.parent).toBeTruthy();
     expect(op.insertion?.position).toBe("before");
-  });
-
-  it("insert records an insertNode with an insertion point + semantic node (AE5)", () => {
-    const { doc } = makeFakeDom();
-    const container = doc.createElement("section");
-    doc.body.appendChild(container);
-    const anchor = doc.createElement("p");
-    anchor.textContent = "Existing";
-    container.appendChild(anchor);
-
-    const { session, parent } = mount({ el: anchor, doc });
-    const tag = parent.querySelector(".sc-ep-insert-tag")!;
-    tag.value = "button";
-    const text = parent.querySelector(".sc-ep-insert-text")!;
-    text.value = "Sign up";
-    parent.querySelector(".sc-ep-insert-add")!.dispatch("click", {});
-
-    const op = session.list().find((o) => o.type === "insertNode")!;
-    expect(op).toBeTruthy();
-    expect(op.node).toEqual({ tag: "button", text: "Sign up" });
-    expect(op.insertion?.position).toBe("after");
+    expect(op.insertion?.parent).toBeTruthy();
     expect(op.insertion?.reference).toBeTruthy();
-    // A ghost preview node was injected (best-effort; ours, safe to remove).
-    expect(container.children.length).toBe(2);
+    // The preview ACTUALLY moved the node (requirement F): middle → first.
+    expect(parent.children.indexOf(el)).toBe(0);
   });
 });
 
-describe("PropertiesPanel — discard & teardown (G13/R7, plans/008)", () => {
-  it("requires an explicit two-step confirm to discard the buffer", () => {
-    const { session, q } = mount();
+describe("PropertiesPanel — footer (N edits · Undo · Save comment)", () => {
+  it("disables Undo + Save until there's an edit, then enables both", () => {
+    const { doc } = makeFakeDom();
+    const { q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    expect(q(".sc-ep-save").disabled).toBe(true);
+    expect(q(".sc-ep-undo").disabled).toBe(true);
+    const input = q(".sc-ep-ctl-font-size");
+    input.value = "40";
+    input.dispatch("input", {});
+    expect(q(".sc-ep-save").disabled).toBe(false);
+    expect(q(".sc-ep-undo").disabled).toBe(false);
+  });
+
+  it("shows the edit count and updates it", () => {
+    const { doc } = makeFakeDom();
+    const { q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    expect(q(".sc-ep-count").textContent).toBe("0 edits");
+    const input = q(".sc-ep-ctl-font-size");
+    input.value = "40";
+    input.dispatch("input", {});
+    expect(q(".sc-ep-count").textContent).toBe("1 edit");
+  });
+
+  it("Undo removes the last edit and refreshes the count", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
     q(".sc-ep-ctl-font-size").value = "40";
     q(".sc-ep-ctl-font-size").dispatch("input", {});
+    q(".sc-ep-ctl-color").value = "#111111";
+    q(".sc-ep-ctl-color").dispatch("input", {});
+    expect(session.size).toBe(2);
+    q(".sc-ep-undo").dispatch("click", {});
     expect(session.size).toBe(1);
+    expect(q(".sc-ep-count").textContent).toBe("1 edit");
+  });
 
-    const discard = q(".sc-ep-discard");
-    discard.dispatch("click", {}); // arms only
+  it("Save fires onSave without mutating the buffer (the controller folds it in)", () => {
+    const { doc } = makeFakeDom();
+    const { session, q, state } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    q(".sc-ep-save").dispatch("click", {});
+    expect(state.saved).toBe(true);
     expect(session.size).toBe(1);
-    expect(discard.textContent).toBe("Confirm discard?");
-    discard.dispatch("click", {}); // confirms
-    expect(session.isEmpty()).toBe(true);
+  });
+});
+
+describe("PropertiesPanel — teardown + contract", () => {
+  it("× fires onClose", () => {
+    const { doc } = makeFakeDom();
+    const { q, state } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    q(".sc-ep-close").dispatch("click", {});
+    expect(state.closed).toBe(true);
   });
 
   it("destroy() removes the panel and unbinds its listeners", () => {
-    const { session, parent, q, panel } = mount();
+    const { doc } = makeFakeDom();
+    const { session, parent, q, panel } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
     const fontSize = q(".sc-ep-ctl-font-size");
     fontSize.value = "40";
     fontSize.dispatch("input", {});
     expect(session.size).toBe(1);
-
-    const color = q(".sc-ep-ctl-color");
     panel.destroy();
     expect(parent.querySelector(".sc-edit-panel")).toBeNull();
-
     // A change dispatched after teardown must NOT record a new op.
-    color.value = "#ff0000";
-    color.dispatch("input", {});
+    fontSize.value = "80";
+    fontSize.dispatch("input", {});
     expect(session.size).toBe(1);
   });
-});
 
-describe("PropertiesPanel — save bridge (U13)", () => {
-  it("enables Save only after an edit and fires onSave without touching the buffer", () => {
-    const { session, q, state } = mount();
-    const save = q(".sc-ep-save");
-    expect(save.disabled).toBe(true); // nothing to save yet
-
-    q(".sc-ep-ctl-font-size").value = "40";
-    q(".sc-ep-ctl-font-size").dispatch("input", {});
-    expect(save.disabled).toBe(false);
-
-    save.dispatch("click", {});
-    expect(state.saved).toBe(true);
-    // Saving hands off to the controller (which folds the buffer in at submit);
-    // the panel itself does not clear or mutate the buffer.
-    expect(session.size).toBe(1);
-  });
-});
-
-describe("PropertiesPanel — contract", () => {
   it("every recorded op validates against changeOpSchema", () => {
-    const { session, q, btnByLabel } = mount();
-    q(".sc-ep-ctl-font-size").value = "48";
-    q(".sc-ep-ctl-font-size").dispatch("input", {});
-    q(".sc-ep-ctl-color").value = "#123456";
-    q(".sc-ep-ctl-color").dispatch("input", {});
-    q(".sc-ep-textarea").value = "Hello";
-    q(".sc-ep-textarea").dispatch("input", {});
-    btnByLabel("Hide").dispatch("click", {});
+    const { doc } = makeFakeDom();
+    const { el } = withSiblings(doc, "div");
+    const { session, q, segByText } = mount({ el, doc });
+    segByText(".sc-ep-ctl-flex-direction", "Row").dispatch("click", {});
+    q(".sc-ep-ctl-gap").value = "24";
+    q(".sc-ep-ctl-gap").dispatch("input", {});
+    q(".sc-ep-ctl-top").value = "8";
+    q(".sc-ep-ctl-top").dispatch("input", {});
+    q(".sc-ep-cross-center").dispatch("click", {});
+    q(".sc-ep-move-up").dispatch("click", {});
 
     const ops: ChangeOp[] = session.list();
-    expect(ops.length).toBeGreaterThanOrEqual(3);
+    expect(ops.length).toBeGreaterThanOrEqual(4);
     for (const op of ops) {
       expect(() => changeOpSchema.parse(op)).not.toThrow();
     }
+  });
+});
+
+describe("colour helpers", () => {
+  it("normalizeHex accepts #rgb, rrggbb, and bare input", () => {
+    expect(normalizeHex("#abc")).toBe("#aabbcc");
+    expect(normalizeHex("123456")).toBe("#123456");
+    expect(normalizeHex("  #FFFFFF ")).toBe("#ffffff");
+    expect(normalizeHex("not-a-colour")).toBeNull();
+  });
+
+  it("rgbToHex converts rgb()/rgba() and passes through hex", () => {
+    expect(rgbToHex("rgb(255, 0, 128)")).toBe("#ff0080");
+    expect(rgbToHex("rgba(0, 16, 32, 0.5)")).toBe("#001020");
+    expect(rgbToHex("#abcdef")).toBe("#abcdef");
+    expect(rgbToHex(null)).toBeNull();
+    expect(rgbToHex("transparent")).toBeNull();
   });
 });

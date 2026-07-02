@@ -193,6 +193,33 @@ describe("summarizeChangeSet (U16, R14)", () => {
     expect(prose).toContain("; "); // ops joined
   });
 
+  it("renders a moveNode as an anchored 'move X before/after Y' line (R14/F)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "m1",
+            type: "moveNode",
+            target: { selector: "div.card", anchors: [] },
+            insertion: {
+              position: "before",
+              parent: { selector: "section.grid", anchors: [] },
+              reference: { selector: "div.hero", anchors: [] },
+            },
+            order: { from: 2, to: 0 },
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context);
+    expect(prose).toContain("move div.card before div.hero");
+    expect(prose).toContain("(position 2→0)");
+  });
+
   it("returns null when there is no change-set", () => {
     expect(
       summarizeChangeSet({

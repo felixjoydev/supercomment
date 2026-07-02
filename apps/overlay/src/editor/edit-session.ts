@@ -81,6 +81,28 @@ export class EditSession {
     this.ops.delete(opKey(op));
   }
 
+  /** True when an op with this logical key is currently buffered. Lets the
+   * controller keep its ephemeral preview log in lockstep with the buffer
+   * (e.g. drop a preview whose op just coalesced away to a net no-op). */
+  has(op: ChangeOp): boolean {
+    return this.ops.has(opKey(op));
+  }
+
+  /**
+   * Undo the most-recently recorded edit (the footer Undo, requirement H).
+   * Returns the removed op (so the caller can revert its ephemeral preview) or
+   * null when the buffer is empty. Insertion order is preserved through
+   * coalescing, so this is the last *distinct* edit the reviewer made.
+   */
+  undoLast(): ChangeOp | null {
+    let lastKey: string | undefined;
+    for (const key of this.ops.keys()) lastKey = key; // Map preserves insert order
+    if (lastKey === undefined) return null;
+    const op = this.ops.get(lastKey) ?? null;
+    this.ops.delete(lastKey);
+    return op;
+  }
+
   /** True when nothing has been edited yet. */
   isEmpty(): boolean {
     return this.ops.size === 0;

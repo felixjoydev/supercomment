@@ -1,59 +1,55 @@
 /**
- * U9 — the visual-editor properties panel.
+ * The visual-editor properties panel (rebuilt — editor redesign).
  *
- * A shadow-root inspector, bound to ONE selected element, that turns direct
- * manipulations into the semantic `ChangeOp`s of the U1 contract. It is the UI
- * layer over the already-built, unit-tested op-builders + ephemeral previews
- * (`style-edits.ts` / `structural-edits.ts`); it holds no durable state of its
- * own — every edit is `record()`ed into the controller's cross-element
- * {@link EditSession}, so switching elements or modes never loses work (G13/R7).
+ * A dark, right-docked inspector bound to ONE selected element that turns direct
+ * manipulations into the semantic `ChangeOp`s of the change-set contract. It is
+ * CONTEXT-AWARE: the sections it shows are computed from the element type, so the
+ * reviewer only ever sees properties they can actually change on THIS element
+ * (requirement A + the user's contextual note):
  *
- * What it records (the durable artifact) vs. what it previews (throwaway, a
- * framework re-render may revert it — G6):
- *  - Content:   inline text  → `setText`   + `applyTextPreview`   (leaf nodes only)
- *  - Style:     type/color/effects/spacing → `setStyle` + `applyStylePreview`
- *  - Structure: hide / delete / reorder / insert → `setVisibility`/`removeNode`/
- *               `moveNode`/`insertNode`, previewed via CSS only (never mutating
- *               framework-owned child lists — G12).
+ *   - text (h1–h6, p, span, a, li…)        → Type settings + Colour
+ *   - container (div, section, header…)    → Layout + Spacing + Size + Position + Colour
+ *   - other (img, svg, input…)             → Spacing + Size + Position + Colour
+ *   - anything with siblings               → Arrange (functional reorder, requirement F)
  *
- * `before` values are snapshotted from the developer's build the first time a
- * property is touched (before any preview is applied), so the change-set always
- * reflects "build → desired", and the EditSession drops a value that returns to
- * its original. Original / clean-room "quiet gallery" design; no third-party UI.
- * Every listener is tracked and removed in {@link destroy} (plans/008).
+ * Every control PRE-FILLS from the element's live computed style (requirement B),
+ * applies an EPHEMERAL preview to the DOM, and records the semantic property
+ * change (before→after + anchored target). The panel holds no durable state — it
+ * records into the controller's cross-element {@link EditSession} via callbacks,
+ * and the controller owns the ephemeral {@link PreviewLog}, so switching elements
+ * or modes never loses work (G13/R7) and closing reverts the previews.
+ *
+ * Text CONTENT is edited by double-clicking the element (see `inline-text.ts`),
+ * not here — the panel is styling only, matching the reference. The insert-node
+ * ("Add element") control is intentionally gone (requirement G). Original,
+ * clean-room design; every listener is tracked and removed in {@link destroy}.
  */
-import type { ChangeOp, EditTarget, InsertionPoint, NewNode } from "@supercomment/shared";
+import type { ChangeOp, EditTarget, InsertionPoint } from "@supercomment/shared";
 
 import {
   applyStylePreview,
-  applyTextPreview,
   buildStyleOp,
-  buildTextOp,
   readComputedValue,
-  readText,
 } from "./style-edits.js";
 import {
-  buildInsertOp,
   buildMoveOp,
-  buildRemoveOp,
-  buildSetVisibilityOp,
-  previewHide,
-  previewOrder,
-  previewShow,
+  previewMove,
 } from "./structural-edits.js";
 import { buildEditTarget } from "./edit-target.js";
 
-/** How the controller records/reverts edits into its durable EditSession. */
+/** How the controller records/reverts edits into its durable EditSession + preview log. */
 export interface PanelCallbacks {
-  /** Record (or coalesce) one edit into the session. */
-  record(op: ChangeOp): void;
-  /** Remove a previously recorded edit (an explicit revert). */
-  revert(op: ChangeOp): void;
-  /** Throw away ALL in-progress edits (explicit discard, R7). */
+  /** Record (or coalesce) one edit, plus a thunk that reverts its ephemeral preview. */
+  record(op: ChangeOp, revert?: () => void): void;
+  /** Drop a specific recorded edit and revert its preview (an explicit toggle-off). */
+  removeEdit(op: ChangeOp): void;
+  /** Undo the LAST recorded edit (footer Undo) — reverts its preview too. */
+  undo(): void;
+  /** Throw away ALL in-progress edits + previews (explicit discard, R7). */
   discard(): void;
   /** Current number of distinct edits, for the footer counter. */
   count(): number;
-  /** The reviewer closed the panel (keeps the buffer; just dismisses the UI). */
+  /** The reviewer closed the panel (× / Esc); previews revert, buffer is kept. */
   onClose(): void;
   /** Finalize the buffered edits as a template comment (opens the comment form). */
   onSave(): void;
@@ -65,60 +61,46 @@ interface Listenable {
   removeEventListener?(type: string, handler: (e: unknown) => void): void;
 }
 
-interface StyleControl {
-  property: string;
-  label: string;
-  kind: "number" | "color" | "select";
-  /** Appended to a numeric value, e.g. "px". */
-  unit?: string;
-  options?: Array<{ label: string; value: string }>;
+/** Which section family an element belongs to (drives contextual show/hide). */
+type Category = "text" | "container" | "other";
+
+const TEXT_TAGS = new Set([
+  "h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "li", "strong", "em",
+  "small", "b", "i", "u", "s", "code", "label", "blockquote", "caption",
+  "figcaption", "th", "td", "button", "summary", "cite", "q", "mark", "time",
+  "abbr", "dt", "dd", "legend", "pre", "kbd",
+]);
+const CONTAINER_TAGS = new Set([
+  "div", "section", "header", "footer", "nav", "main", "article", "aside", "ul",
+  "ol", "form", "figure", "details", "dialog", "fieldset", "table", "thead",
+  "tbody", "tr", "picture", "menu",
+]);
+
+function categoryOf(el: Element): Category {
+  const tag = (el.tagName || "").toLowerCase();
+  if (TEXT_TAGS.has(tag)) return "text";
+  if (CONTAINER_TAGS.has(tag)) return "container";
+  return "other";
 }
-
-/** The style properties the panel exposes (R2: typography, color, effects, spacing). */
-const STYLE_CONTROLS: StyleControl[] = [
-  { property: "font-size", label: "Font size", kind: "number", unit: "px" },
-  {
-    property: "font-weight",
-    label: "Weight",
-    kind: "select",
-    options: [
-      { label: "Normal", value: "400" },
-      { label: "Medium", value: "500" },
-      { label: "Semibold", value: "600" },
-      { label: "Bold", value: "700" },
-    ],
-  },
-  { property: "color", label: "Text color", kind: "color" },
-  { property: "background-color", label: "Background", kind: "color" },
-  { property: "border-radius", label: "Radius", kind: "number", unit: "px" },
-  { property: "padding", label: "Padding", kind: "number", unit: "px" },
-];
-
-/** Tags offered by the "add element" control (semantic node, not raw HTML). */
-const INSERT_TAGS = ["button", "p", "span", "div", "a", "h2"];
 
 export class PropertiesPanel {
   private readonly root: HTMLElement;
   private readonly disposers: Array<() => void> = [];
-  /** Original computed value per style property (snapshotted before any preview). */
-  private readonly originals = new Map<string, string | null>();
-  /** Ephemeral ghost nodes injected for insert previews (ours; safe to remove). */
-  private readonly ghosts: Element[] = [];
+  /** Developer-build computed value per property (snapshotted before any preview) — the op `before`. */
+  private readonly originalComputed = new Map<string, string | null>();
+  /** Preview-revert closure per property (captures original INLINE value, once). */
+  private readonly styleReverts = new Map<string, () => void>();
+  /** Control re-initializers (read computed → display), re-run on undo. */
+  private readonly initializers: Array<() => void> = [];
+  private readonly category: Category;
+
+  /** Which spacing family the 4-side inputs currently edit. */
+  private spacingMode: "padding" | "margin" = "padding";
+  private spacingLinked = false;
 
   private countEl!: HTMLElement;
-  private discardBtn!: HTMLButtonElement;
+  private undoBtn!: HTMLButtonElement;
   private saveBtn!: HTMLButtonElement;
-  private discardArmed = false;
-
-  private originalText: string | null = null;
-
-  private hidden = false;
-  private priorDisplay: string | null = null;
-  private hideBtn: HTMLButtonElement | null = null;
-
-  private deleted = false;
-  private removeOp: ChangeOp | null = null;
-  private deleteBtn: HTMLButtonElement | null = null;
 
   constructor(
     private readonly doc: Document,
@@ -127,19 +109,30 @@ export class PropertiesPanel {
     private readonly target: EditTarget,
     private readonly cb: PanelCallbacks,
   ) {
+    this.category = categoryOf(el);
     this.root = doc.createElement("div");
-    this.root.className = "sc-edit-panel";
+    this.root.className = "sc-edit-panel sc-ep-dark";
     this.root.setAttribute("role", "dialog");
     this.root.setAttribute("aria-label", "Edit element");
 
     this.buildHeader();
-    if (this.isTextLeaf()) this.buildContentSection();
-    this.buildStyleSection();
-    this.buildStructureSection();
-    this.buildInsertSection();
+    if (this.category === "text") {
+      this.buildTypeSection();
+    }
+    if (this.category === "container") {
+      this.buildLayoutSection();
+    }
+    if (this.category !== "text") {
+      this.buildSpacingSection();
+      this.buildSizeSection();
+      this.buildPositionSection();
+    }
+    this.buildColourSection(this.category === "text" ? "color" : "background-color");
+    this.buildArrangeSection();
     this.buildFooter();
 
     parent.appendChild(this.root);
+    this.syncControls();
     this.refreshCount();
   }
 
@@ -152,203 +145,355 @@ export class PropertiesPanel {
         /* teardown is best-effort */
       }
     }
-    for (const ghost of this.ghosts.splice(0)) {
-      try {
-        ghost.remove();
-      } catch {
-        /* best-effort */
-      }
-    }
     this.root.remove();
   }
 
-  // --- Sections ------------------------------------------------------------
+  /** Re-read every control from live computed style (initial fill + post-undo re-sync). */
+  private syncControls(): void {
+    for (const init of this.initializers) {
+      try {
+        init();
+      } catch {
+        /* a control that can't read stays at its default */
+      }
+    }
+  }
+
+  // --- Header --------------------------------------------------------------
 
   private buildHeader(): void {
     const header = this.create("div", "sc-ep-header");
-    const title = this.create("div", "sc-ep-title");
-    title.textContent = "Edit";
-    const targetLabel = this.create("div", "sc-ep-target");
-    targetLabel.textContent = describeElement(this.el);
-    targetLabel.title = this.target.selector;
+
+    const handle = this.create("div", "sc-ep-handle");
+    handle.setAttribute("aria-hidden", "true");
+    handle.textContent = "⠿";
+    this.enableDrag(handle);
+
+    const tag = this.create("div", "sc-ep-tag");
+    tag.textContent = (this.el.tagName || "node").toUpperCase();
+
     const close = this.button("sc-ep-close", "×", () => this.cb.onClose());
     close.setAttribute("aria-label", "Close editor");
-    const headings = this.create("div", "sc-ep-headings");
-    headings.append(title, targetLabel);
-    header.append(headings, close);
+    close.title = this.target.selector;
+
+    const left = this.create("div", "sc-ep-header-left");
+    left.append(handle, tag);
+    header.append(left, close);
     this.root.appendChild(header);
   }
 
-  private buildContentSection(): void {
-    const section = this.section("Content");
-    const row = this.create("div", "sc-ep-row sc-ep-row-stack");
-    const label = this.create("label", "sc-ep-label");
-    label.textContent = "Text";
-    const input = this.create("textarea", "sc-ep-input sc-ep-textarea") as HTMLTextAreaElement;
-    this.originalText = readText(this.el);
-    input.value = this.originalText;
-    this.on(input, "input", () => this.recordText(input.value));
-    row.append(label, input);
-    section.appendChild(row);
+  // --- Type settings (text) ------------------------------------------------
+
+  private buildTypeSection(): void {
+    const body = this.section("Type settings");
+    body.appendChild(
+      this.selectRow("Style", "font-family", [
+        { label: "Sans", value: "sans-serif" },
+        { label: "Serif", value: "serif" },
+        { label: "Mono", value: "monospace" },
+        { label: "System", value: "system-ui" },
+        { label: "Inherit", value: "inherit" },
+      ]),
+    );
+    body.appendChild(
+      this.selectRow("Weight", "font-weight", [
+        { label: "Light", value: "300" },
+        { label: "Regular", value: "400" },
+        { label: "Medium", value: "500" },
+        { label: "Semibold", value: "600" },
+        { label: "Bold", value: "700" },
+      ]),
+    );
+    body.appendChild(this.numberRow("Size", "font-size", { unit: "px", step: 1 }));
+    body.appendChild(
+      this.numberRow("Letter spacing", "letter-spacing", { unit: "px", step: 0.5, allowNegative: true }),
+    );
+    body.appendChild(this.numberRow("Line height", "line-height", { step: 0.1 }));
+    body.appendChild(
+      this.segmentedRow("Alignment", "text-align", [
+        { label: "Left", value: "left" },
+        { label: "Center", value: "center" },
+        { label: "Right", value: "right" },
+        { label: "Justify", value: "justify" },
+      ]),
+    );
   }
 
-  private buildStyleSection(): void {
-    const section = this.section("Style");
-    for (const control of STYLE_CONTROLS) {
-      section.appendChild(this.styleRow(control));
+  // --- Layout (container) --------------------------------------------------
+
+  private buildLayoutSection(): void {
+    const body = this.section("Layout");
+    body.appendChild(
+      this.segmentedRow("Direction", "flex-direction", [
+        { label: "Row", value: "row" },
+        { label: "Column", value: "column" },
+      ], { wide: true, ensureFlex: true }),
+    );
+    body.appendChild(
+      this.selectRow("Align", "align-items", [
+        { label: "Start", value: "flex-start" },
+        { label: "Center", value: "center" },
+        { label: "End", value: "flex-end" },
+        { label: "Stretch", value: "stretch" },
+        { label: "Baseline", value: "baseline" },
+      ], { ensureFlex: true }),
+    );
+    body.appendChild(
+      this.selectRow("Justify", "justify-content", [
+        { label: "Start", value: "flex-start" },
+        { label: "Center", value: "center" },
+        { label: "End", value: "flex-end" },
+        { label: "Space between", value: "space-between" },
+        { label: "Space around", value: "space-around" },
+        { label: "Space evenly", value: "space-evenly" },
+      ], { ensureFlex: true }),
+    );
+    body.appendChild(this.numberRow("Gap", "gap", { unit: "px", step: 1, ensureFlex: true }));
+  }
+
+  // --- Spacing (container / other) -----------------------------------------
+
+  private buildSpacingSection(): void {
+    const body = this.section("Spacing");
+
+    // Padding / Margin toggle — flips which family the four side inputs edit.
+    const toggle = this.create("div", "sc-ep-segmented sc-ep-spacing-toggle");
+    const pad = this.segButton("Padding", () => this.setSpacingMode("padding"));
+    const mar = this.segButton("Margin", () => this.setSpacingMode("margin"));
+    toggle.append(pad, mar);
+    body.appendChild(toggle);
+    this.initializers.push(() => {
+      pad.setAttribute("aria-pressed", String(this.spacingMode === "padding"));
+      mar.setAttribute("aria-pressed", String(this.spacingMode === "margin"));
+    });
+
+    // Four side inputs in a 2×2 grid, each with a box-side glyph + stepper.
+    const grid = this.create("div", "sc-ep-side-grid");
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      grid.appendChild(this.sideField(side));
     }
+    body.appendChild(grid);
+
+    // Lock — editing one side sets all four.
+    const lockRow = this.create("div", "sc-ep-row");
+    const lockLabel = this.create("label", "sc-ep-label");
+    lockLabel.textContent = "Lock spacing";
+    const lock = this.create("button", "sc-ep-switch sc-ep-lock") as HTMLButtonElement;
+    lock.type = "button";
+    lock.setAttribute("role", "switch");
+    lock.setAttribute("aria-checked", "false");
+    this.on(lock, "click", () => {
+      this.spacingLinked = !this.spacingLinked;
+      lock.setAttribute("aria-checked", String(this.spacingLinked));
+    });
+    lockRow.append(lockLabel, lock);
+    body.appendChild(lockRow);
   }
 
-  private styleRow(control: StyleControl): HTMLElement {
-    const row = this.create("div", "sc-ep-row");
-    const label = this.create("label", "sc-ep-label");
-    label.textContent = control.label;
+  private setSpacingMode(mode: "padding" | "margin"): void {
+    this.spacingMode = mode;
+    this.syncControls(); // re-read the four sides for the new family
+  }
 
-    // A per-property class (e.g. `sc-ep-ctl-font-size`) lets tests + callers
-    // locate a specific control without an attribute selector.
-    const ctl = `sc-ep-ctl-${control.property}`;
+  /** One side input (top/right/bottom/left) whose property tracks the spacing mode. */
+  private sideField(side: "top" | "right" | "bottom" | "left"): HTMLElement {
+    const wrap = this.create("div", `sc-ep-num sc-ep-side sc-ep-side-${side}`);
+    const glyph = this.create("span", `sc-ep-side-glyph sc-ep-side-glyph-${side}`);
+    glyph.setAttribute("aria-hidden", "true");
+    const input = this.create("input", `sc-ep-number sc-ep-ctl-${side}`) as HTMLInputElement;
+    input.type = "number";
+    input.setAttribute("aria-label", `${side} spacing`);
+    const propOf = (): string => `${this.spacingMode}-${side}`;
 
-    let input: HTMLElement;
-    if (control.kind === "select") {
-      const select = this.create("select", `sc-ep-select ${ctl}`) as HTMLSelectElement;
-      for (const opt of control.options ?? []) {
-        const option = this.create("option") as HTMLOptionElement;
-        option.value = opt.value;
-        option.textContent = opt.label;
-        select.appendChild(option);
+    const commit = (raw: string): void => {
+      if (raw.trim() === "") return;
+      const value = `${raw}px`;
+      if (this.spacingLinked) {
+        for (const s of ["top", "right", "bottom", "left"] as const) {
+          this.recordStyle(`${this.spacingMode}-${s}`, value);
+        }
+        this.syncControls();
+      } else {
+        this.recordStyle(propOf(), value);
       }
-      this.on(select, "change", () =>
-        this.recordStyle(control, (select as HTMLSelectElement).value),
-      );
-      input = select;
-    } else if (control.kind === "color") {
-      const color = this.create("input", `sc-ep-color ${ctl}`) as HTMLInputElement;
-      color.type = "color";
-      this.on(color, "input", () =>
-        this.recordStyle(control, (color as HTMLInputElement).value),
-      );
-      input = color;
-    } else {
-      const number = this.create("input", `sc-ep-number ${ctl}`) as HTMLInputElement;
-      number.type = "number";
-      number.placeholder = control.unit ?? "";
-      this.on(number, "input", () => {
-        const raw = (number as HTMLInputElement).value;
-        if (raw.trim() === "") return; // cleared field records nothing
-        this.recordStyle(control, `${raw}${control.unit ?? ""}`);
-      });
-      input = number;
+    };
+    this.on(input, "input", () => commit(input.value));
+
+    const stepper = this.stepper(
+      () => this.bump(input, 1, false, commit),
+      () => this.bump(input, -1, false, commit),
+    );
+    wrap.append(glyph, input, stepper);
+
+    this.initializers.push(() => {
+      input.value = this.readNumber(propOf());
+    });
+    return wrap;
+  }
+
+  // --- Size (container / other) --------------------------------------------
+
+  private buildSizeSection(): void {
+    const body = this.section("Size");
+    body.appendChild(this.sizeRow("W", "width"));
+    body.appendChild(this.sizeRow("H", "height"));
+  }
+
+  /** A dimension row: label + number + Fixed/Auto mode. Auto → `<dim>: auto`. */
+  private sizeRow(label: string, property: "width" | "height"): HTMLElement {
+    const row = this.create("div", "sc-ep-row");
+    const lab = this.create("label", "sc-ep-label sc-ep-dim-label");
+    lab.textContent = label;
+
+    const numWrap = this.create("div", `sc-ep-num sc-ep-ctl-${property}-wrap`);
+    const input = this.create("input", `sc-ep-number sc-ep-ctl-${property}`) as HTMLInputElement;
+    input.type = "number";
+    input.setAttribute("aria-label", `${property}`);
+    const stepper = this.stepper(
+      () => this.bump(input, 1, false, (raw) => this.recordStyle(property, `${raw}px`)),
+      () => this.bump(input, -1, false, (raw) => this.recordStyle(property, `${raw}px`)),
+    );
+    numWrap.append(input, stepper);
+
+    const mode = this.create("select", `sc-ep-select sc-ep-dim-mode sc-ep-ctl-${property}-mode`) as HTMLSelectElement;
+    for (const opt of [{ label: "Fixed", value: "fixed" }, { label: "Auto", value: "auto" }]) {
+      const o = this.create("option") as HTMLOptionElement;
+      o.value = opt.value;
+      o.textContent = opt.label;
+      mode.appendChild(o);
     }
-    input.setAttribute("data-property", control.property);
-    row.append(label, input);
+
+    const commitFixed = (raw: string): void => {
+      if (raw.trim() === "") return;
+      this.recordStyle(property, `${raw}px`);
+    };
+    this.on(input, "input", () => {
+      if (mode.value === "fixed") commitFixed(input.value);
+    });
+    this.on(mode, "change", () => {
+      const auto = mode.value === "auto";
+      input.disabled = auto;
+      if (auto) this.recordStyle(property, "auto");
+      else if (input.value.trim() !== "") commitFixed(input.value);
+    });
+
+    row.append(lab, numWrap, mode);
+    this.initializers.push(() => {
+      const computed = readComputedValue(this.el, property);
+      const auto = computed == null || computed === "auto";
+      mode.value = auto ? "auto" : "fixed";
+      input.disabled = auto;
+      input.value = auto ? "" : this.readNumber(property);
+    });
     return row;
   }
 
-  private buildStructureSection(): void {
-    const section = this.section("Structure");
-    const actions = this.create("div", "sc-ep-actions");
+  // --- Position (container / other) — place-self cross picker ---------------
 
-    this.hideBtn = this.button("sc-ep-btn", "Hide", () => this.toggleHide());
-    this.deleteBtn = this.button("sc-ep-btn", "Delete", () => this.toggleDelete());
-    const up = this.button("sc-ep-btn", "Move up", () => this.move(-1));
-    const down = this.button("sc-ep-btn", "Move down", () => this.move(1));
-
-    actions.append(this.hideBtn, this.deleteBtn, up, down);
-    section.appendChild(actions);
-  }
-
-  private buildInsertSection(): void {
-    const section = this.section("Add element");
-    const row = this.create("div", "sc-ep-row sc-ep-insert");
-
-    const tag = this.create("select", "sc-ep-select sc-ep-insert-tag") as HTMLSelectElement;
-    for (const t of INSERT_TAGS) {
-      const option = this.create("option") as HTMLOptionElement;
-      option.value = t;
-      option.textContent = `<${t}>`;
-      tag.appendChild(option);
+  private buildPositionSection(): void {
+    const body = this.section("Position");
+    const cross = this.create("div", "sc-ep-cross");
+    // 4 edges + centre → a place-self combination (align-self / justify-self).
+    const anchors: Array<{ pos: string; value: string; label: string }> = [
+      { pos: "top", value: "start center", label: "Top" },
+      { pos: "left", value: "center start", label: "Left" },
+      { pos: "center", value: "center center", label: "Center" },
+      { pos: "right", value: "center end", label: "Right" },
+      { pos: "bottom", value: "end center", label: "Bottom" },
+    ];
+    const dots: HTMLButtonElement[] = [];
+    for (const a of anchors) {
+      const dot = this.create("button", `sc-ep-cross-dot sc-ep-cross-${a.pos}`) as HTMLButtonElement;
+      dot.type = "button";
+      dot.setAttribute("aria-label", `Align ${a.label}`);
+      this.on(dot, "click", () => {
+        this.recordStyle("place-self", a.value);
+        for (const d of dots) d.setAttribute("aria-pressed", String(d === dot));
+      });
+      dots.push(dot);
+      cross.appendChild(dot);
     }
-    const text = this.create("input", "sc-ep-input sc-ep-insert-text") as HTMLInputElement;
-    text.type = "text";
-    text.placeholder = "Text (optional)";
-
-    const add = this.button("sc-ep-btn sc-ep-insert-add", "Insert after", () =>
-      this.insertAfter((tag as HTMLSelectElement).value || "div", (text as HTMLInputElement).value),
-    );
-
-    row.append(tag, text, add);
-    section.appendChild(row);
+    body.appendChild(cross);
   }
 
-  private buildFooter(): void {
-    const footer = this.create("div", "sc-ep-footer");
-    this.countEl = this.create("div", "sc-ep-count");
-    this.discardBtn = this.button("sc-ep-discard", "Discard edits", () => this.onDiscard());
-    footer.append(this.countEl, this.discardBtn);
-    this.root.appendChild(footer);
+  // --- Colour (all) --------------------------------------------------------
 
-    const hint = this.create("div", "sc-ep-hint");
-    hint.textContent = "Edits stay private until you submit them as a comment.";
-    this.root.appendChild(hint);
+  private buildColourSection(property: "color" | "background-color"): void {
+    const body = this.section("Colour");
+    const row = this.create("div", "sc-ep-row sc-ep-colour-row");
 
-    // The bridge to submission (U13): finalize the buffered edits as a template
-    // comment. Disabled until there is at least one edit to save.
-    this.saveBtn = this.button("sc-ep-save", "Save as comment", () => this.cb.onSave());
-    this.root.appendChild(this.saveBtn);
+    const swatch = this.create("input", `sc-ep-swatch sc-ep-ctl-${property}`) as HTMLInputElement;
+    swatch.type = "color";
+    swatch.setAttribute("aria-label", property === "color" ? "Text colour" : "Background colour");
+
+    const hex = this.create("input", "sc-ep-hex sc-ep-ctl-hex") as HTMLInputElement;
+    hex.type = "text";
+    hex.setAttribute("aria-label", "Hex colour");
+    hex.placeholder = "#000000";
+
+    const opacity = this.create("input", "sc-ep-number sc-ep-opacity sc-ep-ctl-opacity") as HTMLInputElement;
+    opacity.type = "number";
+    opacity.setAttribute("aria-label", "Opacity (%)");
+    const opacityWrap = this.create("div", "sc-ep-opacity-wrap");
+    const pct = this.create("span", "sc-ep-opacity-pct");
+    pct.textContent = "%";
+    opacityWrap.append(opacity, pct);
+
+    this.on(swatch, "input", () => {
+      hex.value = swatch.value;
+      this.recordStyle(property, swatch.value);
+    });
+    this.on(hex, "input", () => {
+      const v = normalizeHex(hex.value);
+      if (!v) return;
+      swatch.value = v;
+      this.recordStyle(property, v);
+    });
+    this.on(opacity, "input", () => {
+      const raw = opacity.value.trim();
+      if (raw === "") return;
+      const pctNum = Math.max(0, Math.min(100, Number(raw)));
+      this.recordStyle("opacity", String(pctNum / 100));
+    });
+
+    row.append(swatch, hex, opacityWrap);
+    body.appendChild(row);
+
+    this.initializers.push(() => {
+      const rgb = readComputedValue(this.el, property);
+      const asHex = rgbToHex(rgb);
+      if (asHex) {
+        swatch.value = asHex;
+        hex.value = asHex;
+      }
+      const op = readComputedValue(this.el, "opacity");
+      const opNum = op == null ? 1 : parseFloat(op);
+      opacity.value = Number.isFinite(opNum) ? String(Math.round(opNum * 100)) : "100";
+    });
   }
 
-  // --- Recording ----------------------------------------------------------
+  // --- Arrange (functional reorder, requirement F) -------------------------
 
-  private recordStyle(control: StyleControl, after: string): void {
-    const before = this.originalFor(control.property);
-    applyStylePreview(this.el, control.property, after);
-    this.cb.record(buildStyleOp({ target: this.target, property: control.property, before, after }));
-    this.refreshCount();
+  private buildArrangeSection(): void {
+    const parent = this.el.parentElement;
+    const siblings = parent ? Array.from(parent.children) : [];
+    if (siblings.length < 2) return; // nothing to reorder → contextual hide
+
+    const body = this.section("Arrange");
+    const actions = this.create("div", "sc-ep-arrange");
+    const up = this.button("sc-ep-btn sc-ep-move-up", "Move up", () => this.move(-1));
+    const down = this.button("sc-ep-btn sc-ep-move-down", "Move down", () => this.move(1));
+    actions.append(up, down);
+    body.appendChild(actions);
   }
 
-  private recordText(after: string): void {
-    const before = this.originalText ?? "";
-    const next = after.replace(/\s+/g, " ").trim();
-    applyTextPreview(this.el, after);
-    this.cb.record(buildTextOp(this.target, before, next));
-    this.refreshCount();
-  }
-
-  private toggleHide(): void {
-    if (this.deleted) return; // a deleted element is already hidden
-    if (!this.hidden) {
-      this.priorDisplay = previewHide(this.el);
-      this.cb.record(buildSetVisibilityOp(this.target, true));
-      this.hidden = true;
-      if (this.hideBtn) this.hideBtn.textContent = "Show";
-    } else {
-      previewShow(this.el, this.priorDisplay);
-      // Recording the inverse coalesces the hide away (net no-op) in the session.
-      this.cb.record(buildSetVisibilityOp(this.target, false));
-      this.hidden = false;
-      if (this.hideBtn) this.hideBtn.textContent = "Hide";
-    }
-    this.refreshCount();
-  }
-
-  private toggleDelete(): void {
-    if (!this.deleted) {
-      this.removeOp = buildRemoveOp(this.target);
-      this.cb.record(this.removeOp);
-      // Delete is intent; the preview hides (never removes framework nodes, G12).
-      this.priorDisplay = previewHide(this.el);
-      this.deleted = true;
-      if (this.deleteBtn) this.deleteBtn.textContent = "Undo delete";
-    } else {
-      if (this.removeOp) this.cb.revert(this.removeOp);
-      this.removeOp = null;
-      previewShow(this.el, this.priorDisplay);
-      this.deleted = false;
-      if (this.deleteBtn) this.deleteBtn.textContent = "Delete";
-    }
-    this.refreshCount();
-  }
-
+  /**
+   * Reorder among siblings (requirement F): actually move the node in the DOM so
+   * the reviewer SEES it, and record a well-anchored `moveNode` carrying the
+   * parent, the moved element, AND the reference-neighbour + before/after — so
+   * the agent can act on "move X before/after Y". The move is ephemeral; the
+   * revert restores the exact original position.
+   */
   private move(direction: -1 | 1): void {
     const parent = this.el.parentElement;
     if (!parent) return;
@@ -356,131 +501,289 @@ export class PropertiesPanel {
     const from = siblings.indexOf(this.el);
     const to = from + direction;
     if (from < 0 || to < 0 || to >= siblings.length) return; // no-op at the edges
-    const refSibling = siblings[to];
+    const neighbour = siblings[to] ?? null;
+    const position: "before" | "after" = direction < 0 ? "before" : "after";
     const insertion: InsertionPoint = {
       parent: buildEditTarget(parent, this.doc),
-      reference: refSibling ? buildEditTarget(refSibling, this.doc) : undefined,
-      position: direction < 0 ? "before" : "after",
+      reference: neighbour ? buildEditTarget(neighbour, this.doc) : undefined,
+      position,
     };
-    previewOrder(this.el, to);
-    this.cb.record(buildMoveOp(this.target, insertion, from, to));
+    const revert = previewMove(this.el, neighbour, position);
+    this.cb.record(buildMoveOp(this.target, insertion, from, to), revert);
     this.refreshCount();
   }
 
-  private insertAfter(tag: string, text: string): void {
-    const node: NewNode = { tag };
-    const trimmed = text.trim();
-    if (trimmed) node.text = trimmed;
-    const parent = this.el.parentElement;
-    const insertion: InsertionPoint = {
-      parent: parent ? buildEditTarget(parent, this.doc) : undefined,
-      reference: buildEditTarget(this.el, this.doc),
-      position: "after",
+  // --- Footer --------------------------------------------------------------
+
+  private buildFooter(): void {
+    const footer = this.create("div", "sc-ep-footer");
+    this.countEl = this.create("div", "sc-ep-count");
+    this.undoBtn = this.button("sc-ep-undo", "Undo", () => {
+      this.cb.undo();
+      this.syncControls();
+      this.refreshCount();
+    });
+    this.saveBtn = this.button("sc-ep-save", "Save comment", () => this.cb.onSave());
+    footer.append(this.countEl, this.undoBtn, this.saveBtn);
+    this.root.appendChild(footer);
+  }
+
+  // --- Recording -----------------------------------------------------------
+
+  private recordStyle(property: string, after: string): void {
+    const before = this.beforeFor(property);
+    const revert = this.revertFor(property);
+    applyStylePreview(this.el, property, after);
+    this.cb.record(buildStyleOp({ target: this.target, property, before, after }), revert);
+    this.refreshCount();
+  }
+
+  /** The developer-build computed value for a property (the op `before`), captured once. */
+  private beforeFor(property: string): string | null {
+    if (!this.originalComputed.has(property)) {
+      this.originalComputed.set(property, readComputedValue(this.el, property));
+    }
+    return this.originalComputed.get(property) ?? null;
+  }
+
+  /**
+   * A revert closure that restores the property's ORIGINAL inline value — captured
+   * ONCE, before any preview, so a repeated nudge still reverts all the way to the
+   * developer's build (mirrors apply-change-set.ts's bindOp revert).
+   */
+  private revertFor(property: string): () => void {
+    let revert = this.styleReverts.get(property);
+    if (!revert) {
+      const style = (this.el as HTMLElement).style as
+        | { getPropertyValue?: (p: string) => string; removeProperty?: (p: string) => void }
+        | undefined;
+      const prevInline = style?.getPropertyValue?.(property) ?? "";
+      revert = () => {
+        if (prevInline) applyStylePreview(this.el, property, prevInline);
+        else style?.removeProperty?.(property);
+      };
+      this.styleReverts.set(property, revert);
+    }
+    return revert;
+  }
+
+  // --- Control builders ----------------------------------------------------
+
+  private numberRow(
+    label: string,
+    property: string,
+    opts: { unit?: string; step?: number; allowNegative?: boolean; ensureFlex?: boolean } = {},
+  ): HTMLElement {
+    const row = this.create("div", "sc-ep-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = label;
+
+    const wrap = this.create("div", "sc-ep-num");
+    const input = this.create("input", `sc-ep-number sc-ep-ctl-${property}`) as HTMLInputElement;
+    input.type = "number";
+    input.setAttribute("aria-label", label);
+    const unit = opts.unit ?? "";
+    const commit = (raw: string): void => {
+      if (raw.trim() === "") return;
+      if (opts.ensureFlex) this.ensureDisplayFlex();
+      this.recordStyle(property, `${raw}${unit}`);
     };
-    this.cb.record(buildInsertOp(insertion, node, this.target));
-    this.previewGhost(tag, trimmed);
-    this.refreshCount();
+    this.on(input, "input", () => commit(input.value));
+    const stepper = this.stepper(
+      () => this.bump(input, opts.step ?? 1, opts.allowNegative ?? false, commit),
+      () => this.bump(input, -(opts.step ?? 1), opts.allowNegative ?? false, commit),
+    );
+    wrap.append(input, stepper);
+    row.append(lab, wrap);
+
+    this.initializers.push(() => {
+      input.value = this.readNumber(property);
+    });
+    return row;
   }
 
-  // --- Discard ------------------------------------------------------------
-
-  private onDiscard(): void {
-    if (!this.discardArmed) {
-      this.discardArmed = true;
-      this.discardBtn.textContent = "Confirm discard?";
-      this.discardBtn.className = "sc-ep-discard sc-ep-discard-armed";
-      return;
+  private selectRow(
+    label: string,
+    property: string,
+    options: Array<{ label: string; value: string }>,
+    opts: { ensureFlex?: boolean } = {},
+  ): HTMLElement {
+    const row = this.create("div", "sc-ep-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = label;
+    const select = this.create("select", `sc-ep-select sc-ep-ctl-${property}`) as HTMLSelectElement;
+    for (const opt of options) {
+      const o = this.create("option") as HTMLOptionElement;
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
     }
-    this.cb.discard();
-    this.revertPreviews();
-    this.discardArmed = false;
-    this.discardBtn.textContent = "Discard edits";
-    this.discardBtn.className = "sc-ep-discard";
-    this.refreshCount();
+    this.on(select, "change", () => {
+      if (opts.ensureFlex) this.ensureDisplayFlex();
+      this.recordStyle(property, select.value);
+    });
+    row.append(lab, select);
+    this.initializers.push(() => {
+      const computed = readComputedValue(this.el, property);
+      if (computed && options.some((o) => o.value === computed)) select.value = computed;
+    });
+    return row;
   }
 
-  /** Best-effort revert of THIS element's ephemeral previews on discard. */
-  private revertPreviews(): void {
-    for (const [property, original] of this.originals) {
-      if (original != null) applyStylePreview(this.el, property, original);
+  private segmentedRow(
+    label: string,
+    property: string,
+    options: Array<{ label: string; value: string }>,
+    opts: { wide?: boolean; ensureFlex?: boolean } = {},
+  ): HTMLElement {
+    const row = this.create("div", `sc-ep-row ${opts.wide ? "sc-ep-row-stack" : ""}`);
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = label;
+    const seg = this.create("div", `sc-ep-segmented sc-ep-ctl-${property}`);
+    const buttons: Array<{ btn: HTMLButtonElement; value: string }> = [];
+    for (const opt of options) {
+      const btn = this.segButton(opt.label, () => {
+        if (opts.ensureFlex) this.ensureDisplayFlex();
+        this.recordStyle(property, opt.value);
+        for (const b of buttons) b.btn.setAttribute("aria-pressed", String(b.value === opt.value));
+      });
+      buttons.push({ btn, value: opt.value });
+      seg.appendChild(btn);
     }
-    this.originals.clear();
-    if (this.originalText != null) applyTextPreview(this.el, this.originalText);
-    if (this.hidden || this.deleted) previewShow(this.el, this.priorDisplay);
-    this.hidden = false;
-    this.deleted = false;
-    if (this.hideBtn) this.hideBtn.textContent = "Hide";
-    if (this.deleteBtn) this.deleteBtn.textContent = "Delete";
-    for (const ghost of this.ghosts.splice(0)) {
-      try {
-        ghost.remove();
-      } catch {
-        /* best-effort */
-      }
-    }
+    row.append(lab, seg);
+    this.initializers.push(() => {
+      const computed = readComputedValue(this.el, property);
+      for (const b of buttons) b.btn.setAttribute("aria-pressed", String(b.value === computed));
+    });
+    return row;
   }
 
-  // --- Helpers ------------------------------------------------------------
+  /** A single segmented-control button. */
+  private segButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = this.doc.createElement("button") as HTMLButtonElement;
+    btn.type = "button";
+    btn.className = "sc-ep-seg";
+    btn.setAttribute("aria-pressed", "false");
+    btn.textContent = label;
+    this.on(btn, "click", onClick);
+    return btn;
+  }
 
-  /** Snapshot the developer's build value for a property (once, before preview). */
-  private originalFor(property: string): string | null {
-    if (!this.originals.has(property)) {
-      this.originals.set(property, readComputedValue(this.el, property));
-    }
-    return this.originals.get(property) ?? null;
+  /** An up/down stepper (two chevron buttons). */
+  private stepper(onUp: () => void, onDown: () => void): HTMLElement {
+    const wrap = this.create("div", "sc-ep-stepper");
+    const up = this.doc.createElement("button") as HTMLButtonElement;
+    up.type = "button";
+    up.className = "sc-ep-step sc-ep-step-up";
+    up.setAttribute("aria-label", "Increase");
+    up.textContent = "▲";
+    const down = this.doc.createElement("button") as HTMLButtonElement;
+    down.type = "button";
+    down.className = "sc-ep-step sc-ep-step-down";
+    down.setAttribute("aria-label", "Decrease");
+    down.textContent = "▼";
+    this.on(up, "click", onUp);
+    this.on(down, "click", onDown);
+    wrap.append(up, down);
+    return wrap;
+  }
+
+  /** Nudge a number input by `delta` and commit the new value. */
+  private bump(
+    input: HTMLInputElement,
+    delta: number,
+    allowNegative: boolean,
+    commit: (raw: string) => void,
+  ): void {
+    const current = parseFloat(input.value);
+    let next = (Number.isFinite(current) ? current : 0) + delta;
+    if (!allowNegative && next < 0) next = 0;
+    // Trim floating error from fractional steps (e.g. line-height 1.1000000001).
+    const rounded = Math.round(next * 1000) / 1000;
+    input.value = String(rounded);
+    commit(input.value);
+  }
+
+  /**
+   * A layout edit (align/justify/gap/direction) implies the element is a flex
+   * container. Record `display: flex` too so the change-set is coherent; when the
+   * element is already flex this coalesces to a net no-op and leaves no trace.
+   */
+  private ensureDisplayFlex(): void {
+    const display = readComputedValue(this.el, "display");
+    if (display === "flex" || display === "inline-flex" || display === "grid") return;
+    this.recordStyle("display", "flex");
+  }
+
+  // --- Helpers -------------------------------------------------------------
+
+  /** Read a computed value as a bare number string ("48px" → "48"), or "". */
+  private readNumber(property: string): string {
+    const v = readComputedValue(this.el, property);
+    if (v == null) return "";
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "";
   }
 
   private refreshCount(): void {
     const n = this.cb.count();
     this.countEl.textContent = n === 1 ? "1 edit" : `${n} edits`;
     this.saveBtn.disabled = n === 0;
-  }
-
-  /** True for a leaf (no element children) — safe to edit text without clobbering structure. */
-  private isTextLeaf(): boolean {
-    try {
-      return (this.el.children?.length ?? 0) === 0;
-    } catch {
-      return false;
-    }
-  }
-
-  /** Inject an ephemeral ghost node for an insert preview (ours; removed on discard/destroy). */
-  private previewGhost(tag: string, text: string): void {
-    try {
-      const ghost = this.doc.createElement(tag);
-      ghost.setAttribute("data-sc-ghost", "1");
-      if (text) ghost.textContent = text;
-      const parent = this.el.parentElement;
-      if (parent) {
-        insertAfter(parent, ghost, this.el);
-        this.ghosts.push(ghost);
-      }
-    } catch {
-      /* preview is best-effort */
-    }
+    this.undoBtn.disabled = n === 0;
   }
 
   private section(title: string): HTMLElement {
     const section = this.create("div", "sc-ep-section");
+    const header = this.create("div", "sc-ep-section-head");
     const heading = this.create("div", "sc-ep-section-title");
     heading.textContent = title;
-    section.appendChild(heading);
+    const collapse = this.button("sc-ep-collapse", "–", () => {
+      const collapsed = section.getAttribute("data-collapsed") === "1";
+      section.setAttribute("data-collapsed", collapsed ? "0" : "1");
+      collapse.textContent = collapsed ? "–" : "+";
+    });
+    collapse.setAttribute("aria-label", `Toggle ${title}`);
+    header.append(heading, collapse);
+    const body = this.create("div", "sc-ep-section-body");
+    section.append(header, body);
     this.root.appendChild(section);
-    return section;
+    return body;
+  }
+
+  /** Drag the panel by its header handle (real-env; a no-op without pointer events). */
+  private enableDrag(handle: HTMLElement): void {
+    const onDown = (e: unknown): void => {
+      const me = e as MouseEvent;
+      const startX = me.clientX;
+      const startY = me.clientY;
+      const rect = this.root.getBoundingClientRect?.();
+      const baseLeft = rect ? rect.left : 0;
+      const baseTop = rect ? rect.top : 0;
+      me.preventDefault?.();
+      const view = this.doc.defaultView;
+      const onMove = (ev: unknown): void => {
+        const m = ev as MouseEvent;
+        this.root.style.left = `${baseLeft + (m.clientX - startX)}px`;
+        this.root.style.top = `${baseTop + (m.clientY - startY)}px`;
+        this.root.style.right = "auto";
+      };
+      const onUp = (): void => {
+        view?.removeEventListener?.("mousemove", onMove as EventListener);
+        view?.removeEventListener?.("mouseup", onUp as EventListener);
+      };
+      view?.addEventListener?.("mousemove", onMove as EventListener);
+      view?.addEventListener?.("mouseup", onUp as EventListener);
+    };
+    this.on(handle, "mousedown", onDown);
   }
 
   private create(tag: string, className?: string): HTMLElement {
     const el = this.doc.createElement(tag);
-    if (className) el.className = className;
+    if (className) el.className = className.trim();
     return el;
   }
 
-  private button(
-    className: string,
-    label: string,
-    onClick: () => void,
-  ): HTMLButtonElement {
+  private button(className: string, label: string, onClick: () => void): HTMLButtonElement {
     const btn = this.doc.createElement("button") as HTMLButtonElement;
     btn.type = "button";
     btn.className = className;
@@ -490,10 +793,10 @@ export class PropertiesPanel {
   }
 
   /** Register a listener and track its removal for {@link destroy}. */
-  private on(target: Listenable, type: string, handler: () => void): void {
-    const wrapped = (_e: unknown): void => {
+  private on(target: Listenable, type: string, handler: (e: unknown) => void): void {
+    const wrapped = (e: unknown): void => {
       try {
-        handler();
+        handler(e);
       } catch {
         /* an edit control must never throw into the host page */
       }
@@ -503,28 +806,32 @@ export class PropertiesPanel {
   }
 }
 
-/** A short human label for the bound element, e.g. `button#submit` / `h1.hero`. */
-function describeElement(el: Element): string {
-  const tag = el.tagName?.toLowerCase() ?? "node";
-  const id = el.getAttribute?.("id");
-  if (id) return `${tag}#${id}`;
-  const cls =
-    (el.getAttribute?.("class") || (el as { className?: string }).className || "")
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)[0];
-  return cls ? `${tag}.${cls}` : tag;
+// ---------------------------------------------------------------------------
+// Pure colour helpers (unit-tested).
+// ---------------------------------------------------------------------------
+
+/** Normalize user hex input to `#rrggbb` (accepts `#rgb`, missing `#`), or null. */
+export function normalizeHex(input: string): string | null {
+  const t = input.trim().replace(/^#/, "");
+  if (/^[0-9a-f]{6}$/i.test(t)) return `#${t.toLowerCase()}`;
+  if (/^[0-9a-f]{3}$/i.test(t)) {
+    return `#${t.split("").map((c) => c + c).join("").toLowerCase()}`;
+  }
+  return null;
 }
 
-/** Insert `node` immediately after `ref` within `parent` (falls back to append). */
-function insertAfter(parent: Element, node: Element, ref: Element): void {
-  const next = (ref as { nextSibling?: ChildNode | null }).nextSibling ?? null;
-  const insertBefore = (parent as {
-    insertBefore?: (n: Element, ref: ChildNode | null) => void;
-  }).insertBefore;
-  if (typeof insertBefore === "function") {
-    insertBefore.call(parent, node, next as ChildNode | null);
-  } else {
-    parent.appendChild(node);
-  }
+/** Convert a computed `rgb()/rgba()` (or hex) colour to `#rrggbb`, or null. */
+export function rgbToHex(color: string | null): string | null {
+  if (!color) return null;
+  const trimmed = color.trim();
+  const asHex = normalizeHex(trimmed);
+  if (asHex) return asHex;
+  const m = trimmed.match(/rgba?\(([^)]+)\)/i);
+  if (!m || !m[1]) return null;
+  const parts = m[1].split(",").map((s) => parseFloat(s.trim()));
+  const [r, g, b] = parts;
+  if (![r, g, b].every((n) => Number.isFinite(n))) return null;
+  const hx = (n: number): string =>
+    Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${hx(r as number)}${hx(g as number)}${hx(b as number)}`;
 }

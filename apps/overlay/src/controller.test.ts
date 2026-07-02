@@ -182,7 +182,8 @@ describe("OverlayController — edit mode registration", () => {
 
     expect(q(".sc-edit-panel")).not.toBeNull();
     expect(q(".sc-form")).toBeNull(); // the comment form is NOT opened in edit mode
-    expect(q(".sc-highlight")).not.toBeNull();
+    // In edit mode the magenta in-page inspector box is the selection indicator.
+    expect(q(".sc-inspect-box")).not.toBeNull();
   });
 
   it("routes a host-page click through bindEvents when in edit mode", () => {
@@ -194,6 +195,67 @@ describe("OverlayController — edit mode registration", () => {
     doc.dispatch("click", { target: el, preventDefault: () => {} });
 
     expect(q(".sc-edit-panel")).not.toBeNull();
+  });
+});
+
+describe("OverlayController — in-page inspector (requirement D)", () => {
+  it("hover reveals the inspector in the passive Browse mode", () => {
+    const { doc, q } = makeController(); // default mode is browse
+    const el = hostEl(doc, "h2", "Transparent pricing");
+    doc.dispatch("mouseover", { target: el });
+    expect(q(".sc-inspect-box")).not.toBeNull();
+    expect(q(".sc-inspect-tag")!.textContent).toBe("<h2>");
+  });
+
+  it("hover reveals the inspector in Edit mode (before a selection locks it)", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "div", "box");
+    controller.changeMode("edit");
+    doc.dispatch("mouseover", { target: el });
+    expect(q(".sc-inspect-tag")!.textContent).toBe("<div>");
+  });
+
+  it("does NOT show the inspector on hover in an annotation (element) mode", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "p", "Copy");
+    controller.changeMode("element");
+    doc.dispatch("mouseover", { target: el });
+    expect(q(".sc-inspect-box")).toBeNull();
+  });
+
+  it("hides the inspector when switching modes", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h2", "Hi");
+    doc.dispatch("mouseover", { target: el });
+    expect(q(".sc-inspect-box")).not.toBeNull();
+    controller.changeMode("element");
+    expect(q(".sc-inspect-box")).toBeNull();
+  });
+});
+
+describe("OverlayController — inline text edit (requirement E)", () => {
+  it("double-clicking a text leaf in edit mode records a normalized setText", () => {
+    const { controller, doc } = makeController();
+    const el = hostEl(doc, "h1", "Old heading");
+    controller.changeMode("edit");
+    doc.dispatch("dblclick", { target: el, preventDefault: () => {} });
+    // Simulate typing new copy, then blur to commit.
+    el.textContent = "  New   heading ";
+    el.dispatch("blur", {});
+    const op = controller.editSession.list().find((o) => o.type === "setText")!;
+    expect(op).toBeTruthy();
+    expect(op.before).toBe("Old heading");
+    expect(op.after).toBe("New heading"); // whitespace-collapsed
+  });
+
+  it("does not begin inline editing outside edit mode", () => {
+    const { controller, doc } = makeController();
+    const el = hostEl(doc, "h1", "Heading");
+    // default browse mode
+    doc.dispatch("dblclick", { target: el, preventDefault: () => {} });
+    el.textContent = "Changed";
+    el.dispatch("blur", {});
+    expect(controller.editSession.isEmpty()).toBe(true);
   });
 });
 
@@ -237,6 +299,20 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
 
     controller.cancelSelection();
     expect(q(".sc-edit-panel")).toBeNull();
+    expect(controller.editSession.size).toBe(1);
+  });
+
+  it("footer Undo removes the last recorded edit (controller wiring)", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "40";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    q(".sc-ep-ctl-color")!.value = "#111111";
+    q(".sc-ep-ctl-color")!.dispatch("input", {});
+    expect(controller.editSession.size).toBe(2);
+    q(".sc-ep-undo")!.dispatch("click", {});
     expect(controller.editSession.size).toBe(1);
   });
 

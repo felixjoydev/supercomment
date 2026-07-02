@@ -13,6 +13,7 @@
 import type {
   NewCommentInput,
   CapturedContext,
+  ChangeOp,
   DeviceSurface,
 } from "@supercomment/shared";
 import { newCommentInputSchema } from "@supercomment/shared";
@@ -35,9 +36,13 @@ import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
-import { EditSession } from "./editor/edit-session.js";
+import { EditSession, opKey } from "./editor/edit-session.js";
 import { buildEditTarget } from "./editor/edit-target.js";
 import { PropertiesPanel } from "./editor/panel.js";
+import { PreviewLog } from "./editor/preview-log.js";
+import { InspectorLayer } from "./editor/inspector.js";
+import { beginInlineTextEdit } from "./editor/inline-text.js";
+import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
 import { filterBySurface, countBySurface } from "./device/surface-filter.js";
@@ -95,6 +100,15 @@ export class OverlayController {
    * only on an explicit reviewer action, never by mode churn.
    */
   readonly editSession: EditSession;
+  /**
+   * Ephemeral-preview reverts for the visual editor (kept in lockstep with
+   * `editSession` by op key). Lives on the controller so previews across EVERY
+   * edited element can be reverted on close/discard, not just the current one
+   * (baked-in decision: previews are ephemeral). Empty outside edit mode.
+   */
+  private readonly previewLog = new PreviewLog();
+  /** The in-page element inspector (tag badge + dims + spacing pills), R-D. */
+  private readonly inspector: InspectorLayer;
   /** Teardown callbacks for every listener this controller binds (plans/008). */
   private readonly disposers: Array<() => void> = [];
 
@@ -135,6 +149,7 @@ export class OverlayController {
 
     this.highlights = new HighlightLayer(this.doc, this.shell.layer);
     this.markers = new MarkerLayer(this.doc, this.shell.layer);
+    this.inspector = new InspectorLayer(this.doc, this.shell.layer);
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
 
     this.toolbar = new Toolbar(this.doc, this.shell.layer, {
@@ -202,6 +217,10 @@ export class OverlayController {
       }
     }
     this.dismissEditPanel();
+    // Ephemeral visual edits must not outlive the overlay — restore the host
+    // page's inline styles before we detach.
+    this.previewLog.revertAll();
+    this.inspector.hide();
     this.dismissConfirm();
     this.deviceMode?.exit();
     this.shell.destroy();
@@ -335,9 +354,10 @@ export class OverlayController {
 
   changeMode(mode: SelectionMode): void {
     this.dismissForm();
-    // Leaving (or re-entering) a mode closes the editor panel UI but keeps the
-    // edit buffer — the reviewer can switch modes mid-edit and come back (G13).
-    this.dismissEditPanel();
+    // Leaving (or re-entering) a mode closes the editor and reverts its ephemeral
+    // previews (the DOM resets), but KEEPS the edit buffer — the reviewer can
+    // switch modes mid-edit and come back (G13). The durable change-set is intact.
+    this.closeEditor();
     this.selection.setMode(mode);
     this.highlights.clear();
     this.toolbar.setMode(mode);
@@ -359,8 +379,9 @@ export class OverlayController {
    * so re-targeting a different element keeps every prior edit.
    */
   handleEditClick(el: Element): void {
-    const target = this.selection.selectElement(el);
-    this.highlights.showElements([target.rect]);
+    this.selection.selectElement(el);
+    // In edit mode the magenta in-page inspector box IS the selection indicator
+    // (matching the reference), so we don't also draw the persimmon highlight.
     this.openEditPanel(el);
   }
 
@@ -654,7 +675,7 @@ export class OverlayController {
     // Clear transient UI so the confirm dialog is the only thing up.
     this.dismissForm();
     this.dismissModal();
-    this.dismissEditPanel();
+    this.closeEditor();
     this.markers.closePopover();
     this.dismissConfirm();
 
@@ -701,9 +722,9 @@ export class OverlayController {
     this.dismissModal();
     // Esc also dismisses the Exit-confirmation dialog if it's open.
     this.dismissConfirm();
-    // Esc dismisses the editor panel UI but PRESERVES the edit buffer (G13/R7) —
-    // the reviewer can reopen it by picking an element again in edit mode.
-    this.dismissEditPanel();
+    // Esc closes the editor + reverts its ephemeral previews, but PRESERVES the
+    // edit buffer (G13/R7) — the reviewer can reopen it by picking an element again.
+    this.closeEditor();
     // Esc also closes an open comment popover (Shadow DOM retargets cross-boundary
     // clicks, so there is no doc-level "click outside" close — see bindEvents).
     this.markers.closePopover();
@@ -735,15 +756,82 @@ export class OverlayController {
    */
   private openEditPanel(el: Element): void {
     this.dismissForm();
+    // UI-only teardown of any prior panel — previews for already-edited elements
+    // persist (cumulative visual) since the reviewer is still in the session.
     this.dismissEditPanel();
     const target = buildEditTarget(el, this.doc);
     this.editPanel = new PropertiesPanel(this.doc, this.shell.layer, el, target, {
-      record: (op) => this.editSession.record(op),
-      revert: (op) => this.editSession.remove(op),
-      discard: () => this.editSession.discard(),
+      record: (op, revert) => this.recordEdit(op, revert),
+      removeEdit: (op) => this.removeEdit(op),
+      undo: () => this.undoLastEdit(),
+      discard: () => this.discardEdits(),
       count: () => this.editSession.size,
-      onClose: () => this.dismissEditPanel(),
+      onClose: () => this.closeEditor(),
       onSave: () => this.beginEditComment(el),
+    });
+    // The in-page inspector locks onto the selected element while editing.
+    this.inspector.show(el);
+  }
+
+  /**
+   * Record one edit into the durable buffer AND register its ephemeral preview
+   * revert, keeping the two in lockstep: if the op just coalesced away to a net
+   * no-op (e.g. a value nudged back to its original), revert + drop the preview.
+   */
+  private recordEdit(op: ChangeOp, revert?: () => void): void {
+    this.editSession.record(op);
+    const key = opKey(op);
+    if (this.editSession.has(op)) {
+      if (revert) this.previewLog.add(key, revert);
+    } else {
+      this.previewLog.revertKey(key);
+    }
+  }
+
+  /** Drop a specific recorded edit and revert its ephemeral preview (toggle-off). */
+  private removeEdit(op: ChangeOp): void {
+    this.editSession.remove(op);
+    this.previewLog.revertKey(opKey(op));
+  }
+
+  /** Footer Undo: remove the last recorded edit and revert its preview. */
+  private undoLastEdit(): void {
+    const op = this.editSession.undoLast();
+    if (op) this.previewLog.revertKey(opKey(op));
+  }
+
+  /** Discard the whole buffer AND revert every ephemeral preview. */
+  private discardEdits(): void {
+    this.editSession.discard();
+    this.previewLog.revertAll();
+  }
+
+  /**
+   * Close the editor: tear down the panel UI, revert EVERY ephemeral preview
+   * applied this session (the DOM resets — previews are ephemeral), and hide the
+   * inspector. The edit buffer is PRESERVED (G13/R7); only the visual is undone.
+   */
+  private closeEditor(): void {
+    this.dismissEditPanel();
+    this.previewLog.revertAll();
+    this.inspector.hide();
+  }
+
+  /**
+   * Double-click inline text edit (requirement E): edit a text leaf's copy in
+   * place and record a normalized `setText` with an ephemeral revert. No-op for
+   * non-leaf elements (guarded in `beginInlineTextEdit`).
+   */
+  private beginInlineEdit(el: Element): void {
+    const target = buildEditTarget(el, this.doc);
+    beginInlineTextEdit(el, this.doc, {
+      onCommit: (before, after) => {
+        const next = after.replace(/\s+/g, " ").trim();
+        if (next === before) return; // unchanged → record nothing
+        this.recordEdit(buildTextOp(target, before, next), () =>
+          applyTextPreview(el, before),
+        );
+      },
     });
   }
 
@@ -809,6 +897,40 @@ export class OverlayController {
       true,
     );
 
+    // In-page inspector (requirement D): hovering reveals the element's tag
+    // badge, dimensions, and spacing pills — in the passive Browse mode too, not
+    // just Edit. While a panel is open the inspector is locked to the selection.
+    this.on(
+      this.doc,
+      "mouseover",
+      (e) => {
+        const mode = this.selection.getMode();
+        if (mode !== "browse" && mode !== "edit") return;
+        if (this.editPanel) return; // locked onto the selected element
+        const target = e.target as Element | null;
+        if (!target || this.isOwnNode(target)) {
+          this.inspector.hide();
+          return;
+        }
+        this.inspector.show(target);
+      },
+      true,
+    );
+
+    // Double-click a text leaf in Edit mode → edit its copy inline (requirement E).
+    this.on(
+      this.doc,
+      "dblclick",
+      (e) => {
+        if (this.selection.getMode() !== "edit") return;
+        const target = e.target as Element | null;
+        if (!target || this.isOwnNode(target)) return;
+        e.preventDefault();
+        this.beginInlineEdit(target);
+      },
+      true,
+    );
+
     // Area drag in area mode.
     this.on(this.doc, "mousedown", (e) => {
       if (this.selection.getMode() !== "area") return;
@@ -839,9 +961,20 @@ export class OverlayController {
       this.handleTextSelection(text, rect);
     });
 
-    // Keep markers anchored on scroll/resize.
-    this.on(view, "scroll", () => this.markers.render(), true);
-    this.on(view, "resize", () => this.markers.render());
+    // Keep markers + the in-page inspector anchored on scroll/resize.
+    this.on(
+      view,
+      "scroll",
+      () => {
+        this.markers.render();
+        this.inspector.render();
+      },
+      true,
+    );
+    this.on(view, "resize", () => {
+      this.markers.render();
+      this.inspector.render();
+    });
   }
 
   /**
