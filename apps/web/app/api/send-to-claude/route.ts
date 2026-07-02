@@ -77,6 +77,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
 
+  // Phase 2 (send-to-agent permission): membership is necessary but NOT
+  // sufficient. Only a workspace member explicitly granted `can_send_to_agent`
+  // may enqueue to the coding agent — a coding agent runs on a member's machine
+  // via the MCP + a linked repo, so this is governed per-member by the workspace
+  // owner. This is the REAL guard (the dashboard button visibility is UX only);
+  // guests never reach here (requireMember already blocked them).
+  const { data: canSend } = await supabase.rpc("can_user_send_to_agent", {
+    p_preview_id: comment.preview_id,
+  });
+  if (canSend !== true) {
+    return NextResponse.json(
+      {
+        error: "send_to_agent_forbidden",
+        message:
+          "You don't have permission to send comments to the agent. Ask a workspace owner to enable it for you.",
+      },
+      { status: 403 },
+    );
+  }
+
   // R23: gate guest comments behind explicit confirmation.
   const gate = canEnqueue({ trustLevel: comment.trust_level }, confirmGuest);
   if (!gate.ok) {

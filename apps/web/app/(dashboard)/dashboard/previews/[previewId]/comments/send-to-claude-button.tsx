@@ -4,7 +4,7 @@ import { useReducer, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 
 import type { CommentView } from '@/lib/comments/types';
-import { requiresGuestConfirm } from '@/lib/comments/view';
+import { canShowSendButton, requiresGuestConfirm } from '@/lib/comments/view';
 import {
   sendReducer,
   sendButtonLabel,
@@ -28,9 +28,16 @@ const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 export function SendToClaudeButton({
   comment,
   canMutate,
+  canSendToAgent,
 }: {
   comment: CommentView;
   canMutate: boolean;
+  /**
+   * Phase 2: whether the CURRENT user (a workspace member) is granted send-to-
+   * agent. Hidden entirely otherwise — this is UX only; /api/send-to-claude
+   * independently re-enforces the permission (the real guard).
+   */
+  canSendToAgent: boolean;
 }) {
   // Seed from the persisted queue status so a refresh shows Queued/Working/Done
   // rather than resetting to "Send to Claude".
@@ -40,7 +47,9 @@ export function SendToClaudeButton({
   const [state, dispatch] = useReducer(sendReducer, initialState);
   const [error, setError] = useState<string | null>(null);
 
-  if (!canMutate) return null;
+  // Members without the send-to-agent grant (and everyone who can't mutate) don't
+  // see the button at all — sending is meaningless for them. Phase 2.
+  if (!canShowSendButton({ canMutate, canSendToAgent })) return null;
 
   const needsConfirm = requiresGuestConfirm(comment);
 
@@ -119,7 +128,7 @@ export function SendToClaudeButton({
             <span className="guest-confirm">
               <span>
                 This comment is from a <strong>guest</strong> and is untrusted to the agent.
-                Confirm you want to send it to Claude.
+                Confirm you want to send it to the agent.
               </span>
               <span style={{ display: 'inline-flex', gap: 8 }}>
                 <button

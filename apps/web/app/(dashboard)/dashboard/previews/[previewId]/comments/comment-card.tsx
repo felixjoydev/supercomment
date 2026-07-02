@@ -19,10 +19,13 @@ const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 export function CommentCard({
   comment,
   canMutate,
+  canSendToAgent,
   onLocalUpdate,
 }: {
   comment: CommentView;
   canMutate: boolean;
+  /** Phase 2: gates the "Send to agent" button visibility for the current user. */
+  canSendToAgent: boolean;
   onLocalUpdate: (updated: CommentView) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -98,7 +101,11 @@ export function CommentCard({
             </button>
 
             {comment.status === 'open' && (
-              <SendToClaudeButton comment={comment} canMutate={canMutate} />
+              <SendToClaudeButton
+                comment={comment}
+                canMutate={canMutate}
+                canSendToAgent={canSendToAgent}
+              />
             )}
           </div>
 

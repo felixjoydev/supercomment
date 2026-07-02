@@ -69,7 +69,7 @@ export function sendButtonLabel(state: SendState): string {
       return "Retry";
     case "idle":
     default:
-      return "Send to Claude";
+      return "Send to agent";
   }
 }
 

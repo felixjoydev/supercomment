@@ -33,10 +33,13 @@ export function CommentBoard({
   previewId,
   initialComments,
   canMutate,
+  canSendToAgent,
 }: {
   previewId: string;
   initialComments: CommentView[];
   canMutate: boolean;
+  /** Phase 2: current user may send to the coding agent (gates the send button). */
+  canSendToAgent: boolean;
 }) {
   const [comments, setComments] = useState<CommentView[]>(initialComments);
   const [filter, setFilter] = useState<DashboardFilter>('open');
@@ -102,6 +105,7 @@ export function CommentBoard({
                 transition={spring}
               >
                 <CommentCard
+                  canSendToAgent={canSendToAgent}
                   comment={comment}
                   canMutate={canMutate}
                   onLocalUpdate={handleLocalUpdate}

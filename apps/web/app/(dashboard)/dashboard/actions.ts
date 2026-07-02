@@ -1,6 +1,6 @@
 'use server';
 import { revalidatePath } from 'next/cache';
-import { createWorkspace, createProject } from '@/lib/data';
+import { createWorkspace, createProject, setMemberSendToAgent } from '@/lib/data';
 import { getVerifiedClaims } from '@/lib/server-auth';
 import { requireAuthedUser } from '@/lib/auth-guard';
 
@@ -32,5 +32,27 @@ export async function createProjectAction(formData: FormData): Promise<void> {
 
   // RLS (projects_insert) is the backstop: a non-member insert is rejected.
   await createProject(workspaceId, name);
+  revalidatePath('/dashboard');
+}
+
+/**
+ * Flip a workspace member's "can send to agent" permission (Phase 2). Requires a
+ * verified non-anonymous user here; the set_member_send_to_agent RPC is the real
+ * guard — it raises unless the CALLER owns the workspace, so a non-owner member
+ * (who can technically invoke this action) is rejected at the DB.
+ */
+export async function setMemberSendToAgentAction(input: {
+  workspaceId: string;
+  memberUserId: string;
+  value: boolean;
+}): Promise<void> {
+  const guard = requireAuthedUser(await getVerifiedClaims());
+  if (!guard.ok) throw new Error(guard.error);
+
+  if (!input.workspaceId || !input.memberUserId) {
+    throw new Error('workspaceId and memberUserId are required');
+  }
+
+  await setMemberSendToAgent(input.workspaceId, input.memberUserId, input.value === true);
   revalidatePath('/dashboard');
 }

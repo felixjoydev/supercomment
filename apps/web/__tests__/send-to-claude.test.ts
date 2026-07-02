@@ -150,7 +150,7 @@ describe("send button state machine", () => {
   });
 
   it("labels reflect the state", () => {
-    expect(sendButtonLabel("idle")).toBe("Send to Claude");
+    expect(sendButtonLabel("idle")).toBe("Send to agent");
     expect(sendButtonLabel("confirm_required")).toBe("Confirm send");
     expect(sendButtonLabel("sent")).toBe("Queued");
     expect(sendButtonLabel("working")).toBe("Working…");

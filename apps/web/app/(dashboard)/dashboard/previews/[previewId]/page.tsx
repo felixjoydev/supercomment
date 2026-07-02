@@ -1,6 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getPreview, getProject, getCommentsForPreview } from '@/lib/data';
+import {
+  getPreview,
+  getProject,
+  getCommentsForPreview,
+  canCurrentUserSendToAgent,
+} from '@/lib/data';
 import { deriveStatus } from '@/lib/status';
 import { buildGuestUrl, type AccessMode } from '@/lib/link';
 import { hasEnhancedContext } from '@/lib/comments/handoff';
@@ -54,6 +59,8 @@ export default async function PreviewPage({
   // any member who can view may also act on comments.
   const initialComments = await getCommentsForPreview(previewId).catch(() => []);
   const canMutate = true;
+  // Phase 2: gate the "Send to agent" button on the current member's permission.
+  const canSendToAgent = await canCurrentUserSendToAgent(previewId).catch(() => false);
 
   // R10: auto-detect whether exact file:line is flowing in (any comment carries
   // a build-time source stamp). Drives the "detected / not detected" panel.
@@ -111,6 +118,7 @@ export default async function PreviewPage({
             previewId={preview.id}
             initialComments={initialComments}
             canMutate={canMutate}
+            canSendToAgent={canSendToAgent}
           />
         </section>
       </StaggerItem>

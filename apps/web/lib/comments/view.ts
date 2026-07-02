@@ -221,3 +221,39 @@ export function canEnqueue(
   if (!requiresGuestConfirm(comment)) return { ok: true };
   return confirmed ? { ok: true } : { ok: false, reason: "guest_confirm_required" };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 — send-to-agent per-member permission.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether to SHOW the per-comment "Send to agent" button: the current user must
+ * be able to mutate (a workspace member reached this RLS-scoped page) AND hold
+ * the send-to-agent grant. UX only — /api/send-to-claude re-enforces the grant.
+ */
+export function canShowSendButton(opts: {
+  canMutate: boolean;
+  canSendToAgent: boolean;
+}): boolean {
+  return opts.canMutate === true && opts.canSendToAgent === true;
+}
+
+/**
+ * The server-side enqueue authorization decision (mirrors the gate in
+ * /api/send-to-claude): the caller must be a workspace member (guests are never
+ * members on this path) AND be granted send-to-agent. Returns the 403 reason
+ * otherwise. The route composes `requireMember` (which also yields 401/anon) with
+ * the `can_user_send_to_agent` RPC; this captures the send-to-agent layer.
+ */
+export function authorizeSendToAgent(opts: {
+  isMember: boolean;
+  canSendToAgent: boolean;
+}):
+  | { ok: true }
+  | { ok: false; status: 403; reason: "not_member" | "send_to_agent_forbidden" } {
+  if (!opts.isMember) return { ok: false, status: 403, reason: "not_member" };
+  if (!opts.canSendToAgent) {
+    return { ok: false, status: 403, reason: "send_to_agent_forbidden" };
+  }
+  return { ok: true };
+}

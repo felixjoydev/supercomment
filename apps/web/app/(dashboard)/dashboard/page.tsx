@@ -1,7 +1,8 @@
 import Link from 'next/link';
-import { ensureDefaultWorkspace, listProjects } from '@/lib/data';
+import { ensureDefaultWorkspace, listProjects, listWorkspaceMembers } from '@/lib/data';
 import { Stagger, StaggerItem } from '@/components/motion';
 import { CreateWorkspaceForm, CreateProjectForm } from './forms';
+import { WorkspaceMembers } from './members';
 
 /**
  * Dashboard home: the workspace → project navigation surface. Reads are
@@ -33,9 +34,12 @@ export default async function DashboardPage() {
   );
 }
 
-/** A workspace section listing its projects as tiles. */
+/** A workspace section listing its projects as tiles + member management. */
 async function WorkspaceSection({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
-  const projects = await listProjects(workspaceId);
+  const [projects, memberList] = await Promise.all([
+    listProjects(workspaceId),
+    listWorkspaceMembers(workspaceId).catch(() => ({ members: [], viewerIsOwner: false })),
+  ]);
   return (
     <section className="workspace-section">
       <div className="workspace-head">
@@ -62,6 +66,12 @@ async function WorkspaceSection({ workspaceId, workspaceName }: { workspaceId: s
       )}
 
       <CreateProjectForm workspaceId={workspaceId} />
+
+      <WorkspaceMembers
+        workspaceId={workspaceId}
+        members={memberList.members}
+        viewerIsOwner={memberList.viewerIsOwner}
+      />
     </section>
   );
 }
