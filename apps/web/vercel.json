@@ -1,4 +1,3 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "echo 'Always build: apps/web bundles the overlay at build time (prebuild -> scripts/copy-overlay.mjs) and depends on packages/shared + packages/source-stamp. Vercel skip-unaffected does not see those, so an overlay/packages-only change would be wrongly Skipped-Not-affected and never reach production. Force a build.' && exit 1"
+  "ignoreCommand": "exit 1"
 }
