@@ -11,11 +11,6 @@ import {
   writeProjectBinding,
   type ProjectBinding,
 } from "./binding.js";
-// U12's MCP-side facade MUST still resolve to the same implementation.
-import {
-  loadProjectBinding as mcpLoadProjectBinding,
-  resolveBindingPath as mcpResolveBindingPath,
-} from "../mcp/binding.js";
 
 const SAMPLE: ProjectBinding = {
   supabaseUrl: "https://ref.supabase.co",
@@ -55,36 +50,6 @@ describe("writeProjectBinding -> loadProjectBinding round trip (fakes)", () => {
       },
     });
     expect(loaded).toEqual(SAMPLE);
-  });
-
-  it("round-trips through U12's mcp/binding loader at the same path", async () => {
-    const files = new Map<string, string>();
-    const fs = {
-      mkdir: async () => undefined,
-      writeFile: async (p: string, data: string) => {
-        files.set(p, data);
-      },
-      rename: async (from: string, to: string) => {
-        files.set(to, files.get(from)!);
-        files.delete(from);
-        return undefined;
-      },
-    };
-    const env = {};
-    const home = "/home/dev";
-
-    // Same path resolution from both modules (proves the facade re-exports).
-    expect(resolveBindingPath(env, home)).toBe(
-      mcpResolveBindingPath(env, home),
-    );
-
-    await writeProjectBinding(SAMPLE, { env, home, fs });
-    const viaMcp = await mcpLoadProjectBinding({
-      env,
-      home,
-      readTextFile: async (p) => files.get(p) ?? Promise.reject("ENOENT"),
-    });
-    expect(viaMcp).toEqual(SAMPLE);
   });
 
   it("omits projectId when not provided", async () => {

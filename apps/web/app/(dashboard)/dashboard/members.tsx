@@ -90,9 +90,7 @@ function MemberRow({
       </span>
       <span className="member-control">
         {error ? <span className="member-error">{error}</span> : null}
-        <span className="member-toggle-label" id={`stalbl-${member.userId}`}>
-          Send to agent
-        </span>
+        <span className="member-toggle-label">Send to agent</span>
         <Switch
           checked={checked}
           onChange={toggle}

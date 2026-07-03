@@ -13,29 +13,6 @@ import { motion, useReducedMotion } from 'motion/react';
 
 const spring = { type: 'spring', duration: 0.6, bounce: 0 } as const;
 
-/** Single block: fade + rise + soft de-blur. */
-export function Reveal({
-  children,
-  delay = 0,
-  className,
-}: {
-  children: ReactNode;
-  delay?: number;
-  className?: string;
-}) {
-  const reduced = useReducedMotion();
-  return (
-    <motion.div
-      className={className}
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 14, filter: 'blur(6px)' }}
-      animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-      transition={{ ...spring, delay }}
-    >
-      {children}
-    </motion.div>
-  );
-}
-
 /** Container that staggers its StaggerItem children (~60ms apart). */
 export function Stagger({
   children,

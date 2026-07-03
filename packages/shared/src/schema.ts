@@ -508,18 +508,6 @@ export const mcpCommentSchema = commentSchema.extend({
 });
 export type McpComment = z.infer<typeof mcpCommentSchema>;
 
-/** Input for `list_open_comments` / `get_all_open`. */
-export const listOpenCommentsInputSchema = z.object({
-  previewId: z.uuid().optional(),
-  /**
-   * When true (default), guest-authored comments are included (they're labeled
-   * with trust_level and the result is marked untrusted). Set false to exclude
-   * guests; `excludedGuestCount` then reports how many were withheld (R23).
-   */
-  includeGuests: z.boolean().default(true),
-});
-export type ListOpenCommentsInput = z.infer<typeof listOpenCommentsInputSchema>;
-
 /** Output for `list_open_comments`. */
 export const listOpenCommentsOutputSchema = z.object({
   comments: z.array(mcpCommentSchema),
@@ -530,13 +518,6 @@ export type ListOpenCommentsOutput = z.infer<
   typeof listOpenCommentsOutputSchema
 >;
 
-/** Input for `get_comment`. */
-export const getCommentInputSchema = z.object({
-  number: z.number().int().positive(),
-  previewId: z.uuid().optional(),
-});
-export type GetCommentInput = z.infer<typeof getCommentInputSchema>;
-
 /** Output for `get_comment`. */
 export const getCommentOutputSchema = z.object({
   comment: mcpCommentSchema.nullable(),
@@ -545,21 +526,19 @@ export const getCommentOutputSchema = z.object({
 });
 export type GetCommentOutput = z.infer<typeof getCommentOutputSchema>;
 
-/** Input for `resolve_comment`. */
+/**
+ * Input for `resolve_comment`. NOTE: the MCP server (apps/cli/src/mcp/tools.ts)
+ * currently declares each tool's inputSchema inline as a ZodRawShape, so these
+ * *InputSchema objects are not yet the wired source of truth. The sibling
+ * list/get/dismiss input schemas were unused and removed; this one is retained
+ * because it still has direct test coverage (schema.test.ts).
+ */
 export const resolveCommentInputSchema = z.object({
   number: z.number().int().positive(),
   previewId: z.uuid().optional(),
   summary: z.string().optional(),
 });
 export type ResolveCommentInput = z.infer<typeof resolveCommentInputSchema>;
-
-/** Input for `dismiss_comment`. */
-export const dismissCommentInputSchema = z.object({
-  number: z.number().int().positive(),
-  previewId: z.uuid().optional(),
-  reason: z.string().min(1),
-});
-export type DismissCommentInput = z.infer<typeof dismissCommentInputSchema>;
 
 /** Output shared by `resolve_comment` / `dismiss_comment`. */
 export const mutateCommentOutputSchema = z.object({

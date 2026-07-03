@@ -4,7 +4,7 @@ import {
   BindingNotFoundError,
   loadProjectBinding,
   resolveBindingPath,
-} from "./binding.js";
+} from "../config/binding.js";
 
 describe("resolveBindingPath", () => {
   it("prefers SUPERCOMMENT_BINDING_PATH when set", () => {

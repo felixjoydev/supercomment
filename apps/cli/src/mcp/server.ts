@@ -27,8 +27,9 @@ import {
   loadProjectBinding,
   writeProjectBinding,
   type ProjectBinding,
-} from "./binding.js";
+} from "../config/binding.js";
 import { assertAllowedSupabaseUrl } from "../config/supabase-url.js";
+import pkg from "../../package.json";
 import { findRepoLink, applyRepoLink } from "../config/repo-link.js";
 import { decodeJwtExp } from "../auth/identity.js";
 import {
@@ -60,7 +61,8 @@ async function importOptional(specifier: string): Promise<any> {
 }
 
 const SERVER_NAME = "supercomment";
-const SERVER_VERSION = "0.0.0";
+/** Reported to the MCP client in the handshake; tracks the CLI package version. */
+const SERVER_VERSION = pkg.version;
 
 /**
  * Build a Supabase client from the binding. Dynamically imports

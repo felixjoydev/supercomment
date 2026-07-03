@@ -10,24 +10,6 @@ import type {
   CommentStatus,
 } from "@supercomment/shared";
 
-export interface BadgeColors {
-  bg: string;
-  fg: string;
-  border: string;
-}
-
-export function severityColors(severity: Severity): BadgeColors {
-  switch (severity) {
-    case "critical":
-      return { bg: "#fef2f2", fg: "#b91c1c", border: "#fecaca" };
-    case "important":
-      return { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" };
-    case "minor":
-    default:
-      return { bg: "#f0f9ff", fg: "#0369a1", border: "#bae6fd" };
-  }
-}
-
 export function severityLabel(severity: Severity): string {
   switch (severity) {
     case "critical":

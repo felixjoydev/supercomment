@@ -1,12 +1,12 @@
 import type { NextConfig } from "next";
 
 /**
- * U5 source-stamp gating (kept in sync with babel.config.js).
+ * U5 source-stamp gating — the production backstop.
  *
- * `data-sc-source` is stamped by Babel ONLY in preview builds. The actual
- * plugin wiring lives in babel.config.js (Next 16 Turbopack auto-detects it and
- * runs Babel — see the SWC-vs-Babel tradeoff note there). This file owns the
- * production backstop: when we are NOT stamping, SWC strips any stray
+ * `data-sc-source` is stamped by the Babel plugin in `packages/source-stamp`
+ * during PREVIEW builds only (enabled via a Babel config in the preview build;
+ * there is no committed babel.config.js here). This file owns the production
+ * backstop: when we are NOT stamping, SWC strips any stray
  * `data-sc-source` attribute via `compiler.reactRemoveProperties` so production
  * never ships source paths even if a stamp slips through. In preview we leave
  * the attribute intact so the overlay can read it.
