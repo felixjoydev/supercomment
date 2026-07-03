@@ -873,14 +873,16 @@ export class OverlayController {
     );
 
     // In-page inspector (requirement D): hovering reveals the element's tag
-    // badge, dimensions, and spacing pills — in the passive Browse mode too, not
-    // just Edit. While a panel is open the inspector is locked to the selection.
+    // badge, dimensions, and spacing pills ONLY in the modes where the reviewer
+    // is picking an element to act on — element / multi / edit. Passive Browse is
+    // just navigation, so it shows NO inspector chrome. While a panel is open the
+    // inspector is locked to the selection.
     this.on(
       this.doc,
       "mouseover",
       (e) => {
         const mode = this.selection.getMode();
-        if (mode !== "browse" && mode !== "edit") return;
+        if (mode !== "element" && mode !== "multi" && mode !== "edit") return;
         if (this.editPanel) return; // locked onto the selected element
         const target = e.target as Element | null;
         if (!target || this.isOwnNode(target)) {

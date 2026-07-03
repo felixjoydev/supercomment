@@ -204,12 +204,11 @@ describe("OverlayController — edit mode registration", () => {
 });
 
 describe("OverlayController — in-page inspector (requirement D)", () => {
-  it("hover reveals the inspector in the passive Browse mode", () => {
+  it("does NOT reveal the inspector on hover in passive Browse mode", () => {
     const { doc, q } = makeController(); // default mode is browse
     const el = hostEl(doc, "h2", "Transparent pricing");
     doc.dispatch("mouseover", { target: el });
-    expect(q(".sc-inspect-box")).not.toBeNull();
-    expect(q(".sc-inspect-tag")!.textContent).toBe("<h2>");
+    expect(q(".sc-inspect-box")).toBeNull();
   });
 
   it("hover reveals the inspector in Edit mode (before a selection locks it)", () => {
@@ -220,20 +219,26 @@ describe("OverlayController — in-page inspector (requirement D)", () => {
     expect(q(".sc-inspect-tag")!.textContent).toBe("<div>");
   });
 
-  it("does NOT show the inspector on hover in an annotation (element) mode", () => {
+  it("hover reveals the inspector in the annotation Element and Multi modes", () => {
     const { controller, doc, q } = makeController();
     const el = hostEl(doc, "p", "Copy");
+
     controller.changeMode("element");
     doc.dispatch("mouseover", { target: el });
-    expect(q(".sc-inspect-box")).toBeNull();
-  });
+    expect(q(".sc-inspect-tag")!.textContent).toBe("<p>");
 
-  it("hides the inspector when switching modes", () => {
-    const { controller, doc, q } = makeController();
-    const el = hostEl(doc, "h2", "Hi");
+    controller.changeMode("multi");
     doc.dispatch("mouseover", { target: el });
     expect(q(".sc-inspect-box")).not.toBeNull();
+  });
+
+  it("hides the inspector when switching to Browse", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h2", "Hi");
     controller.changeMode("element");
+    doc.dispatch("mouseover", { target: el });
+    expect(q(".sc-inspect-box")).not.toBeNull();
+    controller.changeMode("browse");
     expect(q(".sc-inspect-box")).toBeNull();
   });
 });
