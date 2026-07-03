@@ -27,6 +27,34 @@ export async function listProjects(workspaceId: string): Promise<ProjectRow[]> {
   return data ?? [];
 }
 
+/**
+ * Projects for MANY workspaces in ONE query (RLS-scoped), grouped by workspace
+ * id (WEB-9). Replaces N per-workspace listProjects() calls on the dashboard.
+ * RLS still filters to the member's own workspaces, and `created_at asc` is
+ * preserved within each group, so each group equals what listProjects() returned.
+ */
+export async function listProjectsForWorkspaces(
+  workspaceIds: string[],
+): Promise<Map<string, ProjectRow[]>> {
+  const byWorkspace = new Map<string, ProjectRow[]>();
+  if (workspaceIds.length === 0) return byWorkspace;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id, workspace_id, name, created_at')
+    .in('workspace_id', workspaceIds)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+
+  for (const row of (data ?? []) as ProjectRow[]) {
+    const list = byWorkspace.get(row.workspace_id) ?? [];
+    list.push(row);
+    byWorkspace.set(row.workspace_id, list);
+  }
+  return byWorkspace;
+}
+
 /** A single project (or null if not visible to the member). */
 export async function getProject(projectId: string): Promise<ProjectRow | null> {
   const supabase = await createClient();

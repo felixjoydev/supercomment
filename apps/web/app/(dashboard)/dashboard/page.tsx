@@ -1,5 +1,10 @@
 import Link from 'next/link';
-import { ensureDefaultWorkspace, listProjects, listWorkspaceMembers } from '@/lib/data';
+import {
+  ensureDefaultWorkspace,
+  listProjectsForWorkspaces,
+  listWorkspaceMembers,
+  type ProjectRow,
+} from '@/lib/data';
 import { Stagger, StaggerItem } from '@/components/motion';
 import { CreateWorkspaceForm, CreateProjectForm } from './forms';
 import { WorkspaceMembers } from './members';
@@ -12,6 +17,12 @@ import { WorkspaceMembers } from './members';
  */
 export default async function DashboardPage() {
   const workspaces = await ensureDefaultWorkspace();
+  // WEB-9: fetch every workspace's projects in ONE query instead of one per
+  // WorkspaceSection (N+1). VERIFY IN REAL ENV: confirm the grouped result
+  // matches the per-workspace lists against the live DB.
+  const projectsByWorkspace = await listProjectsForWorkspaces(
+    workspaces.map((w) => w.id),
+  );
 
   return (
     <Stagger>
@@ -23,7 +34,11 @@ export default async function DashboardPage() {
 
       {workspaces.map((workspace) => (
         <StaggerItem key={workspace.id}>
-          <WorkspaceSection workspaceId={workspace.id} workspaceName={workspace.name} />
+          <WorkspaceSection
+            workspaceId={workspace.id}
+            workspaceName={workspace.name}
+            projects={projectsByWorkspace.get(workspace.id) ?? []}
+          />
         </StaggerItem>
       ))}
 
@@ -35,11 +50,19 @@ export default async function DashboardPage() {
 }
 
 /** A workspace section listing its projects as tiles + member management. */
-async function WorkspaceSection({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
-  const [projects, memberList] = await Promise.all([
-    listProjects(workspaceId),
-    listWorkspaceMembers(workspaceId).catch(() => ({ members: [], viewerIsOwner: false })),
-  ]);
+async function WorkspaceSection({
+  workspaceId,
+  workspaceName,
+  projects,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+  projects: ProjectRow[];
+}) {
+  const memberList = await listWorkspaceMembers(workspaceId).catch(() => ({
+    members: [],
+    viewerIsOwner: false,
+  }));
   return (
     <section className="workspace-section">
       <div className="workspace-head">
