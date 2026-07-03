@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isInsertableTag, isSafeAttr } from "./dom-safety.js";
 
 /**
  * SuperComment shared contract.
@@ -254,12 +255,39 @@ export const insertionPointSchema = z.object({
 });
 export type InsertionPoint = z.infer<typeof insertionPointSchema>;
 
-/** A semantic description of a newly-inserted node (never raw innerHTML). */
-export const newNodeSchema = z.object({
-  tag: z.string().min(1),
-  text: z.string().optional(),
-  attrs: z.record(z.string(), z.string()).optional(),
-});
+/**
+ * A semantic description of a newly-inserted node (never raw innerHTML).
+ *
+ * Refined so a stored change-set can never carry a stored-DOM-XSS payload into a
+ * viewer's page (M1): the tag must be an insertable presentational element (no
+ * `script`/`iframe`/…) and every attribute must pass `isSafeAttr` (no `on*`
+ * handlers, no `javascript:`/hostile-`data:` URL values). Enforced again in the
+ * overlay apply layer — this is the first, schema-level gate.
+ */
+export const newNodeSchema = z
+  .object({
+    tag: z.string().min(1),
+    text: z.string().optional(),
+    attrs: z.record(z.string(), z.string()).optional(),
+  })
+  .superRefine((node, ctx) => {
+    if (!isInsertableTag(node.tag)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tag"],
+        message: `unsafe insert tag: ${node.tag}`,
+      });
+    }
+    for (const [name, value] of Object.entries(node.attrs ?? {})) {
+      if (!isSafeAttr(name, value)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["attrs", name],
+          message: `unsafe attribute: ${name}`,
+        });
+      }
+    }
+  });
 export type NewNode = z.infer<typeof newNodeSchema>;
 
 /** One direct-manipulation edit, expressed as intent (not a DOM mutation). */
@@ -291,7 +319,22 @@ export const changeOpSchema = z.object({
     .optional(),
   /** The node to create, for insertNode. */
   node: newNodeSchema.optional(),
-});
+})
+  .superRefine((op, ctx) => {
+    // A setAttr op writes property=after onto an EXISTING element, so it is a
+    // stored-DOM-XSS sink just like an inserted node (M1). Reject `on*` handlers
+    // and `javascript:`/hostile-`data:` URL values here too. (insertNode's `node`
+    // is already gated by newNodeSchema above.)
+    if (op.type === "setAttr" && op.property != null && op.after != null) {
+      if (!isSafeAttr(op.property, op.after)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["after"],
+          message: `unsafe attribute: ${op.property}`,
+        });
+      }
+    }
+  });
 export type ChangeOp = z.infer<typeof changeOpSchema>;
 
 /**

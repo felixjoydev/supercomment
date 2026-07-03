@@ -388,3 +388,80 @@ describe("visual change-set + comment kind", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("visual change-set — stored-DOM-XSS rejection (M1)", () => {
+  const target = { selector: "x", anchors: [] as never[] };
+
+  it("accepts a safe insertNode (presentational tag + safe attrs)", () => {
+    const result = changeOpSchema.safeParse({
+      opId: "ok",
+      type: "insertNode",
+      target,
+      node: { tag: "div", text: "hi", attrs: { class: "banner", title: "t" } },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an insertNode with a script-capable tag", () => {
+    for (const tag of ["script", "iframe", "object", "svg", "style"]) {
+      const result = changeOpSchema.safeParse({
+        opId: "bad",
+        type: "insertNode",
+        target,
+        node: { tag },
+      });
+      expect(result.success, `tag ${tag} must be rejected`).toBe(false);
+    }
+  });
+
+  it("rejects an insertNode carrying an on* handler or javascript: URL attr", () => {
+    expect(
+      changeOpSchema.safeParse({
+        opId: "b1",
+        type: "insertNode",
+        target,
+        node: { tag: "img", attrs: { onerror: "steal()" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      changeOpSchema.safeParse({
+        opId: "b2",
+        type: "insertNode",
+        target,
+        node: { tag: "a", attrs: { href: "javascript:alert(1)" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a setAttr op writing an on* handler or javascript: URL", () => {
+    expect(
+      changeOpSchema.safeParse({
+        opId: "b3",
+        type: "setAttr",
+        target,
+        property: "onclick",
+        after: "steal()",
+      }).success,
+    ).toBe(false);
+    expect(
+      changeOpSchema.safeParse({
+        opId: "b4",
+        type: "setAttr",
+        target,
+        property: "href",
+        after: "javascript:alert(1)",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a setAttr op writing an ordinary attribute", () => {
+    const result = changeOpSchema.safeParse({
+      opId: "ok2",
+      type: "setAttr",
+      target,
+      property: "title",
+      after: "A helpful tooltip",
+    });
+    expect(result.success).toBe(true);
+  });
+});

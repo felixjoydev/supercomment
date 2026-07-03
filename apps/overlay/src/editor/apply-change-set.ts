@@ -19,6 +19,7 @@
  * screenshot instead of a misleading live re-apply.
  */
 import type { ChangeOp, EditTarget, VisualChangeSet } from "@supercomment/shared";
+import { isInsertableTag, isSafeAttr } from "@supercomment/shared";
 
 import { resolveAnchors } from "../capture/reanchor.js";
 import { applyStylePreview, applyTextPreview } from "./style-edits.js";
@@ -204,6 +205,9 @@ function bindOp(
     case "setAttr": {
       const prop = op.property;
       if (!prop || op.after == null) return null;
+      // M1: never let a saved change-set set an event handler / javascript:-URL
+      // attribute on a viewer's element (stored-DOM-XSS). Skip the op instead.
+      if (!isSafeAttr(prop, op.after as string)) return null;
       const prev = el.getAttribute?.(prop);
       return {
         apply: () => {
@@ -253,6 +257,9 @@ function bindOp(
     }
     case "insertNode": {
       if (!op.node) return null;
+      // M1: an unsafe tag makes the op inapplicable (skipped) rather than a
+      // no-op "applied". makeGhost re-checks as defense in depth.
+      if (!isInsertableTag(op.node.tag || "div")) return null;
       let ghost: Element | null = null;
       return {
         apply: () => {
@@ -271,16 +278,27 @@ function bindOp(
   }
 }
 
-/** Build an ephemeral ghost node for an inserted element (ours; safe to remove). */
+/**
+ * Build an ephemeral ghost node for an inserted element (ours; safe to remove).
+ *
+ * M1: a change-set is attacker-influenceable, so the tag is allow-listed
+ * (`isInsertableTag` — no `script`/`iframe`/…) and every attribute is filtered
+ * through `isSafeAttr` (no `on*` handlers, no `javascript:`/hostile-`data:` URL
+ * values). An op with an unsafe tag yields no ghost (skipped); unsafe attributes
+ * are dropped while the safe rest of the node still renders.
+ */
 function makeGhost(
   node: NonNullable<VisualChangeSet["ops"][number]["node"]>,
   doc: Document,
 ): Element | null {
+  const tag = node.tag || "div";
+  if (!isInsertableTag(tag)) return null;
   try {
-    const ghost = doc.createElement(node.tag || "div");
+    const ghost = doc.createElement(tag);
     ghost.setAttribute("data-sc-ghost", "1");
     if (node.text) ghost.textContent = node.text;
     for (const [k, v] of Object.entries(node.attrs ?? {})) {
+      if (!isSafeAttr(k, v)) continue; // drop an unsafe attribute, keep the node
       try {
         ghost.setAttribute(k, v);
       } catch {

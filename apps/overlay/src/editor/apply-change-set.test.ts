@@ -133,6 +133,114 @@ describe("applyChangeSet — opt-in modified view (R5/R6)", () => {
   });
 });
 
+describe("applyChangeSet — stored-DOM-XSS hardening (M1)", () => {
+  function insertOp(
+    selector: string,
+    node: NonNullable<VisualChangeSet["ops"][number]["node"]>,
+  ): VisualChangeSet["ops"][number] {
+    return {
+      opId: "i",
+      type: "insertNode",
+      target: target(selector),
+      insertion: { position: "append" },
+      node,
+    };
+  }
+  function attrOp(
+    selector: string,
+    property: string,
+    after: string,
+    opId = "a",
+  ): VisualChangeSet["ops"][number] {
+    return { opId, type: "setAttr", target: target(selector), property, after };
+  }
+
+  it("skips an insertNode with a script-capable tag (no ghost created)", () => {
+    const { doc } = makeFakeDom();
+    const section = leaf(doc, "section", "");
+    const result = applyChangeSet(
+      { ops: [insertOp("section", { tag: "script", text: "alert(1)" })] },
+      doc as unknown as Document,
+      { resolve: resolverFor({ section }) },
+    );
+    expect(result.applied).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(section.children.length).toBe(0);
+  });
+
+  it("inserts a safe node but drops unsafe attributes (on*, javascript: URL)", () => {
+    const { doc } = makeFakeDom();
+    const section = leaf(doc, "section", "");
+    const result = applyChangeSet(
+      {
+        ops: [
+          insertOp("section", {
+            tag: "a",
+            text: "Buy",
+            attrs: {
+              class: "cta",
+              title: "t",
+              onclick: "steal()",
+              href: "javascript:alert(1)",
+            },
+          }),
+        ],
+      },
+      doc as unknown as Document,
+      { resolve: resolverFor({ section }) },
+    );
+    expect(result.applied).toBe(1);
+    expect(section.children.length).toBe(1);
+    const ghost = section.children[0]!;
+    expect(ghost.getAttribute("class")).toBe("cta");
+    expect(ghost.getAttribute("title")).toBe("t");
+    expect(ghost.getAttribute("onclick")).toBeNull();
+    expect(ghost.getAttribute("href")).toBeNull();
+  });
+
+  it("keeps a safe href on an inserted node", () => {
+    const { doc } = makeFakeDom();
+    const section = leaf(doc, "section", "");
+    applyChangeSet(
+      { ops: [insertOp("section", { tag: "a", attrs: { href: "/pricing" } })] },
+      doc as unknown as Document,
+      { resolve: resolverFor({ section }) },
+    );
+    expect(section.children[0]?.getAttribute("href")).toBe("/pricing");
+  });
+
+  it("skips a setAttr op writing an event handler or javascript: URL", () => {
+    const { doc } = makeFakeDom();
+    const a = leaf(doc, "a", "link");
+    const result = applyChangeSet(
+      {
+        ops: [
+          attrOp("a", "onmouseover", "steal()", "h"),
+          attrOp("a", "href", "javascript:alert(1)", "j"),
+        ],
+      },
+      doc as unknown as Document,
+      { resolve: resolverFor({ a }) },
+    );
+    expect(result.applied).toBe(0);
+    expect(result.skipped).toBe(2);
+    expect(a.getAttribute("onmouseover")).toBeNull();
+    expect(a.getAttribute("href")).toBeNull();
+  });
+
+  it("applies a safe setAttr op", () => {
+    const { doc } = makeFakeDom();
+    const a = leaf(doc, "a", "link");
+    const result = applyChangeSet(
+      { ops: [attrOp("a", "title", "Go to pricing")] },
+      doc as unknown as Document,
+      { resolve: resolverFor({ a }) },
+    );
+    expect(result.applied).toBe(1);
+    expect(a.getAttribute("title")).toBe("Go to pricing");
+  });
+});
+
 describe("ModifiedViewController — single active (G7)", () => {
   it("selecting another template reverts the first, then applies the second", () => {
     const { doc } = makeFakeDom();
