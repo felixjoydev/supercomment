@@ -7,7 +7,8 @@
     "dev": "tsup --watch",
     "prebuild": "pnpm --filter @supercomment/shared build",
     "build": "tsup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@supercomment/shared": "workspace:*",
