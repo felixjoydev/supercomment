@@ -18,54 +18,61 @@ export function Check() {
   );
 }
 
+/** Pipeline stages, for the board. The status pastels belong to the board. */
 export type Stage = "backlog" | "agent" | "review" | "done";
 
-const stageLabels: Record<Stage, string> = {
-  backlog: "Backlog",
-  agent: "Agent Ready",
-  review: "Review",
-  done: "Done",
-};
-
-export function StagePill({ stage }: { stage: Stage }) {
-  return (
-    <span className={cn("pill", `pill--${stage}`)}>
-      <span className="dot" />
-      {stageLabels[stage]}
-    </span>
-  );
-}
-
-/** Integration launch state, driven by the single integrationStatus constant. */
+/**
+ * Integration launch state, driven by the single integrationStatus constant.
+ * Neutral chip with a minimal status dot: the pastel surfaces stay reserved for
+ * the pipeline board, so this never reads as decoration.
+ */
 export function StatusBadge({ status }: { status: "live" | "coming-soon" }) {
-  if (status === "live") {
-    return (
-      <span className="pill pill--done">
-        <span className="dot" />
-        Live
-      </span>
-    );
-  }
+  const live = status === "live";
   return (
-    <span className="pill pill--backlog">
-      <span className="dot" />
-      Coming soon
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink-2">
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          live ? "bg-done-dot" : "bg-backlog-dot",
+        )}
+      />
+      {live ? "Live" : "Coming soon"}
     </span>
   );
 }
 
-/** A quiet feature row: fragment header + one mechanism sentence. */
-export function FeatureRow({
+/** A monospace code block. Children are raw text (angle brackets welcome). */
+export function CodeBlock({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <pre className={cn("code-block", className)}>{children}</pre>;
+}
+
+/** A numbered step section for the how-it-works loop. */
+export function StepSection({
+  n,
   title,
   children,
 }: {
+  n: number;
   title: string;
   children: ReactNode;
 }) {
   return (
-    <div>
-      <h3 className="text-base font-semibold text-ink">{title}</h3>
-      <p className="mt-1.5 text-ink-2">{children}</p>
+    <div className="grid gap-4 md:grid-cols-[auto_1fr] md:gap-8">
+      <div className="flex items-center gap-3 md:block">
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-ink text-sm font-semibold text-white tnum">
+          {n}
+        </span>
+      </div>
+      <div className="min-w-0">
+        <h2 className="text-2xl">{title}</h2>
+        <div className="prose mt-4 max-w-2xl">{children}</div>
+      </div>
     </div>
   );
 }
