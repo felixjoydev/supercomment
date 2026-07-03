@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   generateLinkSecret,
   computeLinkPatch,
+  parseLinkAction,
   isGuestLinkValid,
   isExpired,
   buildGuestUrl,
@@ -17,6 +18,55 @@ const baseState = (over: Partial<PreviewLinkState> = {}): PreviewLinkState => ({
   link_secret: null,
   expires_at: null,
   ...over,
+});
+
+describe('parseLinkAction (WEB-3 body validation)', () => {
+  it('accepts each well-formed action', () => {
+    expect(parseLinkAction({ type: 'rename', name: 'x' })).toEqual({ type: 'rename', name: 'x' });
+    expect(parseLinkAction({ type: 'set_access_mode', accessMode: 'guest_link' })).toEqual({
+      type: 'set_access_mode',
+      accessMode: 'guest_link',
+    });
+    expect(parseLinkAction({ type: 'regenerate' })).toEqual({ type: 'regenerate' });
+    expect(parseLinkAction({ type: 'revoke' })).toEqual({ type: 'revoke' });
+    expect(parseLinkAction({ type: 'set_expiry', expiresAt: null })).toEqual({
+      type: 'set_expiry',
+      expiresAt: null,
+    });
+    expect(
+      parseLinkAction({ type: 'set_deploy_url', deployUrl: 'https://x.example.com' }),
+    ).toEqual({ type: 'set_deploy_url', deployUrl: 'https://x.example.com' });
+  });
+
+  it('rejects a rename with a missing/non-string name (the WEB-3 500→400 fix)', () => {
+    // Previously these slipped past `as LinkAction` and crashed computeLinkPatch
+    // with `undefined.trim()` — an unhandled 500. Now they are a clean 400.
+    expect(() => parseLinkAction({ type: 'rename' })).toThrow(LinkActionError);
+    expect(() => parseLinkAction({ type: 'rename', name: 123 })).toThrow(LinkActionError);
+  });
+
+  it('rejects a bad or missing access mode', () => {
+    expect(() => parseLinkAction({ type: 'set_access_mode', accessMode: 'nope' })).toThrow(
+      LinkActionError,
+    );
+    expect(() => parseLinkAction({ type: 'set_access_mode' })).toThrow(LinkActionError);
+  });
+
+  it('rejects set_expiry with a non-string/non-null expiresAt', () => {
+    expect(() => parseLinkAction({ type: 'set_expiry', expiresAt: 42 })).toThrow(LinkActionError);
+    expect(() => parseLinkAction({ type: 'set_expiry' })).toThrow(LinkActionError);
+  });
+
+  it('rejects set_deploy_url without a string deployUrl', () => {
+    expect(() => parseLinkAction({ type: 'set_deploy_url' })).toThrow(LinkActionError);
+  });
+
+  it('rejects unknown types and non-object bodies', () => {
+    expect(() => parseLinkAction({ type: 'frobnicate' })).toThrow(LinkActionError);
+    expect(() => parseLinkAction(null)).toThrow(LinkActionError);
+    expect(() => parseLinkAction('rename')).toThrow(LinkActionError);
+    expect(() => parseLinkAction({})).toThrow(LinkActionError);
+  });
 });
 
 describe('link secret generation', () => {

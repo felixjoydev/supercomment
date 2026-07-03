@@ -5,18 +5,10 @@ import { jsonError } from '@/lib/api-response';
 import {
   computeLinkPatch,
   LinkActionError,
+  parseLinkAction,
   type LinkAction,
   type PreviewLinkState,
 } from '@/lib/link';
-
-const KNOWN_ACTIONS = new Set<LinkAction['type']>([
-  'rename',
-  'set_access_mode',
-  'regenerate',
-  'revoke',
-  'set_expiry',
-  'set_deploy_url',
-]);
 
 const PREVIEW_RETURN_COLS =
   'id, project_id, name, slug, access_mode, link_secret, deploy_url, expires_at, status';
@@ -49,15 +41,15 @@ export async function PATCH(
     return jsonError('Invalid JSON', 400);
   }
 
-  if (
-    !body ||
-    typeof body !== 'object' ||
-    typeof (body as { type?: unknown }).type !== 'string' ||
-    !KNOWN_ACTIONS.has((body as { type: LinkAction['type'] }).type)
-  ) {
-    return jsonError('Invalid or unknown action', 400);
+  let action: LinkAction;
+  try {
+    action = parseLinkAction(body);
+  } catch (err) {
+    if (err instanceof LinkActionError) {
+      return jsonError(err.message, 400);
+    }
+    throw err;
   }
-  const action = body as LinkAction;
 
   // Read current link state (RLS-scoped — also re-confirms visibility).
   const { data: current, error: readErr } = await supabase

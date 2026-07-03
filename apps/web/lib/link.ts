@@ -77,6 +77,59 @@ export function generateLinkSecret(): string {
 }
 
 /**
+ * Validate an untrusted request body into a well-formed {@link LinkAction}.
+ *
+ * The PATCH route receives arbitrary JSON; without this a body like
+ * `{ type: 'rename' }` (no `name`) slips through a bare `as LinkAction` cast and
+ * blows up in computeLinkPatch (`action.name.trim()` on undefined) as an
+ * unhandled 500. Here every variant's payload is shape-checked, so a malformed
+ * body throws LinkActionError → the route returns 400. Deeper SEMANTIC checks
+ * (non-empty name, allowlisted deploy URL, valid expiry) stay in computeLinkPatch.
+ */
+export function parseLinkAction(input: unknown): LinkAction {
+  if (!input || typeof input !== 'object') {
+    throw new LinkActionError('Invalid or unknown action');
+  }
+  const record = input as Record<string, unknown>;
+  switch (record.type) {
+    case 'rename': {
+      if (typeof record.name !== 'string') {
+        throw new LinkActionError('rename requires a name');
+      }
+      return { type: 'rename', name: record.name };
+    }
+    case 'set_access_mode': {
+      if (record.accessMode !== 'team_only' && record.accessMode !== 'guest_link') {
+        throw new LinkActionError(
+          'set_access_mode requires accessMode of "team_only" or "guest_link"',
+        );
+      }
+      return { type: 'set_access_mode', accessMode: record.accessMode };
+    }
+    case 'regenerate':
+      return { type: 'regenerate' };
+    case 'revoke':
+      return { type: 'revoke' };
+    case 'set_expiry': {
+      if (record.expiresAt !== null && typeof record.expiresAt !== 'string') {
+        throw new LinkActionError(
+          'set_expiry requires expiresAt (an ISO string or null)',
+        );
+      }
+      return { type: 'set_expiry', expiresAt: record.expiresAt };
+    }
+    case 'set_deploy_url': {
+      if (typeof record.deployUrl !== 'string') {
+        throw new LinkActionError('set_deploy_url requires deployUrl');
+      }
+      return { type: 'set_deploy_url', deployUrl: record.deployUrl };
+    }
+    default:
+      throw new LinkActionError('Invalid or unknown action');
+  }
+}
+
+/**
  * Compute the DB patch for a link action against the preview's current state.
  *
  * Rules:
