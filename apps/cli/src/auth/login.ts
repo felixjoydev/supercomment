@@ -35,10 +35,11 @@ import {
   type TextPrompter,
 } from "./select.js";
 import { makeMemberClient } from "../supabase/client.js";
+import { trimSlash } from "../lib/url.js";
 
 /** Strip any trailing slash so the origin is clean for URL + CORS use. */
 export function normalizeOrigin(url: string): string {
-  return url.replace(/\/+$/, "");
+  return trimSlash(url);
 }
 
 /** Default per-login nonce: 256 bits, URL-safe. */

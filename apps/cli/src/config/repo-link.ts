@@ -16,6 +16,7 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, parse as parsePath } from "node:path";
+import { atomicWriteVia } from "../lib/atomic-write.js";
 
 export const REPO_LINK_FILE = "supercomment.json";
 
@@ -122,10 +123,7 @@ export async function writeRepoLink(
     ...(link.slug ? { slug: link.slug } : {}),
   };
   const json = `${JSON.stringify(payload, null, 2)}\n`;
-  const tmp = `${path}.tmp-${process.pid}`;
-  await ops.mkdir(dir, { recursive: true });
-  await ops.writeFile(tmp, json);
-  await ops.rename(tmp, path);
+  await atomicWriteVia(ops, dir, path, json);
   return path;
 }
 

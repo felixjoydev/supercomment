@@ -14,6 +14,7 @@
  * independent of supabase-js internals/versions.
  */
 import { decodeJwtExp } from "../auth/identity.js";
+import { trimSlash } from "../lib/url.js";
 
 /** The token material the source manages. */
 export interface TokenSet {
@@ -36,11 +37,6 @@ export type PersistTokens = (tokens: {
   accessToken: string;
   refreshToken: string;
 }) => Promise<void>;
-
-/** Strip a trailing slash so the token endpoint URL is well-formed. */
-function trimSlash(s: string): string {
-  return s.replace(/\/+$/, "");
-}
 
 /**
  * The default refresh: POST grant_type=refresh_token to GoTrue. apikey = anon

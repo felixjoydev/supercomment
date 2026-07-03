@@ -25,6 +25,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { atomicWriteVia } from "../lib/atomic-write.js";
 
 /** Where the binding lives by default. U5 writes this file. */
 export const DEFAULT_BINDING_DIR = ".supercomment";
@@ -252,9 +253,6 @@ export async function writeProjectBinding(
 
   const path = resolveBindingPath(env, home);
   const dir = dirname(path);
-  // A deterministic temp sibling: unique enough for a single-writer helper and
-  // it lives on the same filesystem so the rename is atomic.
-  const tmpPath = `${path}.tmp-${process.pid}`;
 
   // Serialize only the known fields so we never leak extra/undefined keys.
   const payload: ProjectBinding = {
@@ -269,10 +267,19 @@ export async function writeProjectBinding(
   };
   const json = `${JSON.stringify(payload, null, 2)}\n`;
 
-  await fs.mkdir(dir, { recursive: true });
-  // 0o600 = owner read/write only. Best-effort on platforms that honor it.
-  await fs.writeFile(tmpPath, json, { mode: 0o600 });
-  await fs.rename(tmpPath, path);
+  // The binding carries the member token, so the temp write uses 0600 (owner
+  // read/write only, best-effort) applied inside our own writeFile; the shared
+  // atomicWriteVia does the tmp-sibling write + atomic rename over `path`.
+  await atomicWriteVia(
+    {
+      mkdir: fs.mkdir,
+      writeFile: (p, d) => fs.writeFile(p, d, { mode: 0o600 }),
+      rename: fs.rename,
+    },
+    dir,
+    path,
+    json,
+  );
   return path;
 }
 

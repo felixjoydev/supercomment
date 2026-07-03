@@ -28,6 +28,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { trimSlash } from "../lib/url.js";
 
 import { Channel, type ChannelSupabaseClient } from "../channel/index.js";
 import type { QueueItem } from "../channel/queue.js";
@@ -116,10 +117,6 @@ function extractSlug(data: unknown): string | undefined {
   }
   if (typeof data === "string" && data.length > 0) return data;
   return undefined;
-}
-
-function trimSlash(s: string): string {
-  return s.replace(/\/+$/, "");
 }
 
 /** A logger so tests can capture human output without touching real stdout. */
