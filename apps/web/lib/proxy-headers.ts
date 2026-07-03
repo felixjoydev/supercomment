@@ -53,3 +53,60 @@ export function buildForwardHeaders(source: Headers): Headers {
   });
   return out;
 }
+
+/**
+ * Opaque-origin sandbox applied to every proxied tunnel RESPONSE. `sandbox`
+ * with no `allow-same-origin` forces the browser to treat the document as a
+ * UNIQUE origin, so its scripts cannot read the dashboard's cookies /
+ * localStorage or make credentialed same-origin calls to the dashboard API —
+ * neutralizing the H1 same-origin XSS even when a malicious tunnel serves
+ * `text/html` + `<script>`. `allow-scripts allow-forms` keeps a genuine preview
+ * usable; `allow-same-origin` is deliberately omitted (adding it would defeat
+ * the isolation).
+ */
+export const TUNNEL_RESPONSE_CSP = 'sandbox allow-scripts allow-forms';
+
+/**
+ * Build the RESPONSE headers streamed back from the tunnel origin to the
+ * reviewer's browser. Beyond hop-by-hop, this drops:
+ *   - `set-cookie` / `set-cookie2` — a developer-controlled tunnel must not be
+ *     able to set/overwrite cookies on the dashboard origin (the H1 `sb-*`
+ *     session-fixation / cookie-overwrite vector), and
+ *   - the upstream's own `content-security-policy*` — so it cannot relax the
+ *     sandbox we impose.
+ * It then forces the sandbox CSP + `nosniff`. Pure/exported so the strip + CSP
+ * rules are unit-tested without next/server.
+ */
+export function buildTunnelResponseHeaders(upstream: Headers): Headers {
+  const out = new Headers();
+  upstream.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower)) return;
+    if (lower === 'set-cookie' || lower === 'set-cookie2') return;
+    if (
+      lower === 'content-security-policy' ||
+      lower === 'content-security-policy-report-only'
+    ) {
+      return;
+    }
+    out.set(key, value);
+  });
+  out.set('content-security-policy', TUNNEL_RESPONSE_CSP);
+  out.set('x-content-type-options', 'nosniff');
+  return out;
+}
+
+/**
+ * Strip the guest `?k=<link_secret>` param from a query string before it is
+ * forwarded upstream, so the first-party link secret (validated at /s, never a
+ * deploy-origin credential) never reaches the developer's tunnel. Preserves all
+ * other params; returns a leading-`?`-prefixed string, or `''` when empty.
+ */
+export function stripLinkSecretFromSearch(search: string): string {
+  const params = new URLSearchParams(
+    search.startsWith('?') ? search.slice(1) : search,
+  );
+  params.delete('k');
+  const rest = params.toString();
+  return rest ? `?${rest}` : '';
+}

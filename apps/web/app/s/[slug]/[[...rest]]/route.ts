@@ -2,12 +2,18 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createClient as createAnonClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { safeNextPath } from '@/lib/safe-redirect';
+import { requireMember, type VerifiedClaims } from '@/lib/auth-guard';
 import {
   classifyMintError,
   generateReviewToken,
   buildEmbeddedRedirectUrl,
 } from '@/lib/share-access';
-import { HOP_BY_HOP, buildForwardHeaders } from '@/lib/proxy-headers';
+import {
+  buildForwardHeaders,
+  buildTunnelResponseHeaders,
+  stripLinkSecretFromSearch,
+} from '@/lib/proxy-headers';
+import { isWebTunnelEnabled } from '@/lib/tunnel-gate';
 
 /**
  * Stable preview link: `…/s/<slug>/<anything>`.
@@ -135,11 +141,56 @@ async function resolveTunnel(slug: string): Promise<TunnelRoute | null> {
   return row ?? null;
 }
 
+/**
+ * team_only tunnel access: verify the caller is a verified, non-anonymous member
+ * of the preview's workspace (via the cookie-bound client — their first-party
+ * cookies ride every same-origin /s asset request). Returns a Response to
+ * short-circuit when access is denied, or null when the member may proceed.
+ * Anonymous/no session on a navigable hit is bounced through login, mirroring
+ * the embedded `login_required` path.
+ */
+async function requireTunnelMember(
+  request: NextRequest,
+  previewId: string,
+  slug: string,
+): Promise<Response | null> {
+  const supabase = await createClient();
+  const { data: claimsData } = await supabase.auth.getClaims();
+  const claims = (claimsData?.claims ?? null) as VerifiedClaims | null;
+
+  if (!claims?.sub || claims.is_anonymous === true) {
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      const next = safeNextPath(`/s/${slug}`);
+      return NextResponse.redirect(
+        new URL(`/login?next=${encodeURIComponent(next)}`, request.nextUrl.origin),
+        { status: 307 },
+      );
+    }
+    return infoPage('You must sign in to view this preview.', 401);
+  }
+
+  const { data: isMember } = await supabase.rpc('is_preview_workspace_member', {
+    p_preview_id: previewId,
+  });
+  const guard = requireMember(claims, isMember === true);
+  if (!guard.ok) {
+    return infoPage('You do not have access to this preview.', guard.status);
+  }
+  return null;
+}
+
 async function proxyTunnel(
   request: NextRequest,
   slug: string,
   rest: string[] | undefined,
 ): Promise<Response> {
+  // H1: the hosted tunnel reverse proxy is legacy/dormant and stays OFF unless
+  // the deployment opts in via SUPERCOMMENT_ENABLE_TUNNEL. Default off means an
+  // attacker-registered tunnel is never served same-origin as the dashboard.
+  if (!isWebTunnelEnabled()) {
+    return infoPage("This preview isn't available.", 404);
+  }
+
   let route: TunnelRoute | null;
   try {
     route = await resolveTunnel(slug);
@@ -154,9 +205,19 @@ async function proxyTunnel(
     return infoPage('The developer is currently offline.');
   }
 
+  // H1: enforce access BEFORE forwarding. team_only requires a signed-in member;
+  // resolve_tunnel_for_slug deliberately never returns link_secret, so guest_link
+  // access rests on the secret-in-link plus the opaque-origin sandbox applied to
+  // the response below (buildTunnelResponseHeaders).
+  if (route.access_mode === 'team_only') {
+    const denied = await requireTunnelMember(request, route.preview_id, slug);
+    if (denied) return denied;
+  }
+
   const base = route.current_tunnel_url.replace(/\/+$/, '');
   const subPath = rest && rest.length > 0 ? '/' + rest.join('/') : '/';
-  const search = request.nextUrl.search ?? '';
+  // Drop the ?k= link secret so it never reaches the developer's tunnel origin.
+  const search = stripLinkSecretFromSearch(request.nextUrl.search ?? '');
   const upstreamUrl = `${base}${subPath}${search}`;
 
   // Strip hop-by-hop + accept-encoding AND the reviewer's first-party
@@ -179,13 +240,13 @@ async function proxyTunnel(
     return infoPage('The developer went offline mid-session.');
   }
 
-  const outHeaders = new Headers();
-  upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP.has(key.toLowerCase())) return;
-    outHeaders.set(key, value);
+  // Strip upstream Set-Cookie (no dashboard-origin cookie overwrite) and force
+  // the opaque-origin sandbox CSP so proxied scripts can't touch the dashboard's
+  // same-origin session (the H1 same-origin-XSS fix).
+  return new NextResponse(upstream.body, {
+    status: upstream.status,
+    headers: buildTunnelResponseHeaders(upstream.headers),
   });
-
-  return new NextResponse(upstream.body, { status: upstream.status, headers: outHeaders });
 }
 
 async function handle(
