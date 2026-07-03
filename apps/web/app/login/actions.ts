@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { safeNextPath } from '@/lib/safe-redirect';
+import { authRedirectOrigin } from '@/lib/app-origin';
 
 /**
  * Server actions for auth. We use a passwordless magic link (OTP) as the
@@ -15,10 +16,19 @@ import { safeNextPath } from '@/lib/safe-redirect';
  * redirect URLs and cannot be exercised in this sandbox.
  */
 
-function originFromHeaders(host: string | null, proto: string | null): string {
-  const h = host ?? 'localhost:3000';
-  const p = proto ?? (h.startsWith('localhost') ? 'http' : 'https');
-  return `${p}://${h}`;
+/**
+ * The origin for auth redirect URLs. Uses NEXT_PUBLIC_APP_URL in production so a
+ * spoofed Host header can't redirect a victim's auth code to an attacker origin
+ * (M4); the request-derived fallback is dev-only. See lib/app-origin.ts.
+ */
+async function authOrigin(): Promise<string> {
+  const hdrs = await headers();
+  return authRedirectOrigin({
+    appUrl: process.env.NEXT_PUBLIC_APP_URL,
+    host: hdrs.get('host'),
+    proto: hdrs.get('x-forwarded-proto'),
+    isProduction: process.env.NODE_ENV === 'production',
+  });
 }
 
 export async function signInWithEmail(
@@ -29,8 +39,7 @@ export async function signInWithEmail(
   if (!email) return { error: 'Email is required' };
 
   const supabase = await createClient();
-  const hdrs = await headers();
-  const origin = originFromHeaders(hdrs.get('host'), hdrs.get('x-forwarded-proto'));
+  const origin = await authOrigin();
   // Carry a safe `next` through the magic-link round trip so team_only review
   // links return the reviewer to /s/<slug> after sign-in (U2 / AE4).
   const next = safeNextPath(String(formData.get('next') ?? ''));
@@ -85,8 +94,7 @@ export async function signUpWithPassword(
 
 export async function signInWithGitHub(): Promise<void> {
   const supabase = await createClient();
-  const hdrs = await headers();
-  const origin = originFromHeaders(hdrs.get('host'), hdrs.get('x-forwarded-proto'));
+  const origin = await authOrigin();
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'github',
