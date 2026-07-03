@@ -169,6 +169,45 @@ export function toExistingMarkers(
   }));
 }
 
+/**
+ * Keep only the comments made on the CURRENT page. A review link can span a whole
+ * site, but each comment is anchored to the page it was made on (its
+ * `context.url`), so comments from OTHER routes must not render here — markers are
+ * per-page. Matches on pathname: the origin is already the shared review origin,
+ * and query + hash are ignored with a trailing slash normalized, so `/p`, `/p/`,
+ * and `/p?x=1` are the same page. A comment whose URL can't be parsed is KEPT so a
+ * legit comment is never silently dropped (real comments always carry `context.url`).
+ */
+export function filterCommentsForPage(
+  comments: ReviewComment[],
+  pageUrl: string,
+): ReviewComment[] {
+  const pagePath = pagePathOf(pageUrl);
+  if (pagePath === null) return comments; // unparseable current URL → hide nothing
+  return comments.filter((c) => {
+    const commentPath = pagePathOf(readContextUrl(c.context));
+    return commentPath === null || commentPath === pagePath;
+  });
+}
+
+/** The captured page URL out of a comment's context (CapturedContext.url). */
+function readContextUrl(context: unknown): string | null {
+  if (!context || typeof context !== "object") return null;
+  const u = (context as { url?: unknown }).url;
+  return typeof u === "string" ? u : null;
+}
+
+/** A URL's pathname with a trailing slash normalized off (the root stays "/"). */
+function pagePathOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const p = new URL(url).pathname;
+    return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+  } catch {
+    return null;
+  }
+}
+
 /** Defensively read the captured device `surface` out of a comment's context. */
 function readSurface(context: unknown): DeviceSurface | undefined {
   if (!context || typeof context !== "object") return undefined;

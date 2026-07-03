@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  filterCommentsForPage,
   loadReviewComments,
   makeFetchListRpcCaller,
   toExistingMarkers,
@@ -187,6 +188,53 @@ describe("makeFetchListRpcCaller — bearer + URL shaping", () => {
     await expect(
       rpc("list_review_comments", { p_preview_id: BASE.previewId }, "jwt"),
     ).rejects.toThrow(/401.*no_review_session/);
+  });
+});
+
+describe("filterCommentsForPage (per-page marker scoping)", () => {
+  const commentOn = (number: number, url: string): ReviewComment => ({
+    number,
+    intent: "fix",
+    severity: "minor",
+    note: "n",
+    status: "open",
+    isStale: false,
+    context: { url },
+    createdAt: "2026-07-04T00:00:00Z",
+    authorDisplayName: "Ada",
+  });
+  const home = commentOn(1, "https://felixjoy.me/");
+  const supergoal = commentOn(2, "https://felixjoy.me/supergoal");
+  const all = [home, supergoal];
+
+  it("keeps only comments whose page path matches the current page", () => {
+    expect(filterCommentsForPage(all, "https://felixjoy.me/")).toEqual([home]);
+    expect(filterCommentsForPage(all, "https://felixjoy.me/supergoal")).toEqual([
+      supergoal,
+    ]);
+  });
+
+  it("ignores query + hash and normalizes a trailing slash", () => {
+    expect(
+      filterCommentsForPage(all, "https://felixjoy.me/supergoal?ref=x#top"),
+    ).toEqual([supergoal]);
+    expect(
+      filterCommentsForPage([supergoal], "https://felixjoy.me/supergoal/"),
+    ).toEqual([supergoal]);
+    expect(
+      filterCommentsForPage(
+        [commentOn(3, "https://felixjoy.me/p/")],
+        "https://felixjoy.me/p",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a comment whose URL is missing/unparseable (never silently drops)", () => {
+    const noUrl = commentOn(4, "");
+    noUrl.context = {}; // no url captured at all
+    expect(filterCommentsForPage([noUrl], "https://felixjoy.me/")).toEqual([
+      noUrl,
+    ]);
   });
 });
 

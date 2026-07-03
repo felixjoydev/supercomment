@@ -39,7 +39,11 @@ import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
 import { CaptureUploader } from "./submit/upload.js";
-import { loadReviewComments, toExistingMarkers } from "./read/load-comments.js";
+import {
+  filterCommentsForPage,
+  loadReviewComments,
+  toExistingMarkers,
+} from "./read/load-comments.js";
 import { isDeviceChild } from "./device/device-mode.js";
 import {
   REFRESH_SKEW_MS,
@@ -344,9 +348,17 @@ async function activateSession(
     storage: prefilledNameStorage(session.displayName),
   });
 
-  // Render the markers once the (already in-flight) read resolves.
+  // Render the markers once the (already in-flight) read resolves — scoped to
+  // THIS page. A review link can span a whole site, but a comment belongs to the
+  // page it was made on (context.url), so comments from other routes must not
+  // render here (their markers would mis-anchor or show as stale clutter).
   void commentsPromise.then((comments) => {
-    if (comments) controller.loadExistingComments(toExistingMarkers(comments));
+    if (!comments) return;
+    const forThisPage =
+      typeof location !== "undefined"
+        ? filterCommentsForPage(comments, location.href)
+        : comments;
+    controller.loadExistingComments(toExistingMarkers(forThisPage));
   });
 }
 
