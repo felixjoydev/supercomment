@@ -119,8 +119,6 @@ export class OverlayController {
   /** The visual-editor properties panel (U9); open only while editing an element. */
   private editPanel: PropertiesPanel | null = null;
   /** A selection + draft waiting on a guest name before submission. */
-  private deferredTarget: SelectionTarget | null = null;
-  private deferredDraft: CommentDraft | null = null;
 
   /** Responsive device-mode (top-level controllers only; null in the iframe child). */
   private readonly deviceMode: DeviceMode | null;
@@ -474,9 +472,8 @@ export class OverlayController {
     enqueueToAgent = false,
   ): void {
     if (!this.guestStore.has()) {
-      // Defer the submission until a name is provided.
-      this.deferredTarget = target;
-      this.deferredDraft = draft;
+      // Defer the submission until a name is provided (the pending target/draft
+      // are captured by the callback closure below).
       this.promptForName(() =>
         this.completeSubmit(target, draft, asTemplate, enqueueToAgent),
       );
@@ -748,8 +745,6 @@ export class OverlayController {
     this.markers.closePopover();
     this.selection.clear();
     this.highlights.clear();
-    this.deferredTarget = null;
-    this.deferredDraft = null;
     if (this.selection.getMode() === "multi") {
       this.toolbar.setMultiCount(0);
     }
