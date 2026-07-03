@@ -4,10 +4,10 @@ import type { PreviewDbStatus } from '@/lib/status';
 import { toCommentView } from '@/lib/comments/transform';
 import type { CommentView, CommentRow, SendStatus } from '@/lib/comments/types';
 import { COMMENT_ROW_COLUMNS } from '@supercomment/shared';
-import { generateSlug } from '@/lib/slug';
 import {
   DEFAULT_WORKSPACE_NAME,
   buildDefaultReviewLinkInsert,
+  insertPreviewWithSlugRetry,
   needsDefaultWorkspace,
 } from '@/lib/defaults';
 
@@ -320,13 +320,13 @@ async function createDefaultReviewLink(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const result = await insertPreviewWithSlugRetry(async (slug) => {
     const { error } = await supabase
       .from('previews')
-      .insert(buildDefaultReviewLinkInsert(projectId, generateSlug()));
-    if (!error) return;
-    // 23505 = unique_violation (slug). Anything else is a real failure.
-    if (error.code !== '23505') throw error;
-  }
+      .insert(buildDefaultReviewLinkInsert(projectId, slug));
+    return error;
+  });
+  if (result.ok) return;
+  if (result.error) throw result.error;
   throw new Error('Could not allocate a unique slug for the default review link');
 }

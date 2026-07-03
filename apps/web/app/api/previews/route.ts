@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { requireMemberOfProject } from '@/lib/api-auth';
 import { jsonError } from '@/lib/api-response';
-import { generateSlug } from '@/lib/slug';
+import { insertPreviewWithSlugRetry } from '@/lib/defaults';
 
 /**
  * Preview create endpoint.
@@ -31,9 +31,10 @@ export async function POST(request: NextRequest) {
   const auth = await requireMemberOfProject(supabase, projectId);
   if (!auth.ok) return auth.response;
 
-  // Retry once on the (astronomically unlikely) slug collision.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const slug = generateSlug();
+  // Insert with the shared slug-collision retry. The SELECT stays a literal here;
+  // the inserted row is captured for the 201 response.
+  let insertedPreview: unknown = null;
+  const result = await insertPreviewWithSlugRetry(async (slug) => {
     const { data, error } = await supabase
       .from('previews')
       .insert({
@@ -45,16 +46,17 @@ export async function POST(request: NextRequest) {
       })
       .select('id, project_id, name, slug, access_mode, status')
       .single();
+    if (!error) insertedPreview = data;
+    return error;
+  });
 
-    if (!error) {
-      return NextResponse.json({ preview: data }, { status: 201 });
-    }
-    // 23505 = unique_violation (slug). Anything else is a real failure; return a
-    // generic message rather than the raw Postgres error (L3).
-    if (error.code !== '23505') {
-      return jsonError('Could not create preview', 400);
-    }
+  if (result.ok) {
+    return NextResponse.json({ preview: insertedPreview }, { status: 201 });
   }
-
+  // A non-collision error is the real failure; return a generic message, never
+  // the raw Postgres error (L3). A null error means the slug was exhausted.
+  if (result.error) {
+    return jsonError('Could not create preview', 400);
+  }
   return jsonError('Could not allocate a unique slug', 500);
 }

@@ -1,7 +1,9 @@
 import type { AccessMode } from './link';
+import { generateSlug } from './slug';
 
 /**
- * Pure defaults + decisions for the auto-created workspace / review link (U4).
+ * Pure defaults + decisions for the auto-created workspace / review link (U4),
+ * plus the slug-collision retry policy shared by the two preview creators.
  *
  * Kept free of React / Next / Supabase imports (relative imports only) so it is
  * unit-testable in the node test env, following the repo's "all testable logic
@@ -52,4 +54,39 @@ export function buildDefaultReviewLinkInsert(
     access_mode: 'team_only',
     status: 'offline',
   };
+}
+
+/** Outcome of {@link insertPreviewWithSlugRetry}. */
+export type SlugRetryOutcome =
+  | { ok: true }
+  | { ok: false; error: { code?: string; message?: string } | null };
+
+/**
+ * The insert-with-slug-retry policy shared by the two default-review-link /
+ * preview creators (createProject's default link in data.ts, and
+ * POST /api/previews).
+ *
+ * A preview's `slug` is UNIQUE, so a freshly generated slug can — astronomically
+ * rarely — collide (Postgres 23505). This runs `attempt(slug)` with a fresh
+ * generated slug up to `attempts` times, retrying ONLY on 23505 and surfacing
+ * any other error. `attempt` performs one insert (with whatever columns /
+ * `.select()` the caller needs — keeping the SELECT string a literal at the call
+ * site) and returns its PostgREST error, or null on success. Each caller keeps
+ * its own result handling (throw vs HTTP response):
+ *
+ *   - { ok: true }               — an attempt succeeded.
+ *   - { ok: false; error }       — a non-collision error (the real failure).
+ *   - { ok: false; error: null } — every attempt collided (slug exhausted).
+ */
+export async function insertPreviewWithSlugRetry(
+  attempt: (slug: string) => Promise<{ code?: string; message?: string } | null>,
+  attempts = 2,
+): Promise<SlugRetryOutcome> {
+  for (let i = 0; i < attempts; i++) {
+    const error = await attempt(generateSlug());
+    if (!error) return { ok: true };
+    // 23505 = unique_violation (slug). Anything else is a real failure.
+    if (error.code !== '23505') return { ok: false, error };
+  }
+  return { ok: false, error: null };
 }
