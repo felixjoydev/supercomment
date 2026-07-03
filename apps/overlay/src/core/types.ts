@@ -32,7 +32,22 @@ export type SelectionMode =
   | "multi"
   | "edit";
 
-/** A rectangle in document (page) coordinates, CSS pixels. */
+/**
+ * A rectangle in CSS pixels. The coordinate SPACE depends on the producer (OV-10
+ * — this type and markers/render.ts previously documented it contradictorily):
+ *
+ *   - VIEWPORT space is the load-bearing contract for the live-interaction path.
+ *     `toRect(el.getBoundingClientRect())` (core/rect.ts), selection highlights,
+ *     and comment markers all use viewport coordinates, because the overlay
+ *     renders into a FIXED-positioned shadow layer that is itself viewport-
+ *     relative (see markers/render.ts "viewport space", selection/highlight.ts).
+ *   - DOCUMENT (page) space appears only where a re-anchored EXISTING comment
+ *     adds the scroll offset so its marker holds position across scroll
+ *     (controller.ts reanchor path).
+ *
+ * VERIFY IN REAL ENV before changing any coordinate math on this: marker tests
+ * inject rects directly and cannot catch scroll drift between the two spaces.
+ */
 export interface Rect {
   x: number;
   y: number;
