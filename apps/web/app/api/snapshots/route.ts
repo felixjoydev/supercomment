@@ -3,7 +3,9 @@ import {
   guestSnapshotRequestSchema,
   memberSnapshotRequestSchema,
 } from '@supercomment/shared';
-import { createClient } from '../../../lib/supabase/server';
+import { createClient } from '@/lib/supabase/server';
+import { requireMemberOfPreview } from '@/lib/api-auth';
+import { jsonError } from '@/lib/api-response';
 
 /**
  * POST /api/snapshots
@@ -15,15 +17,16 @@ import { createClient } from '../../../lib/supabase/server';
  *    inserts past RLS for exactly the preview the secret unlocks. The anon /
  *    authenticated grant on the function is what makes this safe — guests never
  *    touch the snapshots table directly.
- *  - Members POST authenticated; we verify the session, check workspace membership
- *    via is_preview_workspace_member, then insert under RLS as the member.
+ *  - Members POST authenticated; requireMemberOfPreview verifies the session and
+ *    workspace membership (getClaims + is_preview_workspace_member), then we
+ *    insert under RLS as the member.
  */
 export async function POST(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+    return jsonError('Invalid JSON', 400);
   }
 
   const supabase = await createClient();
@@ -38,7 +41,8 @@ export async function POST(request: Request) {
       p_payload: payload,
     });
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 403 });
+      // Generic message — never surface the raw Postgres error (L3).
+      return jsonError('Snapshot rejected', 403);
     }
     return NextResponse.json({ snapshot: data }, { status: 201 });
   }
@@ -46,31 +50,16 @@ export async function POST(request: Request) {
   // Member path: must be authenticated and a workspace member of the preview.
   const memberParse = memberSnapshotRequestSchema.safeParse(body);
   if (!memberParse.success) {
-    return NextResponse.json({ error: 'invalid request' }, { status: 400 });
+    return jsonError('Invalid request', 400);
   }
 
   const { previewId, path, payload } = memberParse.data;
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
+  const auth = await requireMemberOfPreview(supabase, previewId);
+  if (!auth.ok) return auth.response;
 
-  // Explicit membership check via the security-definer helper, then insert
-  // (RLS on snapshots also enforces this, defense in depth).
-  const { data: isMember, error: memberError } = await supabase.rpc(
-    'is_preview_workspace_member',
-    { p_preview_id: previewId },
-  );
-  if (memberError) {
-    return NextResponse.json({ error: memberError.message }, { status: 403 });
-  }
-  if (!isMember) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-  }
-
+  // Insert as the member (RLS on snapshots also enforces membership — defense in
+  // depth).
   const { data, error } = await supabase
     .from('snapshots')
     .insert({
@@ -81,7 +70,7 @@ export async function POST(request: Request) {
     .select()
     .single();
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 403 });
+    return jsonError('Snapshot rejected', 403);
   }
   return NextResponse.json({ snapshot: data }, { status: 201 });
 }

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { requireMember, type VerifiedClaims } from '@/lib/auth-guard';
+import { requireMemberOfPreview } from '@/lib/api-auth';
+import { jsonError } from '@/lib/api-response';
 import {
   computeLinkPatch,
   LinkActionError,
@@ -23,12 +24,13 @@ const PREVIEW_RETURN_COLS =
 /**
  * Link-management endpoint for a single preview.
  *
- * Authz enforced HERE: verify the user (getClaims), confirm preview workspace
- * membership (is_preview_workspace_member), THEN apply the computed patch via an
- * RLS-scoped UPDATE. Destructive semantics (regenerate rotates the secret;
- * revoke nulls it + drops to team_only) live in the pure lib/link module; the
- * confirmation UX lives client-side. Effects are immediate: rotating/clearing
- * link_secret means the old guest link stops matching on the very next request.
+ * Authz enforced HERE: requireMemberOfPreview verifies the user (getClaims) and
+ * confirms preview workspace membership (is_preview_workspace_member) BEFORE we
+ * apply the computed patch via an RLS-scoped UPDATE. Destructive semantics
+ * (regenerate rotates the secret; revoke nulls it + drops to team_only) live in
+ * the pure lib/link module; the confirmation UX lives client-side. Effects are
+ * immediate: rotating/clearing link_secret means the old guest link stops
+ * matching on the very next request.
  */
 export async function PATCH(
   request: NextRequest,
@@ -37,22 +39,14 @@ export async function PATCH(
   const { id } = await context.params;
   const supabase = await createClient();
 
-  const { data: claimsData } = await supabase.auth.getClaims();
-  const claims = (claimsData?.claims ?? null) as VerifiedClaims | null;
-
-  const { data: isMember } = await supabase.rpc('is_preview_workspace_member', {
-    p_preview_id: id,
-  });
-  const guard = requireMember(claims, isMember === true);
-  if (!guard.ok) {
-    return NextResponse.json({ error: guard.error }, { status: guard.status });
-  }
+  const auth = await requireMemberOfPreview(supabase, id);
+  if (!auth.ok) return auth.response;
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+    return jsonError('Invalid JSON', 400);
   }
 
   if (
@@ -61,7 +55,7 @@ export async function PATCH(
     typeof (body as { type?: unknown }).type !== 'string' ||
     !KNOWN_ACTIONS.has((body as { type: LinkAction['type'] }).type)
   ) {
-    return NextResponse.json({ error: 'Invalid or unknown action' }, { status: 400 });
+    return jsonError('Invalid or unknown action', 400);
   }
   const action = body as LinkAction;
 
@@ -72,10 +66,10 @@ export async function PATCH(
     .eq('id', id)
     .maybeSingle();
   if (readErr) {
-    return NextResponse.json({ error: readErr.message }, { status: 400 });
+    return jsonError('Could not load preview', 400);
   }
   if (!current) {
-    return NextResponse.json({ error: 'Preview not found' }, { status: 404 });
+    return jsonError('Preview not found', 404);
   }
 
   let patch;
@@ -83,7 +77,7 @@ export async function PATCH(
     patch = computeLinkPatch(action, current as PreviewLinkState);
   } catch (err) {
     if (err instanceof LinkActionError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return jsonError(err.message, 400);
     }
     throw err;
   }
@@ -99,7 +93,7 @@ export async function PATCH(
       p_deploy_url: patch.deploy_url as string,
     });
     if (rpcErr) {
-      return NextResponse.json({ error: rpcErr.message }, { status: 400 });
+      return jsonError('Could not update deploy URL', 400);
     }
     const { data, error } = await supabase
       .from('previews')
@@ -107,7 +101,7 @@ export async function PATCH(
       .eq('id', id)
       .single();
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return jsonError('Could not update preview', 400);
     }
     return NextResponse.json({ preview: data }, { status: 200 });
   }
@@ -119,7 +113,7 @@ export async function PATCH(
     .select(PREVIEW_RETURN_COLS)
     .single();
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
+    return jsonError('Could not update preview', 400);
   }
 
   return NextResponse.json({ preview: data }, { status: 200 });

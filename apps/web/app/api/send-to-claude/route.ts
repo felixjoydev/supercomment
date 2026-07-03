@@ -3,7 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { CapturedContext } from "@supercomment/shared";
 
 import { createClient } from "@/lib/supabase/server";
-import { requireMember, type VerifiedClaims } from "@/lib/auth-guard";
+import { requireMemberOfPreview } from "@/lib/api-auth";
+import { jsonError } from "@/lib/api-response";
 import { canEnqueue } from "@/lib/comments/view";
 import { handoffSourceRef } from "@/lib/comments/handoff";
 
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
     !(body && typeof body === "object" && (body as { includeSource?: unknown }).includeSource === false);
 
   if (!commentId) {
-    return NextResponse.json({ error: "commentId is required" }, { status: 400 });
+    return jsonError("commentId is required", 400);
   }
 
   const supabase = await createClient();
@@ -60,22 +61,15 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   if (loadError) {
-    return NextResponse.json({ error: "Failed to load comment" }, { status: 500 });
+    return jsonError("Failed to load comment", 500);
   }
   if (!comment) {
-    return NextResponse.json({ error: "Comment not found" }, { status: 404 });
+    return jsonError("Comment not found", 404);
   }
 
   // Authorize against the comment's preview workspace (owner/dev/member).
-  const { data: claimsData } = await supabase.auth.getClaims();
-  const claims = (claimsData?.claims ?? null) as VerifiedClaims | null;
-  const { data: isMember } = await supabase.rpc("is_preview_workspace_member", {
-    p_preview_id: comment.preview_id,
-  });
-  const guard = requireMember(claims, isMember === true);
-  if (!guard.ok) {
-    return NextResponse.json({ error: guard.error }, { status: guard.status });
-  }
+  const auth = await requireMemberOfPreview(supabase, comment.preview_id);
+  if (!auth.ok) return auth.response;
 
   // Phase 2 (send-to-agent permission): membership is necessary but NOT
   // sufficient. Only a workspace member explicitly granted `can_send_to_agent`
@@ -130,7 +124,7 @@ export async function POST(request: NextRequest) {
     .insert({
       preview_id: comment.preview_id,
       comment_id: comment.id,
-      requested_by: claims?.sub ?? null,
+      requested_by: auth.claims?.sub ?? null,
       status: "pending",
     })
     .select("id, status")
@@ -146,7 +140,7 @@ export async function POST(request: NextRequest) {
         { status: 200 },
       );
     }
-    return NextResponse.json({ error: "Failed to enqueue" }, { status: 500 });
+    return jsonError("Failed to enqueue", 500);
   }
 
   // VERIFY IN REAL ENV: the local MCP queue consumer (U5/U12) reads this row
