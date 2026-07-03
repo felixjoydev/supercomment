@@ -31,6 +31,7 @@ import { ConfirmModal } from "./shell/confirm.js";
 import { SelectionState, type RectFor } from "./selection/state.js";
 import { HighlightLayer } from "./selection/highlight.js";
 import { CommentForm } from "./selection/form.js";
+import { mapSubmitError } from "./selection/submit-error.js";
 import { GuestModal } from "./guest/modal.js";
 import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
@@ -629,25 +630,9 @@ export class OverlayController {
     if (refs.length > 0) context.referenceImages = refs;
   }
 
-  /** Map a raw RPC rejection to a clear, actionable reviewer message (U13/G5/G21). */
-  private mapSubmitError(message?: string): string {
-    const m = (message ?? "").toLowerCase();
-    if (m.includes("rate_limited")) {
-      return "You're commenting too quickly. Wait a moment, then submit again.";
-    }
-    if (m.includes("payload_too_large")) {
-      return "This edit is too large to save. Remove a few changes and submit again.";
-    }
-    if (m.includes("no_review_session") || m.includes("invalid_token")) {
-      // The ~8h review session lapsed; a fresh token needs the /s hop (G21).
-      return "Your review session has expired. Reload the page to keep reviewing.";
-    }
-    return "Couldn't save your comment. Please try again.";
-  }
-
   /** Surface a submit rejection as a transient notice; the form + buffer stay put. */
   private showSubmitError(message?: string): void {
-    this.showDeviceNotice(this.mapSubmitError(message));
+    this.showDeviceNotice(mapSubmitError(message));
   }
 
   private async captureContext(
