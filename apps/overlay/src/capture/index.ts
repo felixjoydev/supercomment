@@ -1,6 +1,7 @@
 import type { CapturedContext, ReactContext } from "@supercomment/shared";
 
 import type { ContextCapturer, SelectionTarget } from "../core/types.js";
+import { primaryElementOf } from "../core/target.js";
 import { captureGenericContext } from "./generic.js";
 import { captureReactContext } from "./react.js";
 import { captureSourceStamp, mergeSourceStamp } from "./source.js";
@@ -185,17 +186,4 @@ export function createContextCapturer(
   options: CreateCapturerOptions = {},
 ): ContextCapturer {
   return new RealContextCapturer(options);
-}
-
-/** The element a React/screenshot capture should target, if any. */
-function primaryElementOf(target: SelectionTarget): Element | null {
-  switch (target.kind) {
-    case "element":
-      return target.element;
-    case "multi":
-      return target.elements[0] ?? null;
-    case "text":
-    case "area":
-      return null;
-  }
 }

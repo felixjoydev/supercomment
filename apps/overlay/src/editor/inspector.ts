@@ -13,6 +13,7 @@
  * only; absent it simply draws no pills). Never throws.
  */
 import { readComputedValue } from "./style-edits.js";
+import { toRect } from "../core/rect.js";
 
 /** A viewport-space rectangle (CSS px), straight from getBoundingClientRect. */
 interface ViewRect {
@@ -167,7 +168,7 @@ function readRect(el: Element): ViewRect | null {
   try {
     const r = el.getBoundingClientRect();
     if (!r) return null;
-    return { x: r.x ?? r.left, y: r.y ?? r.top, width: r.width, height: r.height };
+    return toRect(r);
   } catch {
     return null;
   }

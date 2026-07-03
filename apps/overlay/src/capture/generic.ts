@@ -8,6 +8,7 @@ import type {
 import { redactSecrets } from "@supercomment/shared";
 
 import type { Rect, SelectionTarget } from "../core/types.js";
+import { primaryElementOf } from "../core/target.js";
 import { captureAnchors, buildDomPath, cssEscape } from "./anchors.js";
 import { getRecentConsoleErrors } from "./console-buffer.js";
 
@@ -77,23 +78,6 @@ const STABLE_ATTRIBUTES = [
   "aria-label",
 ];
 
-/**
- * The "primary" element of a selection — the one we build the selector,
- * computed styles, surrounding HTML and anchors from. `area` selections have no
- * element, so this returns null and we degrade to a region-only context.
- */
-function primaryElement(target: SelectionTarget): Element | null {
-  switch (target.kind) {
-    case "element":
-      return target.element;
-    case "multi":
-      return target.elements[0] ?? null;
-    case "text":
-    case "area":
-      return null;
-  }
-}
-
 /** Resolve a document from a target element, falling back to the global. */
 function documentFor(el: Element | null): Document | undefined {
   return (
@@ -106,7 +90,7 @@ function documentFor(el: Element | null): Document | undefined {
  * Capture the generic-tier context for {@link target}.
  */
 export function captureGenericContext(target: SelectionTarget): GenericContext {
-  const el = primaryElement(target);
+  const el = primaryElementOf(target);
   const doc = documentFor(el);
   const view = doc?.defaultView ?? (typeof window !== "undefined" ? window : undefined);
 

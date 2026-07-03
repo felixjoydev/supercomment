@@ -33,6 +33,8 @@ import { HighlightLayer } from "./selection/highlight.js";
 import { CommentForm } from "./selection/form.js";
 import { mapSubmitError } from "./selection/submit-error.js";
 import { createListenerBag } from "./core/listener-bag.js";
+import { toRect } from "./core/rect.js";
+import { primaryElementOf } from "./core/target.js";
 import { GuestModal } from "./guest/modal.js";
 import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
@@ -56,36 +58,6 @@ import { filterBySurface, countBySurface } from "./device/surface-filter.js";
  * settle window (~N frames) rather than being falsely marked stale on frame 0.
  */
 const REANCHOR_MAX_ATTEMPTS = 10;
-
-/** Convert a DOMRect-ish to our plain Rect (viewport coordinates). */
-function toRect(r: {
-  x?: number;
-  y?: number;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}): Rect {
-  return {
-    x: r.x ?? r.left,
-    y: r.y ?? r.top,
-    width: r.width,
-    height: r.height,
-  };
-}
-
-/** The element a "before" artifact should target, if any (U9/R15). */
-function primaryElementOfTarget(target: SelectionTarget): Element | null {
-  switch (target.kind) {
-    case "element":
-      return target.element;
-    case "multi":
-      return target.elements[0] ?? null;
-    case "text":
-    case "area":
-      return null;
-  }
-}
 
 export class OverlayController {
   private readonly doc: Document;
@@ -498,7 +470,7 @@ export class OverlayController {
     // element-subtree DOM snapshot); this backstop covers a capturer that didn't,
     // using the snapshot fallback. It is fully best-effort and NEVER throws, so a
     // raster/snapshot failure can never block submission.
-    const element = primaryElementOfTarget(target);
+    const element = primaryElementOf(target);
     await attachBeforeArtifact(context, element);
 
     // U13: fold the visual change-set into a `template` comment. ONLY a submit
