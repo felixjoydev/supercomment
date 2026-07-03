@@ -6,13 +6,13 @@
  * through that tunnel. Stub registerTunnel (the backend RPC doesn't exist yet)
  * and a fake Supabase client for the channel.
  */
-import http from "node:http";
 import { runStart } from "../apps/cli/src/start/index.ts";
 import type { ChannelSupabaseClient } from "../apps/cli/src/channel/index.ts";
+import { readStartConfig, createDemoApp } from "./lib/start-harness.mts";
 
-const PREVIEW_ID = "3fb218bf-4d32-4f70-bb24-cbc6642e7958";
-const LINK_SECRET = "sk_3537354133995389dee447fb0586346bd7bd66ed51847bc0";
-const SUPABASE_URL = "https://uuldjrdrlwcgsiuknoor.supabase.co";
+// Preview id / link secret / Supabase URL come from the environment (or the
+// gitignored scripts/.env.local) — never the repo (M2). See scripts/lib/start-harness.mts.
+const cfg = readStartConfig();
 const ANON_KEY = process.env.SC_ANON ?? "anon-placeholder";
 
 function log(...a: unknown[]) {
@@ -32,19 +32,11 @@ async function fetchOnce(url: string, label: string): Promise<string> {
 }
 
 async function main() {
-  const app = http.createServer((_req, res) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(
-      "<!doctype html><html><head><title>Fake Dev App</title></head>" +
-        "<body><h1>hello from the dev app</h1></body></html>",
-    );
-  });
-  const appPort: number = await new Promise((resolve) => {
-    app.listen(0, "127.0.0.1", () => {
-      const a = app.address();
-      resolve(typeof a === "object" && a ? a.port : 0);
-    });
-  });
+  const app = await createDemoApp(
+    "<!doctype html><html><head><title>Fake Dev App</title></head>" +
+      "<body><h1>hello from the dev app</h1></body></html>",
+  );
+  const appPort = app.port;
   log("fake dev app on", appPort);
 
   // Pin the front server to a known port so we can hit it directly.
@@ -68,10 +60,10 @@ async function main() {
     accessMode: "guest",
     backendOrigin: "http://localhost:3000",
     binding: {
-      supabaseUrl: SUPABASE_URL,
+      supabaseUrl: cfg.supabaseUrl,
       token: ANON_KEY,
-      previewId: PREVIEW_ID,
-      linkSecret: LINK_SECRET,
+      previewId: cfg.previewId,
+      linkSecret: cfg.linkSecret,
       anonKey: ANON_KEY,
     } as never,
     client: fakeClient,

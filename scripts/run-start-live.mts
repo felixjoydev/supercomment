@@ -10,39 +10,31 @@
  * it can't do from this sandbox is fetch the public trycloudflare URL (egress
  * blocked) — but a browser on the user's machine can.
  */
-import { readFileSync } from "node:fs";
-import http from "node:http";
 import { createClient } from "@supabase/supabase-js";
 import { runStart, makeRpcRegisterTunnel } from "../apps/cli/src/start/index.ts";
 import type { ChannelSupabaseClient } from "../apps/cli/src/channel/index.ts";
+import {
+  readStartConfig,
+  readAnonKeyFromEnvLocal,
+  createDemoApp,
+} from "./lib/start-harness.mts";
 
-const PREVIEW_ID = "3fb218bf-4d32-4f70-bb24-cbc6642e7958";
-const LINK_SECRET = "sk_3537354133995389dee447fb0586346bd7bd66ed51847bc0";
-const SUPABASE_URL = "https://uuldjrdrlwcgsiuknoor.supabase.co";
-const SLUG = "smoke-64b3181e71";
-
-function readAnonKey(): string {
-  const env = readFileSync("apps/web/.env.local", "utf8");
-  const line = env.split("\n").find((l) => l.startsWith("NEXT_PUBLIC_SUPABASE_ANON_KEY="));
-  if (!line) throw new Error("anon key not found in apps/web/.env.local");
-  return line.slice("NEXT_PUBLIC_SUPABASE_ANON_KEY=".length).trim();
-}
+// Preview id / link secret / Supabase URL come from the environment (or the
+// gitignored scripts/.env.local) — never the repo (M2). See scripts/lib/start-harness.mts.
+const cfg = readStartConfig();
 
 function log(...a: unknown[]) {
   console.log("[run-start]", ...a);
 }
 
 async function main() {
-  const anonKey = readAnonKey();
+  const anonKey = readAnonKeyFromEnvLocal();
 
   // A tiny local "dev app" to share (stands in for the user's app on some port).
-  const app = http.createServer((_req, res) => {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end("<!doctype html><html><head><title>Demo App</title></head><body><h1>demo app being shared</h1></body></html>");
-  });
-  const appPort: number = await new Promise((r) => {
-    app.listen(0, "127.0.0.1", () => { const a = app.address(); r(typeof a === "object" && a ? a.port : 0); });
-  });
+  const app = await createDemoApp(
+    "<!doctype html><html><head><title>Demo App</title></head><body><h1>demo app being shared</h1></body></html>",
+  );
+  const appPort = app.port;
   log("demo app on", appPort);
 
   // Real outbound Supabase client, authed with the anon key as bearer. NOTE:
@@ -50,7 +42,7 @@ async function main() {
   // is the honest test of whether the anon path is allowed. We expect this to be
   // REJECTED — which tells us the CLI needs a real member token (a gap to report),
   // not a bug to hide.
-  const client = createClient(SUPABASE_URL, anonKey, {
+  const client = createClient(cfg.supabaseUrl, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { headers: { Authorization: `Bearer ${anonKey}` } },
   }) as unknown as ChannelSupabaseClient;
@@ -64,8 +56,8 @@ async function main() {
       accessMode: "guest",
       backendOrigin: "http://localhost:3000",
       binding: {
-        supabaseUrl: SUPABASE_URL, token: anonKey, previewId: PREVIEW_ID,
-        linkSecret: LINK_SECRET, anonKey,
+        supabaseUrl: cfg.supabaseUrl, token: anonKey, previewId: cfg.previewId,
+        linkSecret: cfg.linkSecret, anonKey,
       } as never,
       client,
       registerTunnel,
@@ -82,9 +74,13 @@ async function main() {
 
   // Read the preview row back via the resolve RPC (anon-readable) to confirm live.
   await new Promise((r) => setTimeout(r, 1500));
-  const probe = createClient(SUPABASE_URL, anonKey, { auth: { persistSession: false } });
-  const { data, error } = await probe.rpc("resolve_tunnel_for_slug", { p_slug: SLUG });
-  log("resolve_tunnel_for_slug:", error ? `ERROR ${error.message}` : JSON.stringify(data));
+  const probe = createClient(cfg.supabaseUrl, anonKey, { auth: { persistSession: false } });
+  if (cfg.slug) {
+    const { data, error } = await probe.rpc("resolve_tunnel_for_slug", { p_slug: cfg.slug });
+    log("resolve_tunnel_for_slug:", error ? `ERROR ${error.message}` : JSON.stringify(data));
+  } else {
+    log("SC_SLUG not set — skipping resolve_tunnel_for_slug probe");
+  }
 
   await running.shutdown();
   app.close();
