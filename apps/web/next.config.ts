@@ -23,6 +23,31 @@ const SC_SOURCE_STAMP =
   process.env.SC_SOURCE_STAMP === "1" ||
   process.env.NEXT_PUBLIC_VERCEL_ENV === "preview";
 
+/** The Supabase project origin, for the image CSP (signed captures load from it). */
+const SUPABASE_ORIGIN = (() => {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    return url ? new URL(url).origin : "";
+  } catch {
+    return "";
+  }
+})();
+
+/**
+ * Dashboard CSP (M5). `frame-ancestors 'none'` is the clickjacking defense; the
+ * `img-src` allowlist stops a guest-controlled comment `context.screenshot` /
+ * referenceImages value from making a REVIEWING MEMBER's browser fetch an
+ * attacker-chosen origin (SSRF + IP/UA/timing leak). Only same-origin, inline
+ * data:/blob:, and the Supabase Storage host (signed captures) may load as
+ * images. When NEXT_PUBLIC_SUPABASE_URL is unset at build we omit `img-src`
+ * rather than block legitimate signed captures. No `default-src`, so scripts /
+ * styles / the cross-origin embed surfaces are unaffected.
+ * VERIFY IN REAL ENV: confirm no dashboard image loads from another origin.
+ */
+const DASHBOARD_CSP = SUPABASE_ORIGIN
+  ? `frame-ancestors 'none'; img-src 'self' data: blob: ${SUPABASE_ORIGIN}`
+  : "frame-ancestors 'none'";
+
 const nextConfig: NextConfig = {
   // Consume the shared workspace package directly from source.
   transpilePackages: ["@supercomment/shared"],
@@ -60,7 +85,7 @@ const nextConfig: NextConfig = {
         // cross-origin <script> embed surfaces (/sc/*, /sc-loader) or fetch/XHR.
         source: "/:path*",
         headers: [
-          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "Content-Security-Policy", value: DASHBOARD_CSP },
           { key: "X-Frame-Options", value: "DENY" },
         ],
       },

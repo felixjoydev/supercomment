@@ -28,16 +28,23 @@ export type CaptureSigner = (
 /**
  * Classify a stored `context.screenshot` (or reference-image) value:
  *  - `none`      — absent/empty.
- *  - `image-url` — directly renderable: an `image/*` data URL or an http(s) URL.
+ *  - `image-url` — directly renderable: ONLY an `image/*` data URL.
  *  - `snapshot`  — the non-image DOM-snapshot fallback (`data:application/json,…`
  *                  or any other non-image `data:` URL) → show an indicator.
  *  - `image-ref` — a `captures` object PATH that must be signed before it renders.
+ *
+ * M5: a guest-supplied ABSOLUTE URL is deliberately NOT `image-url`. `context`
+ * is guest-controlled, and screenshots are only ever stored as a `captures`
+ * bucket PATH or an inline `data:image/*` URL — never an http(s) URL. Rendering
+ * a guest-set `https://attacker/…` as an <img src> would make the reviewing
+ * member's browser fetch that origin (IP/UA/timing leak + intranet-GET SSRF), so
+ * any non-`data:` value is treated as a bucket path and signed on read; an
+ * attacker URL simply fails to sign → null → nothing is fetched.
  */
 export function classifyCaptureRef(src: string | null | undefined): CaptureKind {
   if (!src) return 'none';
   if (src.startsWith('data:image/')) return 'image-url';
   if (src.startsWith('data:')) return 'snapshot';
-  if (/^https?:\/\//i.test(src)) return 'image-url';
   return 'image-ref';
 }
 
