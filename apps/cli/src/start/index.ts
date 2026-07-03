@@ -283,6 +283,20 @@ export async function runStart(
     logger.log("SuperComment: stopped. Preview is offline.");
   };
 
+  // Register shutdown signals BEFORE startup (CLI-5): a Ctrl-C (SIGINT) or `kill`
+  // (SIGTERM) DURING startup then triggers a clean shutdown — the offline push +
+  // teardown — instead of a hard kill that leaves the preview 'live'. shutdown()
+  // is idempotent and reads the partially-initialized handles via `?.`, so firing
+  // mid-startup is safe. Only the real process is exited; tests inject a fake
+  // emitter and assert shutdown without exiting.
+  const onSignal = (): void => {
+    void shutdown().then(() => {
+      if (signals === process) process.exit(0);
+    });
+  };
+  signals.once("SIGINT", onSignal);
+  signals.once("SIGTERM", onSignal);
+
   try {
     // --- 1. front server (overlay bundle + boot config + U3 proxy) -----------
     const overlayBundle = await readOverlayBundle();
@@ -367,14 +381,6 @@ export async function runStart(
       "  Reviewers just open it in their browser — nothing to install.",
     );
     logger.log("  Press Ctrl+C to stop sharing.");
-
-    // --- 6. SIGINT -> clean shutdown ----------------------------------------
-    signals.once("SIGINT", () => {
-      void shutdown().then(() => {
-        // Only exit the real process; tests inject a fake emitter + no exit.
-        if (signals === process) process.exit(0);
-      });
-    });
 
     return { shareUrl, tunnelUrl, shutdown };
   } catch (err) {

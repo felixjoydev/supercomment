@@ -112,8 +112,12 @@ export class Heartbeat {
   /**
    * Stop heartbeating and mark 'offline' EXACTLY ONCE. Idempotent: repeated
    * calls do nothing (no duplicate 'offline' pushes), satisfying the U5 test.
+   *
+   * AWAITABLE (CLI-4): resolves only AFTER the terminal 'offline' RPC completes,
+   * so a caller can `await` it before `process.exit()` — otherwise the offline
+   * push is killed mid-flight and the preview is left 'live' in the DB.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
     if (this.handle !== undefined) {
@@ -123,7 +127,7 @@ export class Heartbeat {
     // Only push the terminal 'offline' if we ever started; stopping a heartbeat
     // that never started should not emit a spurious 'offline'.
     if (this.started) {
-      void this.push("offline");
+      await this.push("offline");
     }
   }
 

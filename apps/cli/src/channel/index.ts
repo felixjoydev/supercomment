@@ -253,7 +253,9 @@ export class Channel {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
-    this.heartbeat.stop();
+    // Await the offline push (CLI-4) so `preview_offline` completes before the
+    // caller's shutdown proceeds to process.exit().
+    await this.heartbeat.stop();
     if (this.realtimeChannel && this.client.removeChannel) {
       try {
         await this.client.removeChannel(this.realtimeChannel);
