@@ -34,6 +34,7 @@ import {
   type SupabaseQuery,
   type TextPrompter,
 } from "./select.js";
+import { makeMemberClient } from "../supabase/client.js";
 
 /** Strip any trailing slash so the origin is clean for URL + CORS use. */
 export function normalizeOrigin(url: string): string {
@@ -46,18 +47,16 @@ function defaultGenState(): string {
 }
 
 /**
- * Build the real Supabase client from the returned creds. apikey = anon key
- * (the gateway requires a valid publishable key); Authorization = member JWT so
- * RLS scopes everything to the developer. Dynamically imported so unit tests
- * that inject `makeClient` never load the SDK.
+ * Build the real Supabase client from the returned creds (anon key + member
+ * bearer — see {@link makeMemberClient} for the R25 credential split). Wrapped
+ * so unit tests that inject `makeClient` never load the SDK.
  */
 async function defaultMakeClient(creds: ReceivedCreds): Promise<SupabaseQuery> {
-  const mod = await import("@supabase/supabase-js");
-  const client = mod.createClient(creds.supabaseUrl, creds.anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${creds.token}` } },
-  });
-  return client as unknown as SupabaseQuery;
+  return makeMemberClient<SupabaseQuery>(
+    creds.supabaseUrl,
+    creds.anonKey,
+    creds.token,
+  );
 }
 
 export interface RunLoginOptions {

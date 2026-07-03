@@ -28,6 +28,7 @@ import {
   type TextPrompter,
 } from "./select.js";
 import { errorMessage } from "../lib/errors.js";
+import { makeMemberClient } from "../supabase/client.js";
 
 /** Build a member-scoped Supabase client from the stored binding. */
 async function defaultMakeClient(
@@ -39,12 +40,11 @@ async function defaultMakeClient(
       "Binding has no anon key. Run `supercomment login` to refresh it.",
     );
   }
-  const mod = await import("@supabase/supabase-js");
-  const client = mod.createClient(binding.supabaseUrl, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${binding.token}` } },
-  });
-  return client as unknown as SupabaseQuery;
+  return makeMemberClient<SupabaseQuery>(
+    binding.supabaseUrl,
+    anonKey,
+    binding.token,
+  );
 }
 
 /** Repo name hints for auto-detect: the folder name + the git-remote repo name. */
