@@ -32,6 +32,7 @@ import { SelectionState, type RectFor } from "./selection/state.js";
 import { HighlightLayer } from "./selection/highlight.js";
 import { CommentForm } from "./selection/form.js";
 import { mapSubmitError } from "./selection/submit-error.js";
+import { createListenerBag } from "./core/listener-bag.js";
 import { GuestModal } from "./guest/modal.js";
 import { GuestNameStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
@@ -110,8 +111,8 @@ export class OverlayController {
   private readonly previewLog = new PreviewLog();
   /** The in-page element inspector (tag badge + dims + spacing pills), R-D. */
   private readonly inspector: InspectorLayer;
-  /** Teardown callbacks for every listener this controller binds (plans/008). */
-  private readonly disposers: Array<() => void> = [];
+  /** Teardown for every listener this controller binds (plans/008). */
+  private readonly listeners = createListenerBag();
 
   private form: CommentForm | null = null;
   private modal: GuestModal | null = null;
@@ -208,19 +209,16 @@ export class OverlayController {
    * dismisses the panel UI but preserves the buffer (G13).
    */
   destroy(): void {
-    for (const dispose of this.disposers.splice(0)) {
-      try {
-        dispose();
-      } catch {
-        /* teardown is best-effort — one failure must not skip the rest */
-      }
-    }
+    this.listeners.dispose();
     this.dismissEditPanel();
     // Ephemeral visual edits must not outlive the overlay — restore the host
     // page's inline styles before we detach.
     this.previewLog.revertAll();
     this.inspector.hide();
     this.dismissConfirm();
+    // Remove the toolbar's window `resize` listener (OV-8) before the shell —
+    // which owns the toolbar's DOM — is torn down.
+    this.toolbar.destroy();
     this.deviceMode?.exit();
     this.shell.destroy();
   }
@@ -983,9 +981,9 @@ export class OverlayController {
   }
 
   /**
-   * Register an event listener and record its removal in {@link disposers} so
-   * {@link destroy} fully unbinds it (plans/008). Every listener the controller
-   * binds — including the edit-mode dispatch — goes through here.
+   * Register an event listener so {@link destroy} fully unbinds it (plans/008).
+   * Every listener the controller binds — including the edit-mode dispatch —
+   * goes through the shared listener bag ({@link createListenerBag}).
    */
   private on(
     target: EventTarget,
@@ -993,10 +991,7 @@ export class OverlayController {
     handler: (e: Event) => void,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    target.addEventListener(type, handler as EventListener, options);
-    this.disposers.push(() =>
-      target.removeEventListener(type, handler as EventListener, options),
-    );
+    this.listeners.add(target, type, handler, options);
   }
 
   /** True if a node belongs to our own overlay (shadow host). */

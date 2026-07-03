@@ -9,6 +9,7 @@
  */
 import type { SelectionMode } from "../core/types.js";
 import { slidePill } from "../shell/motion.js";
+import { createListenerBag } from "../core/listener-bag.js";
 
 interface ModeDef {
   mode: SelectionMode;
@@ -58,6 +59,7 @@ export class Toolbar {
   private readonly confirmBtn: HTMLButtonElement;
   private readonly chipName: HTMLElement;
   private pillPlaced = false;
+  private readonly listeners = createListenerBag();
 
   constructor(
     doc: Document,
@@ -138,9 +140,11 @@ export class Toolbar {
 
     parent.appendChild(this.el);
 
-    // Keep the indicator aligned if the viewport/layout shifts.
+    // Keep the indicator aligned if the viewport/layout shifts. Registered via a
+    // listener bag so destroy() can remove it — a `resize` handler on `window`
+    // outlives the overlay and would leak after Exit otherwise (OV-8).
     const view = doc.defaultView;
-    view?.addEventListener("resize", () => this.placePill(true));
+    if (view) this.listeners.add(view, "resize", () => this.placePill(true));
   }
 
   /** Highlight the active mode and toggle the multi confirm button. */
@@ -183,5 +187,15 @@ export class Toolbar {
   /** Update the reviewer chip name (R24 "Reviewing as <name>"). */
   setReviewerName(name: string | null): void {
     this.chipName.textContent = name ?? "guest";
+  }
+
+  /**
+   * Tear the toolbar down: remove the window `resize` listener (the leak-prone
+   * one — the button listeners live on nodes the shell removes) and detach the
+   * toolbar element. Called by OverlayController.destroy().
+   */
+  destroy(): void {
+    this.listeners.dispose();
+    this.el.remove();
   }
 }
