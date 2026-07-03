@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { URL } from 'node:url';
 import { InjectTransform, buildOverlayScriptTag } from './inject-transform.js';
 import { rewriteCsp, CSP_HEADER_NAMES } from './csp.js';
-import { isSensitivePath } from './sensitive-paths.js';
+import { isSensitivePath, safeUpstreamPath } from './sensitive-paths.js';
 
 /**
  * Reverse proxy with overlay injection (U3).
@@ -142,9 +142,11 @@ export function createProxy(config: ProxyConfig): Proxy {
   const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const reqUrl = req.url ?? '/';
 
-    // U13 / R26: refuse known secret/debug leak paths (.env, .git/, *.map,
-    // /__nextjs_*) BEFORE proxying upstream. Returns 404 (not 403) so we don't
-    // confirm the resource exists to a probing client.
+    // U13 / R26 / H2: refuse known secret/debug leak paths (.env, .git/, *.map,
+    // /@fs/, credentials, keys, …) BEFORE proxying upstream. The matcher decodes
+    // + normalizes the path so encoded/traversal variants (/%2eenv, /..%2f.env,
+    // /.env%00.png) are caught too. Returns 404 (not 403) so we don't confirm the
+    // resource exists to a probing client.
     if (isSensitivePath(reqUrl)) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('Not Found');
@@ -156,7 +158,9 @@ export function createProxy(config: ProxyConfig): Proxy {
       hostname: target.hostname,
       port: target.port || (target.protocol === 'https:' ? 443 : 80),
       method: req.method,
-      path: reqUrl,
+      // Forward the SAME canonical path the matcher inspected (re-encoded once),
+      // so a request can't be checked as one path and served as another.
+      path: safeUpstreamPath(reqUrl),
       headers: buildUpstreamHeaders(req),
     };
 
