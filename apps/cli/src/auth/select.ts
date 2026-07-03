@@ -18,12 +18,7 @@
  */
 
 import { asError } from "../lib/errors.js";
-
-/** A Supabase result envelope. */
-interface DbResult {
-  data: unknown;
-  error: unknown;
-}
+import type { DbResult } from "../supabase/types.js";
 
 /**
  * Minimal structural type for the Supabase client we use, so this module stays

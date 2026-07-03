@@ -21,6 +21,7 @@ import {
   COMMENT_ROW_COLUMNS,
 } from "@supercomment/shared";
 import { asError } from "../lib/errors.js";
+import type { DbResult, DbListResult } from "../supabase/types.js";
 
 /** A project the developer can read, with its default review link + open count. */
 export interface ProjectSummary {
@@ -174,25 +175,22 @@ export interface SupabaseLike {
           order: (
             column: string,
             opts: { ascending: boolean },
-          ) => Promise<{ data: unknown[] | null; error: unknown }>;
-          maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
+          ) => Promise<DbListResult>;
+          maybeSingle: () => Promise<DbResult>;
         };
         order: (
           column: string,
           opts: { ascending: boolean },
-        ) => Promise<{ data: unknown[] | null; error: unknown }>;
+        ) => Promise<DbListResult>;
       };
       // Unfiltered listing (projects / previews): select(...).order(...).
       order: (
         column: string,
         opts: { ascending: boolean },
-      ) => Promise<{ data: unknown[] | null; error: unknown }>;
+      ) => Promise<DbListResult>;
     };
   };
-  rpc(
-    fn: string,
-    args: Record<string, unknown>,
-  ): Promise<{ data: unknown; error: unknown }>;
+  rpc(fn: string, args: Record<string, unknown>): Promise<DbResult>;
 }
 
 /**

@@ -35,6 +35,7 @@ import {
   type QueueSink,
 } from "./queue.js";
 import { asError } from "../lib/errors.js";
+import type { DbResult } from "../supabase/types.js";
 
 /**
  * The slice of `@supabase/supabase-js` the channel needs. Declared structurally
