@@ -44,6 +44,16 @@ export interface PersistedSession {
    * Optional for backward-compat with sessions persisted before it existed.
    */
   origin?: string;
+  /**
+   * EMBEDDED backend coordinates, cached from the boot config at activation so a
+   * RESTORE on a later page load / new tab is SELF-CONTAINED: the overlay can
+   * re-mount from localStorage even when that page did not re-inject the boot
+   * config, as long as the overlay bundle loaded there. All PUBLIC values (the
+   * anon key + URLs already ship in the page). Optional for backward-compat.
+   */
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+  backendOrigin?: string;
 }
 
 /** Minimal storage surface (localStorage) so persistence is testable. */
@@ -162,7 +172,10 @@ function isValidSession(value: unknown): value is PersistedSession {
     typeof s.role === "string" &&
     typeof s.displayName === "string" &&
     typeof s.expiresAt === "number" &&
-    (s.origin === undefined || typeof s.origin === "string")
+    (s.origin === undefined || typeof s.origin === "string") &&
+    (s.supabaseUrl === undefined || typeof s.supabaseUrl === "string") &&
+    (s.supabaseAnonKey === undefined || typeof s.supabaseAnonKey === "string") &&
+    (s.backendOrigin === undefined || typeof s.backendOrigin === "string")
   );
 }
 

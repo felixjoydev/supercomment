@@ -114,6 +114,20 @@ describe("persist / restore / clear", () => {
     expect(restoreSession(storage)).toEqual(SESSION);
   });
 
+  it("round-trips the cached backend coords (self-contained restore)", () => {
+    const storage = fakeStorage();
+    const withCreds = {
+      ...SESSION,
+      supabaseUrl: "https://uuldjrdrlwcgsiuknoor.supabase.co",
+      supabaseAnonKey: "anon-jwt",
+      backendOrigin: "https://supercomment.vercel.app",
+    };
+    persistSession(withCreds, storage);
+    // These public creds let a later same-origin page re-mount the toolbar even
+    // if it never re-injected the boot config (only the bundle need load there).
+    expect(restoreSession(storage)).toEqual(withCreds);
+  });
+
   it("returns null when nothing is stored", () => {
     expect(restoreSession(fakeStorage())).toBeNull();
   });

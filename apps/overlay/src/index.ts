@@ -167,7 +167,13 @@ async function activateSession(
   token: string | null,
   persisted: PersistedSession | null,
 ): Promise<void> {
-  const { supabaseUrl, supabaseAnonKey, backendOrigin } = boot;
+  // Backend coordinates: prefer THIS page's boot config, but fall back to the
+  // creds cached in the persisted session (restore path) so the toolbar re-mounts
+  // on a later page / new tab even when that page did not re-inject the boot
+  // config — only the overlay bundle needs to have loaded there. All public.
+  const supabaseUrl = boot.supabaseUrl ?? persisted?.supabaseUrl;
+  const supabaseAnonKey = boot.supabaseAnonKey ?? persisted?.supabaseAnonKey;
+  const backendOrigin = boot.backendOrigin ?? persisted?.backendOrigin;
   // Without supabase url/key we cannot sign in, refresh, or write → stay dormant.
   if (!supabaseUrl || !supabaseAnonKey) return;
 
@@ -201,6 +207,11 @@ async function activateSession(
         // Stamp the activation origin so a restore on a different origin is
         // refused (domain guard); localStorage is already origin-scoped.
         ...(typeof location !== "undefined" ? { origin: location.origin } : {}),
+        // Cache the (public) backend coords so a restore on a later same-origin
+        // page is self-contained even if that page lacked the boot config.
+        supabaseUrl,
+        supabaseAnonKey,
+        ...(backendOrigin ? { backendOrigin } : {}),
       };
       persistSession(session);
     } else if (persisted) {
