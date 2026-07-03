@@ -6,6 +6,7 @@ import type {
 } from "@supercomment/shared";
 
 import { redactSecrets } from "@supercomment/shared";
+import { maskFieldAttributes } from "../snapshot/mask.js";
 
 import type { Rect, SelectionTarget } from "../core/types.js";
 import { primaryElementOf } from "../core/target.js";
@@ -419,7 +420,13 @@ function readSurroundingHtml(el: Element): string | undefined {
     if (parent) {
       html += openingTag(parent) + "\n  ";
     }
-    html += el.outerHTML ?? "";
+    // The selected element itself. When it is an <input> (a void control the
+    // reviewer likely typed into), serialize its MASKED opening tag instead of
+    // raw outerHTML so a typed password/PII value never rides along (M8). Other
+    // elements keep outerHTML; a field VALUE nested deep in their descendants
+    // (or a <textarea>/<select> value) stays a residual — redactSecrets still
+    // runs over the whole string for token-shaped secrets. VERIFY IN REAL ENV.
+    html += el.tagName === "INPUT" ? openingTag(el) : el.outerHTML ?? "";
     if (parent) {
       html += "\n</" + parent.tagName.toLowerCase() + ">";
     }
@@ -435,13 +442,43 @@ function readSurroundingHtml(el: Element): string | undefined {
   return html;
 }
 
-/** Render just the opening tag (no children) of an element. */
+/** URL-bearing attributes whose query + fragment we strip (they can carry tokens, M8). */
+const URL_BEARING_ATTRS = new Set([
+  "src",
+  "href",
+  "action",
+  "formaction",
+  "poster",
+  "data",
+  "cite",
+  "background",
+]);
+
+/**
+ * Strip the query string + fragment from a URL-bearing attribute value (M8): a
+ * `src`/`action`/… can carry an auth token or PII in `?…`/`#…` that must not ride
+ * the captured surrounding HTML to the agent. Non-URL attributes pass through.
+ */
+export function stripUrlAttrValue(name: string, value: string): string {
+  if (!URL_BEARING_ATTRS.has(name.toLowerCase())) return value;
+  const cut = value.search(/[?#]/);
+  return cut === -1 ? value : value.slice(0, cut);
+}
+
+/**
+ * Render an element's opening tag (no children) with form-control values MASKED
+ * and URL query/fragment STRIPPED (M8) — a reviewer's typed value or a token in a
+ * `src`/`action` query string must not ride the captured surrounding HTML.
+ */
 function openingTag(el: Element): string {
   const tag = el.tagName.toLowerCase();
-  const attrs = el.attributes
-    ? Array.from(el.attributes)
-        .map((a) => `${a.name}="${a.value}"`)
-        .join(" ")
-    : "";
+  const raw: Record<string, string> = {};
+  if (el.attributes) {
+    for (const a of Array.from(el.attributes)) raw[a.name] = a.value;
+  }
+  const masked = maskFieldAttributes({ tag, attributes: raw });
+  const attrs = Object.entries(masked)
+    .map(([name, value]) => `${name}="${stripUrlAttrValue(name, value)}"`)
+    .join(" ");
   return attrs ? `<${tag} ${attrs}>` : `<${tag}>`;
 }
