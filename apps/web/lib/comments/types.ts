@@ -17,6 +17,9 @@ import type {
   CommentKind,
 } from "@supercomment/shared";
 
+// The raw `comments` row shape is now the single source of truth in shared.
+export type { CommentRow } from "@supercomment/shared";
+
 /** Latest "Send to Claude" queue state for a comment (null = never sent). */
 export type SendStatus = "pending" | "working" | "done" | "failed";
 
@@ -47,28 +50,3 @@ export interface CommentView {
   sendStatus: SendStatus | null;
 }
 
-/**
- * Raw `comments` row as returned by Supabase (REST select or the broadcast
- * trigger payload). All snake_case; some fields nullable. We normalize this to
- * a CommentView with `toCommentView`.
- */
-export interface CommentRow {
-  id: string;
-  preview_id: string;
-  number: number;
-  author_participant?: string | null;
-  author_name?: string | null;
-  trust_level: TrustLevel;
-  intent: Intent;
-  severity: Severity;
-  note: string;
-  status: CommentStatus;
-  fidelity?: CaptureFidelity | null;
-  /** Present once migration 0026 adds the column (U3); defaults to `comment`. */
-  kind?: CommentKind | null;
-  is_stale?: boolean | null;
-  context?: unknown;
-  path?: string | null;
-  resolved_summary?: string | null;
-  created_at: string;
-}

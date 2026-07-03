@@ -13,8 +13,13 @@
  * and testable in one place. `listOpenComments({ includeGuests })` simply lets
  * the tool ask for the unfiltered set when the developer explicitly opts in.
  */
-import type { McpComment, TrustLevel } from "@supercomment/shared";
-import { redactContextChangeSet, redactSecrets } from "@supercomment/shared";
+import type { McpComment, CommentRow } from "@supercomment/shared";
+import {
+  redactContextChangeSet,
+  redactSecrets,
+  normalizeCommentRow,
+  COMMENT_ROW_COLUMNS,
+} from "@supercomment/shared";
 
 /** A project the developer can read, with its default review link + open count. */
 export interface ProjectSummary {
@@ -189,66 +194,44 @@ export interface SupabaseLike {
   ): Promise<{ data: unknown; error: unknown }>;
 }
 
-/** A raw `comments` row as stored by U2 (snake_case columns). */
-interface CommentRow {
-  id: string;
-  preview_id: string;
-  number: number;
-  author_participant: string | null;
-  trust_level: TrustLevel;
-  intent: McpComment["intent"];
-  severity: McpComment["severity"];
-  note: string;
-  path: string | null;
-  context: unknown;
-  status: McpComment["status"];
-  fidelity: McpComment["fidelity"];
-  /** Present once migration 0026 adds the column (U3); defaults to "comment". */
-  kind?: McpComment["kind"] | null;
-  is_stale: boolean;
-  resolved_by: string | null;
-  resolved_summary: string | null;
-  created_at: string;
-}
-
-/** Map a DB row to the MCP comment shape. Display name falls back gracefully. */
+/**
+ * Map a DB row to the MCP comment shape. Builds on the shared normalizer
+ * (`normalizeCommentRow` — snake_case→camelCase + defaults + context coercion),
+ * then applies the agent-facing redaction that only this (untrusted-input)
+ * boundary needs.
+ */
 function rowToMcpComment(row: CommentRow): McpComment {
+  const n = normalizeCommentRow(row);
   // U8: this is the agent-facing (untrusted-input) delivery boundary. Redact
   // reviewer-authored free-text — the visual change-set values AND the note —
   // through the canonical redactor so a token typed into an edit or note can't
   // reach the coding agent even if a malicious client skipped its own pass. The
   // rest of `context` (surrounding HTML, console) is already redacted at capture.
   const context = redactContextChangeSet(
-    (row.context ?? {}) as McpComment["context"],
+    (n.context ?? {}) as McpComment["context"],
   );
   return {
-    id: row.id,
-    previewId: row.preview_id,
-    number: row.number,
+    id: n.id,
+    previewId: n.previewId,
+    number: n.number,
     author: {
-      displayName: row.author_participant ?? "Unknown",
-      trustLevel: row.trust_level,
+      displayName: n.authorParticipant ?? "Unknown",
+      trustLevel: n.trustLevel,
     },
-    intent: row.intent,
-    severity: row.severity,
-    note: redactSecrets(row.note),
+    intent: n.intent,
+    severity: n.severity,
+    note: redactSecrets(n.note),
     context,
-    status: row.status,
-    fidelity: row.fidelity,
-    kind: row.kind ?? "comment",
-    isStale: row.is_stale,
-    ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
-    ...(row.resolved_summary
-      ? { resolvedSummary: row.resolved_summary }
-      : {}),
-    createdAt: row.created_at,
-    trustLevel: row.trust_level,
+    status: n.status,
+    fidelity: n.fidelity,
+    kind: n.kind,
+    isStale: n.isStale,
+    ...(n.resolvedBy ? { resolvedBy: n.resolvedBy } : {}),
+    ...(n.resolvedSummary ? { resolvedSummary: n.resolvedSummary } : {}),
+    createdAt: n.createdAt,
+    trustLevel: n.trustLevel,
   };
 }
-
-const COMMENT_COLUMNS =
-  "id, preview_id, number, author_participant, trust_level, intent, severity, " +
-  "note, path, context, status, fidelity, kind, is_stale, resolved_by, resolved_summary, created_at";
 
 /**
  * Production CommentStore backed by Supabase. Reads are scoped to the bound
@@ -337,7 +320,7 @@ export class SupabaseCommentStore implements CommentStore {
     void opts;
     const { data, error } = await this.client
       .from("comments")
-      .select(COMMENT_COLUMNS)
+      .select(COMMENT_ROW_COLUMNS)
       .eq("preview_id", this.previewId)
       .eq("status", "open")
       .order("number", { ascending: true });
@@ -348,7 +331,7 @@ export class SupabaseCommentStore implements CommentStore {
   async getComment(number: number): Promise<McpComment | null> {
     const { data, error } = await this.client
       .from("comments")
-      .select(COMMENT_COLUMNS)
+      .select(COMMENT_ROW_COLUMNS)
       .eq("preview_id", this.previewId)
       .eq("number", number)
       .maybeSingle();

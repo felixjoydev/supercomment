@@ -3,6 +3,7 @@ import type { AccessMode } from '@/lib/link';
 import type { PreviewDbStatus } from '@/lib/status';
 import { toCommentView } from '@/lib/comments/transform';
 import type { CommentView, CommentRow, SendStatus } from '@/lib/comments/types';
+import { COMMENT_ROW_COLUMNS } from '@supercomment/shared';
 import { generateSlug } from '@/lib/slug';
 import {
   DEFAULT_WORKSPACE_NAME,
@@ -240,9 +241,8 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
 
   const { data, error } = await supabase
     .from('comments')
-    .select(
-      'id, preview_id, number, author_participant, trust_level, intent, severity, note, status, fidelity, kind, is_stale, context, path, resolved_summary, created_at, participants:author_participant(display_name)',
-    )
+    // Shared column list + the participant join for the author display name.
+    .select(`${COMMENT_ROW_COLUMNS}, participants:author_participant(display_name)`)
     .eq('preview_id', previewId)
     .order('created_at', { ascending: false });
 
@@ -254,13 +254,16 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   // RLS scopes this to the member's previews, same as the comments read above.
   const sendStatusByComment = await getSendStatusMap(supabase, previewId);
 
-  return (data ?? []).map((row) => {
-    const raw = row as Record<string, unknown>;
+  // The select column list is a runtime string (COMMENT_ROW_COLUMNS), so
+  // PostgREST's compile-time select inference can't narrow the row type; we cast
+  // to the untyped row bag and normalize via the shared toCommentView anyway.
+  const rows = (data ?? []) as unknown as Record<string, unknown>[];
+  return rows.map((raw) => {
     const participant = Array.isArray(raw.participants)
       ? (raw.participants as { display_name?: string | null }[])[0]
       : (raw.participants as { display_name?: string | null } | null);
     const authorName = participant?.display_name ?? null;
-    const view = toCommentView(row as unknown as CommentRow, authorName);
+    const view = toCommentView(raw as unknown as CommentRow, authorName);
     return { ...view, sendStatus: sendStatusByComment.get(view.id) ?? null };
   });
 }
