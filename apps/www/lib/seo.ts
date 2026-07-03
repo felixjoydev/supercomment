@@ -19,6 +19,24 @@ export type PageMetaInput = {
   noindex?: boolean;
 };
 
+/** Pick the OG image by page-family: home, feature, compare, pricing. */
+function ogImageForPath(path: string): string {
+  if (path.startsWith("/compare")) return "/og/compare.png";
+  if (path === "/pricing") return "/og/pricing.png";
+  const featurePrefixes = [
+    "/how-it-works",
+    "/visual-edits",
+    "/agent-handoff",
+    "/mcp",
+    "/integrations",
+    "/security",
+  ];
+  if (featurePrefixes.some((p) => path === p || path.startsWith(`${p}/`))) {
+    return "/og/feature.png";
+  }
+  return "/og/home.png";
+}
+
 /**
  * Per-page metadata: title/description verbatim from the copy docs, canonical
  * URL, and OpenGraph/Twitter. OG images are supplied by file-based
@@ -28,6 +46,7 @@ export type PageMetaInput = {
 export function pageMetadata(input: PageMetaInput): Metadata {
   const { title, description, path, ogTitle, type = "website", noindex } = input;
   const url = absUrl(path);
+  const ogImage = ogImageForPath(path);
   return {
     title,
     description,
@@ -38,11 +57,13 @@ export function pageMetadata(input: PageMetaInput): Metadata {
       url,
       siteName: "SuperComment",
       type,
+      images: [{ url: ogImage, width: 1200, height: 630 }],
     },
     twitter: {
       card: "summary_large_image",
       title: ogTitle ?? title,
       description,
+      images: [ogImage],
     },
     ...(noindex
       ? { robots: { index: false, follow: false } }

@@ -1,29 +1,4 @@
-// Generates public/llms-full.txt at build time: a single concatenated,
-// docs-style corpus of the site's canonical content, for a developer's agent to
-// read on request. Runs from `prebuild`.
-import { writeFileSync, mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-
-const here = dirname(fileURLToPath(import.meta.url));
-const pub = join(here, "..", "public");
-
-const SIGNALS = [
-  "element + selector",
-  "computed styles",
-  "surrounding markup",
-  "console errors",
-  "network signals",
-  "accessibility chain",
-  "viewport + device",
-  "browser environment",
-  "state hints",
-  "interaction trail",
-  "deploy + commit",
-  "visual capture",
-];
-
-const doc = `# SuperComment
+# SuperComment
 
 SuperComment is a comment layer for deployed websites. Reviewers click any element and comment, no accounts needed, and your AI coding agent gets everything it needs to ship the fix.
 
@@ -49,7 +24,18 @@ Agent-ready feedback is feedback that arrives carrying everything an AI coding a
 
 Every comment carries twelve signals of context. A signal is one captured piece of context. Competitors send about four.
 
-${SIGNALS.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+1. element + selector
+2. computed styles
+3. surrounding markup
+4. console errors
+5. network signals
+6. accessibility chain
+7. viewport + device
+8. browser environment
+9. state hints
+10. interaction trail
+11. deploy + commit
+12. visual capture
 
 On source-stamped React previews, comments also carry the component path, file, and line.
 
@@ -95,8 +81,3 @@ Feedback should stay attached to the product. A reviewer sees exactly what is wr
 - Compare: https://supercomment.dev/compare
 - FAQ: https://supercomment.dev/faq
 - Manifesto: https://supercomment.dev/manifesto
-`;
-
-mkdirSync(pub, { recursive: true });
-writeFileSync(join(pub, "llms-full.txt"), doc);
-console.log("[llms] wrote public/llms-full.txt");
