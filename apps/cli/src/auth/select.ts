@@ -17,6 +17,8 @@
  * default; a legacy project with none gets one created on selection.
  */
 
+import { asError } from "../lib/errors.js";
+
 /** A Supabase result envelope. */
 interface DbResult {
   data: unknown;
@@ -164,14 +166,6 @@ export const readlineTextPrompter: TextPrompter = async (question) => {
 };
 
 // --- network reads ----------------------------------------------------------
-
-function asError(error: unknown, context: string): Error {
-  const detail =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : String(error);
-  return new Error(`${context}: ${detail}`);
-}
 
 interface ProjectRow {
   id: string;

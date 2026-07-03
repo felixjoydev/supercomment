@@ -27,6 +27,7 @@ import {
   type SupabaseQuery,
   type TextPrompter,
 } from "./select.js";
+import { errorMessage } from "../lib/errors.js";
 
 /** Build a member-scoped Supabase client from the stored binding. */
 async function defaultMakeClient(
@@ -103,7 +104,7 @@ export async function runLink(opts: RunLinkOptions = {}): Promise<LinkResult> {
   } catch (err) {
     throw new Error(
       `Not logged in (${
-        err instanceof Error ? err.message : String(err)
+        errorMessage(err)
       }). Run \`supercomment login\` first.`,
     );
   }

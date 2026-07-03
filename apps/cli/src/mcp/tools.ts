@@ -544,16 +544,13 @@ export function registerTools(server: McpServerLike, store: CommentStore): void 
 // We import zod lazily/typed-loosely to avoid a hard type dependency in the
 // pure handler section above. The SDK requires a ZodRawShape for inputSchema.
 import { z } from "zod";
+import { errorMessage } from "../lib/errors.js";
 
 function numberArg(description: string) {
   return z.number().int().positive().describe(description);
 }
 function optionalStringArg(description: string) {
   return z.string().optional().describe(description);
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** Tool names exposed, for documentation / registration assertions. */

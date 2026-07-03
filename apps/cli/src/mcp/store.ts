@@ -20,6 +20,7 @@ import {
   normalizeCommentRow,
   COMMENT_ROW_COLUMNS,
 } from "@supercomment/shared";
+import { asError } from "../lib/errors.js";
 
 /** A project the developer can read, with its default review link + open count. */
 export interface ProjectSummary {
@@ -369,10 +370,3 @@ export class SupabaseCommentStore implements CommentStore {
   }
 }
 
-function asError(error: unknown, context: string): Error {
-  const detail =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : String(error);
-  return new Error(`${context}: ${detail}`);
-}

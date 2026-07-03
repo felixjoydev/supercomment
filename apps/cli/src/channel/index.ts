@@ -34,6 +34,7 @@ import {
   type QueueItem,
   type QueueSink,
 } from "./queue.js";
+import { asError } from "../lib/errors.js";
 
 /**
  * The slice of `@supabase/supabase-js` the channel needs. Declared structurally
@@ -301,10 +302,3 @@ export class Channel {
   }
 }
 
-function asError(error: unknown, context: string): Error {
-  const detail =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : String(error);
-  return new Error(`${context}: ${detail}`);
-}

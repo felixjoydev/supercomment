@@ -42,6 +42,7 @@ import {
   type ActiveTunnel,
   type TunnelProvider,
 } from "../tunnel/cloudflared.js";
+import { asError, errorMessage } from "../lib/errors.js";
 
 /** Known in-page paths the front server owns (never proxied upstream). */
 export const OVERLAY_BUNDLE_PATH = "/__supercomment/overlay.js";
@@ -270,13 +271,13 @@ export async function runStart(
     try {
       tunnel?.stop();
     } catch (err) {
-      logger.warn(`tunnel stop failed: ${errMsg(err)}`);
+      logger.warn(`tunnel stop failed: ${errorMessage(err)}`);
     }
     // 2. Channel.stop() flips status -> offline (once) and halts heartbeat+queue.
     try {
       await channel?.stop();
     } catch (err) {
-      logger.warn(`channel stop failed: ${errMsg(err)}`);
+      logger.warn(`channel stop failed: ${errorMessage(err)}`);
     }
     // 3. Close the front server last.
     if (frontServer) {
@@ -355,7 +356,7 @@ export async function runStart(
         ? { heartbeatIntervalMs: options.heartbeatIntervalMs }
         : {}),
       onError: (where, err) =>
-        logger.warn(`channel ${where}: ${errMsg(err)}`),
+        logger.warn(`channel ${where}: ${errorMessage(err)}`),
     });
     await channel.start();
 
@@ -468,14 +469,3 @@ function closeServer(server: http.Server): Promise<void> {
   });
 }
 
-function asError(error: unknown, context: string): Error {
-  const detail =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : String(error);
-  return new Error(`${context}: ${detail}`);
-}
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}

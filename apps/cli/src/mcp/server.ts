@@ -40,6 +40,7 @@ import {
 } from "./token-source.js";
 import { SupabaseCommentStore, type SupabaseLike } from "./store.js";
 import { registerTools, type McpServerLike } from "./tools.js";
+import { errorMessage } from "../lib/errors.js";
 
 /** stderr-only logger. Using process.stderr keeps stdout clean for JSON-RPC. */
 export function logStderr(message: string): void {
@@ -146,7 +147,7 @@ export async function runMcpServer(): Promise<void> {
     binding = await loadProjectBinding();
   } catch (err) {
     logStderr(
-      `cannot start: ${err instanceof Error ? err.message : String(err)}`,
+      `cannot start: ${errorMessage(err)}`,
     );
     throw err;
   }
@@ -242,7 +243,7 @@ export async function runMcpServer(): Promise<void> {
   } catch (err) {
     logStderr(
       `@modelcontextprotocol/sdk not available: ${
-        err instanceof Error ? err.message : String(err)
+        errorMessage(err)
       }. Install it to run the MCP server.`,
     );
     throw err;
