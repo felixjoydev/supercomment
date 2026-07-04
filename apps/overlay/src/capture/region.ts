@@ -62,8 +62,18 @@ export interface RegionInput {
 
 /** 0x0 / tiny targets still yield a visible thumbnail with a little context. */
 export const MIN_CROP_PX = 32;
-/** A little breathing room around the target so the mark is not flush to the edge. */
-export const CROP_PADDING_PX = 10;
+/**
+ * Context margin around the target, as a fraction of its size ON EACH SIDE, so
+ * the crop is "zoomed out" enough to show the surrounding area (R feedback). It
+ * scales with the subject — a small icon and a large section both get a
+ * proportional band of context — bounded by a floor (tiny targets still breathe)
+ * and a cap (a big selection does not balloon the crop).
+ */
+export const CROP_PAD_RATIO = 0.3;
+/** Minimum context margin per side, in CSS px. */
+export const CROP_PAD_MIN_PX = 28;
+/** Maximum context margin per side, in CSS px. */
+export const CROP_PAD_MAX_PX = 150;
 /** Guard against the browser's max canvas dimension on very long pages. */
 export const MAX_CANVAS_DIM = 8192;
 /** The persimmon used for the "this exact area" mark (matches the pin colour). */
@@ -145,10 +155,13 @@ export function cropBox(
   scrollX: number,
   scrollY: number,
 ): { x: number; y: number; width: number; height: number } {
-  let x = rect.x + scrollX - CROP_PADDING_PX;
-  let y = rect.y + scrollY - CROP_PADDING_PX;
-  let width = rect.width + CROP_PADDING_PX * 2;
-  let height = rect.height + CROP_PADDING_PX * 2;
+  // Proportional context margin (bounded), so the crop shows the surrounding area.
+  const padX = clampPad(rect.width * CROP_PAD_RATIO);
+  const padY = clampPad(rect.height * CROP_PAD_RATIO);
+  let x = rect.x + scrollX - padX;
+  let y = rect.y + scrollY - padY;
+  let width = rect.width + padX * 2;
+  let height = rect.height + padY * 2;
   if (width < MIN_CROP_PX) {
     x -= (MIN_CROP_PX - width) / 2;
     width = MIN_CROP_PX;
@@ -158,6 +171,11 @@ export function cropBox(
     height = MIN_CROP_PX;
   }
   return { x: Math.max(0, x), y: Math.max(0, y), width, height };
+}
+
+/** Bound a proportional context margin to [{@link CROP_PAD_MIN_PX}, {@link CROP_PAD_MAX_PX}]. */
+function clampPad(raw: number): number {
+  return Math.max(CROP_PAD_MIN_PX, Math.min(CROP_PAD_MAX_PX, raw));
 }
 
 /** Crop the page canvas to the target region and outline the exact target. */

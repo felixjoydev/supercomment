@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  CROP_PADDING_PX,
+  CROP_PAD_MAX_PX,
+  CROP_PAD_MIN_PX,
   MIN_CROP_PX,
   cropBox,
   createRegionRasterizer,
@@ -11,20 +12,35 @@ import {
 import { HOST_ELEMENT_ID } from "../shell/root.js";
 
 describe("cropBox", () => {
-  it("pads the target rect and adds the scroll offset (document space)", () => {
+  it("pads a small target by the floor margin and adds the scroll offset", () => {
+    // 50x20 * 0.3 = 15x6, both below the floor -> both pad = CROP_PAD_MIN_PX.
     const box = cropBox({ x: 100, y: 200, width: 50, height: 20 }, 30, 40);
     expect(box).toEqual({
-      x: 100 + 30 - CROP_PADDING_PX,
-      y: 200 + 40 - CROP_PADDING_PX,
-      width: 50 + CROP_PADDING_PX * 2,
-      height: 20 + CROP_PADDING_PX * 2,
+      x: 100 + 30 - CROP_PAD_MIN_PX,
+      y: 200 + 40 - CROP_PAD_MIN_PX,
+      width: 50 + CROP_PAD_MIN_PX * 2,
+      height: 20 + CROP_PAD_MIN_PX * 2,
     });
   });
 
-  it("enforces a minimum size for a zero-size target and never goes negative", () => {
+  it("scales the context margin with the target size", () => {
+    // 400x300 * 0.3 = 120x90 (within bounds) -> surrounding context is proportional.
+    const box = cropBox({ x: 0, y: 0, width: 400, height: 300 }, 0, 0);
+    expect(box.width).toBe(400 + 120 * 2);
+    expect(box.height).toBe(300 + 90 * 2);
+  });
+
+  it("caps the context margin for a very large target", () => {
+    // 1000 * 0.3 = 300 -> capped at CROP_PAD_MAX_PX.
+    const box = cropBox({ x: 500, y: 500, width: 1000, height: 1000 }, 0, 0);
+    expect(box.width).toBe(1000 + CROP_PAD_MAX_PX * 2);
+    expect(box.height).toBe(1000 + CROP_PAD_MAX_PX * 2);
+  });
+
+  it("still gives a zero-size target real context and never goes negative", () => {
     const box = cropBox({ x: 2, y: 2, width: 0, height: 0 }, 0, 0);
-    expect(box.width).toBe(MIN_CROP_PX);
-    expect(box.height).toBe(MIN_CROP_PX);
+    expect(box.width).toBe(CROP_PAD_MIN_PX * 2);
+    expect(box.width).toBeGreaterThanOrEqual(MIN_CROP_PX);
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.y).toBeGreaterThanOrEqual(0);
   });
