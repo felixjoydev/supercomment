@@ -317,6 +317,8 @@ export class FakeDocument {
 export class FakeWindow {
   innerWidth = 1024;
   innerHeight = 768;
+  scrollX = 0;
+  scrollY = 0;
   private readonly listeners = new Map<string, Listener[]>();
   private selectionText = "";
   private selectionRect: DOMRectLike | null = null;

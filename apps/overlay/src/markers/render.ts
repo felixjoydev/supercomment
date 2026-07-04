@@ -26,7 +26,9 @@ const POPOVER_MARGIN = 12;
 /** Rough height used for edge-aware placement before the card is measured. */
 const POPOVER_EST_HEIGHT = 132;
 
-/** A placed comment marker, anchored to its target rect (viewport space). */
+/** A placed comment marker, anchored to its target rect (DOCUMENT space, i.e.
+ * viewport rect + scroll offset). The renderer subtracts the current scroll on
+ * every paint so the pin tracks its element as the page scrolls. */
 export interface PlacedMarker {
   number: number;
   rect: Rect;
@@ -103,10 +105,22 @@ export class MarkerLayer {
     const vp = viewport ?? this.viewport();
     this.container.replaceChildren();
 
-    const inputs: MarkerInput[] = this.markers.map((m) => ({
-      number: m.number,
-      rect: m.rect,
-    }));
+    // Markers are stored in DOCUMENT space; convert to VIEWPORT space against the
+    // CURRENT scroll so pins track their element as the page scrolls (not stuck to
+    // a stale on-screen position). A marker with no real box is dropped rather than
+    // piled at the (0,0) corner.
+    const { x: sx, y: sy } = this.scroll();
+    const inputs: MarkerInput[] = this.markers
+      .map((m) => ({
+        number: m.number,
+        rect: {
+          x: m.rect.x - sx,
+          y: m.rect.y - sy,
+          width: m.rect.width,
+          height: m.rect.height,
+        },
+      }))
+      .filter((m) => isPlaceable(m.rect));
 
     const { visible, offscreen } = partitionByViewport(inputs, vp);
 
@@ -348,6 +362,27 @@ export class MarkerLayer {
       768;
     return { width: w, height: h };
   }
+
+  /** Current document scroll offset (0 in non-browser envs / tests). */
+  private scroll(): { x: number; y: number } {
+    const view = this.doc.defaultView;
+    return {
+      x: view?.scrollX ?? view?.pageXOffset ?? 0,
+      y: view?.scrollY ?? view?.pageYOffset ?? 0,
+    };
+  }
+}
+
+/**
+ * Whether a VIEWPORT-space marker rect can be drawn. A zero-size rect sitting at
+ * the viewport origin is the "unplaced" marker that piled at the top-left corner
+ * (a degenerate box that resolved to 0,0), so it is dropped. A zero-size rect
+ * anywhere else is a legitimate point anchor and is kept.
+ */
+function isPlaceable(rect: Rect): boolean {
+  const hasSize = rect.width >= 1 || rect.height >= 1;
+  const atOrigin = Math.abs(rect.x) < 1 && Math.abs(rect.y) < 1;
+  return hasSize || !atOrigin;
 }
 
 /** Parse a `data-numbers` comma list ("1,2,3") into numbers. */

@@ -286,7 +286,11 @@ export class OverlayController {
     this.markers.addMany(
       pending.map((c) => ({
         number: c.number,
-        rect: c.rect ?? { x: 0, y: 0, width: 0, height: 0 },
+        // Best-effort DOCUMENT-space position from the capture-time box; a missing
+        // or zero-size box is dropped by the renderer rather than piled at (0,0).
+        rect: c.rect
+          ? this.viewportToDocument(c.rect)
+          : { x: 0, y: 0, width: 0, height: 0 },
         isStale: true,
         content: c.content,
       })),
@@ -295,16 +299,30 @@ export class OverlayController {
 
   /** A live element's rect in DOCUMENT coordinates (viewport rect + scroll). */
   private documentRect(el: Element): Rect {
-    const r = el.getBoundingClientRect();
+    return this.viewportToDocument(toRect(this.bestRect(el)));
+  }
+
+  /** Convert a VIEWPORT-space rect to DOCUMENT space (add the current scroll). */
+  private viewportToDocument(rect: Rect): Rect {
     const view = this.doc.defaultView;
     const sx = view?.scrollX ?? view?.pageXOffset ?? 0;
     const sy = view?.scrollY ?? view?.pageYOffset ?? 0;
-    return {
-      x: (r.x ?? r.left) + sx,
-      y: (r.y ?? r.top) + sy,
-      width: r.width,
-      height: r.height,
-    };
+    return { x: rect.x + sx, y: rect.y + sy, width: rect.width, height: rect.height };
+  }
+
+  /**
+   * The element's own box, or the nearest ancestor with a real box when the
+   * element itself is collapsed to 0x0 — so a comment on a zero-size wrapper
+   * anchors to something visible instead of the (0,0) corner (fixes pins landing
+   * at the top-left edge).
+   */
+  private bestRect(el: Element): DOMRect {
+    let node: Element | null = el;
+    for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+      const r = node.getBoundingClientRect();
+      if (r.width >= 1 && r.height >= 1) return r;
+    }
+    return el.getBoundingClientRect();
   }
 
   /** Resolve on the next animation frame (or a macrotask in non-browser envs). */
@@ -514,7 +532,9 @@ export class OverlayController {
 
     this.markers.add({
       number: result.number,
-      rect: target.rect,
+      // Store in DOCUMENT space (element box, or the drawn region for area/text)
+      // so the pin tracks the page as it scrolls.
+      rect: element ? this.documentRect(element) : this.viewportToDocument(target.rect),
       content: {
         note: draft.note.trim(),
         authorDisplayName: name,

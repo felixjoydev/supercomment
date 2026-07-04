@@ -67,6 +67,27 @@ describe("MarkerLayer rendering", () => {
     return { doc, layer, parent };
   }
 
+  it("tracks the element as the page scrolls (document-space anchors, fixes drift)", () => {
+    const { doc, layer, parent } = setup();
+    layer.add({ number: 1, rect: makeRect(100, 100, 10, 10) });
+    layer.render({ width: 1000, height: 800 });
+    const pin = () => parent.querySelector(".sc-marker") as any;
+    expect(pin().style.top).toBe("105px"); // center at scroll 0
+    (doc.defaultView as any).scrollY = 50;
+    (doc.defaultView as any).scrollX = 20;
+    layer.render({ width: 1000, height: 800 });
+    expect(pin().style.top).toBe("55px"); // 105 - 50 scroll
+    expect(pin().style.left).toBe("85px"); // 105 - 20 scroll
+  });
+
+  it("drops a zero-size marker at the origin (no top-left pins) but keeps point anchors elsewhere", () => {
+    const { layer } = setup();
+    layer.add({ number: 1, rect: makeRect(0, 0, 0, 0) }); // unplaced -> dropped
+    layer.add({ number: 2, rect: makeRect(200, 200, 0, 0) }); // valid point -> kept
+    layer.render({ width: 1000, height: 800 });
+    expect(layer.renderedPinCount()).toBe(1);
+  });
+
   it("renders one pin per distinct on-screen marker", () => {
     const { layer } = setup();
     layer.add({ number: 1, rect: makeRect(100, 100, 0, 0) });
