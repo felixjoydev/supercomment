@@ -1359,6 +1359,151 @@ a.tile:active {
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
+/* ════════ Capture thumbnail + lightbox (shown on the card itself) ════════ */
+
+/* Small "before" preview on the comment card, click to enlarge. */
+.capture-thumb {
+  display: block;
+  margin: 10px 0 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  border-radius: 10px;
+  line-height: 0;
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.capture-thumb img {
+  display: block;
+  max-width: min(280px, 100%);
+  max-height: 150px;
+  object-fit: cover;
+  object-position: top left;
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    inset 0 0 0 1px var(--line);
+  transition:
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.capture-thumb:hover img {
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.14),
+    inset 0 0 0 1px var(--line);
+  transform: translateY(-1px);
+}
+
+.capture-thumb:focus-visible {
+  outline: 2px solid var(--accent, #e2483d);
+  outline-offset: 2px;
+}
+
+/* The expand hint badge in the thumbnail corner. */
+.capture-thumb-hint {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.capture-thumb:hover .capture-thumb-hint,
+.capture-thumb:focus-visible .capture-thumb-hint {
+  opacity: 1;
+}
+
+/* Non-image DOM-snapshot fallback: a compact chip, no picture to show. */
+.capture-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 2px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  background: var(--surface-inset);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* Make the expanded-detail "before" image clickable too. */
+.context-shot-btn {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  line-height: 0;
+  width: fit-content;
+  max-width: 100%;
+}
+
+/* Full-size overlay. */
+.capture-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vmin;
+  background: rgba(20, 18, 16, 0.82);
+  backdrop-filter: blur(3px);
+  cursor: zoom-out;
+  animation: capture-fade 0.14s ease;
+}
+
+.capture-lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.capture-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.capture-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+@keyframes capture-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* ════════ Guest confirm (send to Claude) ════════ */
 
 .guest-confirm {

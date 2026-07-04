@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import type { CommentView } from '@/lib/comments/types';
 import { severityLabel, intentLabel, trustLabel, statusLabel } from '@/lib/comments/labels';
 import { ContextDetail } from './context-detail';
+import { CaptureThumb } from './capture-image';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
 
@@ -74,6 +75,13 @@ export function CommentCard({
           <div className="comment-byline">
             {comment.author ?? 'Unknown'} · {comment.path ?? '—'}
           </div>
+
+          {comment.context?.screenshot && (
+            <CaptureThumb
+              src={comment.context.screenshot}
+              number={comment.number}
+            />
+          )}
 
           {muted && comment.resolvedSummary && (
             <p className="comment-outcome">

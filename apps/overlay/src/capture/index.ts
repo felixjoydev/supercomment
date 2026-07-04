@@ -1,11 +1,13 @@
 import type { CapturedContext, ReactContext } from "@supercomment/shared";
 
-import type { ContextCapturer, SelectionTarget } from "../core/types.js";
+import type { ContextCapturer, Rect, SelectionTarget } from "../core/types.js";
 import { primaryElementOf } from "../core/target.js";
+import { toRect } from "../core/rect.js";
+import { unionRect } from "../core/geometry.js";
 import { captureGenericContext } from "./generic.js";
 import { captureReactContext } from "./react.js";
 import { captureSourceStamp, mergeSourceStamp } from "./source.js";
-import { captureScreenshot, type ScreenshotOptions } from "./screenshot.js";
+import { captureRegionScreenshot, type ScreenshotOptions } from "./screenshot.js";
 import { installConsoleErrorBuffer } from "./console-buffer.js";
 import { captureA11yTree } from "./a11y.js";
 import { captureEnvironment } from "./environment.js";
@@ -118,9 +120,19 @@ export class RealContextCapturer implements ContextCapturer {
       }
     }
 
-    // Screenshot is best-effort and never blocks.
-    if (el) {
-      const screenshot = await captureScreenshot(el, this.screenshotOptions);
+    // Screenshot is best-effort and never blocks. REGION-scoped: raster the page
+    // and crop to the target's rect so EVERY mode (element / multi / area / text)
+    // yields a real "just that area" shot — not a blank isolated-element raster —
+    // with the overlay (and every other comment's pin) excluded and only THIS
+    // target outlined. `captureRegionScreenshot` falls back to the element DOM
+    // snapshot when the raster is unavailable.
+    const captureRect = currentRectForTarget(target);
+    if (captureRect) {
+      const screenshot = await captureRegionScreenshot(
+        captureRect,
+        el,
+        this.screenshotOptions,
+      );
       if (screenshot) {
         context.screenshot = screenshot;
       }
@@ -178,6 +190,32 @@ export class RealContextCapturer implements ContextCapturer {
     }
 
     return context;
+  }
+}
+
+/**
+ * The viewport-space rect to capture for a target, recomputed LIVE at capture
+ * time so a scroll/layout shift since selection can't mislocate the crop. Element
+ * and multi selections re-measure their element(s); area/text carry their own
+ * rect. Falls back to the stored `target.rect` if a live measure throws.
+ */
+function currentRectForTarget(target: SelectionTarget): Rect | null {
+  try {
+    switch (target.kind) {
+      case "element":
+        return toRect(target.element.getBoundingClientRect());
+      case "multi":
+        return target.elements.length > 0
+          ? unionRect(
+              target.elements.map((e) => toRect(e.getBoundingClientRect())),
+            )
+          : target.rect;
+      case "area":
+      case "text":
+        return target.rect;
+    }
+  } catch {
+    return target.rect ?? null;
   }
 }
 

@@ -45,6 +45,7 @@
  */
 import type { SnapshotPayload } from "@supercomment/shared";
 
+import type { Rect } from "../core/types.js";
 import { captureSnapshot } from "../snapshot/capture.js";
 
 /**
@@ -64,8 +65,19 @@ export const BEFORE_ARTIFACT_MAX_BYTES = 256_000;
 /** Options for {@link captureScreenshot} / {@link attachBeforeArtifact}. */
 export interface ScreenshotOptions {
   /**
+   * PREFERRED: region rasterizer (real-env wiring / tests). Rasters the page and
+   * crops to the target's rect — the "capture just that area" path that works for
+   * every selection mode and renders content the bare-element path drops. See
+   * {@link createRegionRasterizer}. Resolves to an image data URL, or `null`.
+   */
+  rasterizeRegion?: (input: {
+    rect: Rect;
+    element: Element | null;
+  }) => Promise<string | null>;
+  /**
    * Optional injected element rasterizer (real-env wiring / tests). Receives the
    * target element and resolves to an image data URL / storage ref, or `null`.
+   * Kept as a secondary fallback behind {@link rasterizeRegion}.
    */
   rasterize?: (target: Element) => Promise<string | null>;
   /**
@@ -107,6 +119,58 @@ export async function captureScreenshot(
     if (artifact) return artifact;
   } catch {
     // Both raster and snapshot failed.
+  }
+
+  return null;
+}
+
+/**
+ * Capture a best-effort, REGION-scoped "before" artifact for a selection.
+ *
+ * Fallback chain (best-effort throughout; never throws):
+ *   1. REGION raster (preferred): raster the page and crop to {@link rect} — the
+ *      one path that works for element / multi / area / text and renders content
+ *      the bare-element raster drops.
+ *   2. ELEMENT raster (legacy, only when an element exists and one is injected).
+ *   3. ELEMENT-SUBTREE DOM snapshot (only when an element exists).
+ * Returns the artifact string, or `null` when every step fails.
+ */
+export async function captureRegionScreenshot(
+  rect: Rect,
+  element: Element | null,
+  options: ScreenshotOptions = {},
+): Promise<string | null> {
+  // 1) Region raster — the primary, mode-agnostic path.
+  if (options.rasterizeRegion) {
+    try {
+      const region = await options.rasterizeRegion({ rect, element });
+      if (region) return region;
+    } catch {
+      // Region raster failed (e.g. canvas taint) — fall through.
+    }
+  }
+
+  // 2) Legacy element raster, only meaningful when the selection has an element.
+  if (element && options.rasterize) {
+    try {
+      const raster = await options.rasterize(element);
+      if (raster) return raster;
+    } catch {
+      // Fall through to the snapshot.
+    }
+  }
+
+  // 3) Element-subtree DOM snapshot fallback (area/text have no element -> skip).
+  if (element) {
+    const snapshot =
+      options.snapshot ??
+      ((el: Element) => defaultElementSnapshot(el, options.maxSnapshotBytes));
+    try {
+      const artifact = snapshot(element);
+      if (artifact) return artifact;
+    } catch {
+      // Every step failed.
+    }
   }
 
   return null;

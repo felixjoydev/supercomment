@@ -33,8 +33,9 @@
 import { OverlayController } from "./controller.js";
 import { StubCommentSubmitter } from "./core/stubs.js";
 import { RealContextCapturer } from "./capture/index.js";
-import { domToPng } from "modern-screenshot";
+import { domToCanvas, domToPng } from "modern-screenshot";
 import { createLiveRasterizer, type DomToPng } from "./capture/rasterize-live.js";
+import { createRegionRasterizer, type DomToCanvas } from "./capture/region.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
@@ -337,11 +338,15 @@ async function activateSession(
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),
-    // Embedded-only: capture a real PNG of the (modified) element. The uploader
-    // above offloads it to Storage so it never inflates `context`; on any failure
-    // (cross-origin taint, etc.) it falls back to the DOM snapshot.
+    // Embedded-only: capture a real PNG of the (modified) page, cropped to the
+    // selected region, with the overlay + other pins excluded and this target
+    // outlined. The uploader above offloads it to Storage so it never inflates
+    // `context`; on any failure it falls back to the element DOM snapshot.
     capturer: new RealContextCapturer({
       screenshot: {
+        rasterizeRegion: createRegionRasterizer(
+          domToCanvas as unknown as DomToCanvas,
+        ),
         rasterize: createLiveRasterizer(domToPng as unknown as DomToPng),
       },
     }),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import type { CommentView } from '@/lib/comments/types';
 import {
@@ -12,11 +12,10 @@ import {
   surfaceLabel,
 } from '@/lib/comments/context-summary';
 import {
-  classifyCaptureRef,
-  resolveCaptureSrc,
-  type CaptureSigner,
-} from '@/lib/comments/capture-ref';
-import { createClient } from '@/lib/supabase/client';
+  CaptureLightbox,
+  SnapshotGlyph,
+  useResolvedCapture,
+} from './capture-image';
 
 /**
  * Inline expandable view of a comment's captured context: the capture-time
@@ -92,61 +91,39 @@ export function ContextDetail({ comment }: { comment: CommentView }) {
  *    signing → a compact "snapshot captured" indicator instead of a broken img.
  */
 function BeforeArtifact({ src, number }: { src: string; number: number }) {
-  const kind = classifyCaptureRef(src);
-  // Inline/URL images render immediately; a private-bucket ref is signed on mount.
-  const [resolved, setResolved] = useState<string | null>(
-    kind === 'image-url' ? src : null,
-  );
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    // Re-sync whenever the src/kind changes on a reused instance (the useState
-    // initializer only runs once). Inline/URL images resolve to src directly;
-    // a private-bucket ref is signed; anything else has no image.
-    setFailed(false);
-    if (kind === 'image-url') {
-      setResolved(src);
-      return;
-    }
-    if (kind !== 'image-ref') {
-      setResolved(null);
-      return;
-    }
-    setResolved(null);
-    let active = true;
-    const signer: CaptureSigner = async (bucket, path) => {
-      // VERIFY IN REAL ENV: the signed-URL round-trip (0027 RLS SELECT via the
-      // member session) can't run in the sandbox.
-      const { data } = await createClient()
-        .storage.from(bucket)
-        .createSignedUrl(path, 3600);
-      return data?.signedUrl ?? null;
-    };
-    void resolveCaptureSrc(src, signer).then((url) => {
-      if (!active) return;
-      if (url) setResolved(url);
-      else setFailed(true);
-    });
-    return () => {
-      active = false;
-    };
-  }, [src, kind]);
+  const { kind, url, loading, failed } = useResolvedCapture(src);
+  const [open, setOpen] = useState(false);
 
   const showImage =
-    (kind === 'image-url' || kind === 'image-ref') && !!resolved && !failed;
-  const showLoading = kind === 'image-ref' && !resolved && !failed;
+    (kind === 'image-url' || kind === 'image-ref') && !!url && !failed;
 
   return (
     <figure className="context-before">
       <figcaption className="context-before-cap">Before · at comment time</figcaption>
       {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={resolved as string}
-          alt={`Captured “before” for comment ${number}`}
-          className="context-shot"
-        />
-      ) : showLoading ? (
+        <>
+          <button
+            type="button"
+            className="context-shot-btn"
+            onClick={() => setOpen(true)}
+            aria-label={`Open screenshot for comment ${number}`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url as string}
+              alt={`Captured “before” for comment ${number}`}
+              className="context-shot"
+            />
+          </button>
+          {open && (
+            <CaptureLightbox
+              url={url as string}
+              number={number}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      ) : loading ? (
         <span className="context-snapshot" role="img" aria-label="Loading screenshot">
           <SnapshotGlyph />
           Loading screenshot…
@@ -162,23 +139,6 @@ function BeforeArtifact({ src, number }: { src: string; number: number }) {
         </span>
       )}
     </figure>
-  );
-}
-
-function SnapshotGlyph() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect
-        x="2"
-        y="3"
-        width="12"
-        height="10"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
   );
 }
 
