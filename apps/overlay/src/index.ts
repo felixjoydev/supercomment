@@ -98,7 +98,18 @@ declare global {
  * submitter precedence is: explicit override → tunnel boot config
  * (`SupabaseCommentSubmitter`) → console stub.
  */
-function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
+/**
+ * Assemble the full OverlayConfig from a caller's partial overrides, filling the
+ * required fields with computed defaults. Exported for tests: this assembly once
+ * silently dropped the comment-thread seams `threadClient` + `currentUser` (it was
+ * built field-by-field and nobody added the two new keys), so every embedded
+ * popover got no thread client and degraded to read-only (no reply box, mark-done,
+ * or delete). It now forwards EVERY seam the caller passed via spread, so a newly
+ * added config field can never be silently dropped again.
+ */
+export function buildMountConfig(
+  overrides: Partial<OverlayConfig> = {},
+): OverlayConfig {
   const boot = (typeof window !== "undefined" && window.__SUPERCOMMENT__) || {};
   const previewId =
     overrides.previewId ??
@@ -114,27 +125,21 @@ function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
     submitterFromBootConfig(boot) ??
     new StubCommentSubmitter();
 
-  const config: OverlayConfig = {
+  return {
+    ...overrides,
     previewId,
     previewKey,
+    submitter,
     // The live PNG rasterizer is wired ONLY in embedded activation (below), where
     // an uploader offloads the image out-of-band. Tunnel/standalone mounts get the
-    // plain capturer → the small, capped DOM-snapshot fallback (never an uncapped
+    // plain capturer, the small capped DOM-snapshot fallback (never an uncapped
     // inline PNG that would blow the guest `context` cap).
     capturer: overrides.capturer ?? new RealContextCapturer(),
-    submitter,
-    // U13: out-of-band screenshot upload (embedded activation wires the real one).
-    uploader: overrides.uploader,
-    // Phase 2: send-to-agent grant + enqueuer (embedded activation wires these).
-    canSendToAgent: overrides.canSendToAgent,
-    enqueuer: overrides.enqueuer,
-    // U18: session-teardown hook fired on confirmed Exit (embedded wires it).
-    onExit: overrides.onExit,
-    doc: overrides.doc,
-    storage: overrides.storage,
   };
+}
 
-  return new OverlayController(config);
+function mount(overrides: Partial<OverlayConfig> = {}): OverlayController {
+  return new OverlayController(buildMountConfig(overrides));
 }
 
 // ---------------------------------------------------------------------------
