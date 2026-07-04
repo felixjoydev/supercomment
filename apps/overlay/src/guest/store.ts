@@ -54,6 +54,50 @@ export class GuestNameStore {
   }
 }
 
+const EMAIL_KEY_PREFIX = "supercomment:guest-email:";
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** Lowercase + trim an email; null if it is not a plausible address. Mirrors the
+ * server-side normalize_email (0036) so the client and server agree on the key. */
+export function normalizeEmail(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const t = value.trim().toLowerCase();
+  return EMAIL_RE.test(t) ? t : null;
+}
+
+/**
+ * Guest reviewer email (0036 / U11). Unverified, captured once before the first
+ * comment so per-viewer unread + "pages I commented on" have a durable key.
+ * Persisted per-preview in localStorage so a returning reviewer is not asked twice.
+ */
+export class GuestEmailStore {
+  private readonly storage: NameStorage;
+  private readonly key: string;
+
+  constructor(previewKey: string, storage?: NameStorage) {
+    this.key = `${EMAIL_KEY_PREFIX}${previewKey}`;
+    this.storage = storage ?? resolveStorage();
+  }
+
+  /** The stored normalized email, or null if none/invalid. */
+  get(): string | null {
+    return normalizeEmail(safeGet(this.storage, this.key));
+  }
+
+  /** True once a valid email is stored (gates the first guest submit). */
+  has(): boolean {
+    return this.get() !== null;
+  }
+
+  /** Persist a normalized email; returns it, or null when the input is invalid. */
+  set(email: string): string | null {
+    const n = normalizeEmail(email);
+    if (!n) return null;
+    safeSet(this.storage, this.key, n);
+    return n;
+  }
+}
+
 function resolveStorage(): NameStorage {
   try {
     if (typeof localStorage !== "undefined") return localStorage;

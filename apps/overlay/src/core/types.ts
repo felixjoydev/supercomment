@@ -248,6 +248,12 @@ export interface OverlayConfig {
    * members. Absent (tunnel / tests) → read-only popover.
    */
   currentUser?: { displayName: string; role: string };
+  /**
+   * Persist a guest's captured email server-side (set_guest_email, 0036 / U11).
+   * Best-effort: resolves false on failure and never throws. Absent (tunnel /
+   * tests) → the email is stored locally only.
+   */
+  captureGuestEmail?: (email: string) => Promise<boolean>;
   /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
   readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */

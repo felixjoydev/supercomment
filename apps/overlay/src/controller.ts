@@ -36,7 +36,8 @@ import { createListenerBag } from "./core/listener-bag.js";
 import { toRect } from "./core/rect.js";
 import { primaryElementOf } from "./core/target.js";
 import { GuestModal } from "./guest/modal.js";
-import { GuestNameStore } from "./guest/store.js";
+import { GuestEmailModal } from "./guest/email-modal.js";
+import { GuestNameStore, GuestEmailStore } from "./guest/store.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
@@ -67,6 +68,7 @@ export class OverlayController {
   private readonly highlights: HighlightLayer;
   private readonly markers: MarkerLayer;
   private readonly guestStore: GuestNameStore;
+  private readonly guestEmailStore: GuestEmailStore;
 
   /**
    * The durable visual-edit buffer (U9). Lives on the controller — not the
@@ -88,6 +90,7 @@ export class OverlayController {
 
   private form: CommentForm | null = null;
   private modal: GuestModal | null = null;
+  private emailModal: GuestEmailModal | null = null;
   /** The Exit-confirmation dialog (U18); open only while confirming exit. */
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
@@ -129,6 +132,7 @@ export class OverlayController {
     );
     this.inspector = new InspectorLayer(this.doc, this.shell.layer);
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
+    this.guestEmailStore = new GuestEmailStore(config.previewKey, config.storage);
 
     this.toolbar = new Toolbar(this.doc, this.shell.layer, {
       onModeChange: (m) => this.changeMode(m),
@@ -466,6 +470,14 @@ export class OverlayController {
     asTemplate = false,
     enqueueToAgent = false,
   ): void {
+    // Guests give an (unverified) email once, before their first comment, so
+    // per-viewer unread + "pages I commented on" key to it (0036/U11). Members skip.
+    if (this.isGuest() && !this.guestEmailStore.has()) {
+      this.promptForEmail(() =>
+        this.handleSubmit(target, draft, asTemplate, enqueueToAgent),
+      );
+      return;
+    }
     if (!this.guestStore.has()) {
       // Defer the submission until a name is provided (the pending target/draft
       // are captured by the callback closure below).
@@ -662,6 +674,35 @@ export class OverlayController {
     );
   }
 
+  /** True when the current reviewer is a guest (the email gate applies to them). */
+  private isGuest(): boolean {
+    return this.config.currentUser?.role === "guest";
+  }
+
+  /**
+   * Capture a guest's email before their first comment (0036 / U11). Persists it
+   * locally (which unblocks submit) and, best-effort, server-side, then continues
+   * the deferred submission via `onDone`.
+   */
+  private promptForEmail(onDone: () => void): void {
+    this.dismissModal();
+    this.emailModal = new GuestEmailModal(
+      this.doc,
+      this.shell.layer,
+      {
+        onConfirm: (email) => {
+          this.guestEmailStore.set(email);
+          this.dismissModal();
+          // Best-effort server persist; the local store already unblocks submit.
+          void this.config.captureGuestEmail?.(email);
+          onDone();
+        },
+        onCancel: () => this.dismissModal(),
+      },
+      this.guestEmailStore.get() ?? "",
+    );
+  }
+
   // --- Exit review session (U18) ------------------------------------------
 
   /**
@@ -740,6 +781,8 @@ export class OverlayController {
   private dismissModal(): void {
     this.modal?.destroy();
     this.modal = null;
+    this.emailModal?.destroy();
+    this.emailModal = null;
   }
 
   // --- Visual editor (U9) -------------------------------------------------

@@ -38,6 +38,7 @@ import { createLiveRasterizer, type DomToPng } from "./capture/rasterize-live.js
 import { createRegionRasterizer, type DomToCanvas } from "./capture/region.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
+import { makeSetGuestEmail } from "./submit/email.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { SessionThreadClient } from "./submit/thread.js";
@@ -348,6 +349,14 @@ async function activateSession(
       getAccessToken,
     }),
     currentUser: { displayName: session.displayName, role: session.role },
+    // U11: persist a guest's captured email server-side (set_guest_email, 0036) so
+    // read-state keys to it; best-effort, never blocks the submit.
+    captureGuestEmail: makeSetGuestEmail({
+      supabaseUrl,
+      supabaseAnonKey,
+      previewId: session.previewId,
+      getAccessToken,
+    }),
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),
