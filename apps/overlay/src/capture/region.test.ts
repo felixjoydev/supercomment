@@ -24,10 +24,10 @@ describe("cropBox", () => {
   });
 
   it("scales the context margin with the target size", () => {
-    // 400x300 * 0.3 = 120x90 (within bounds) -> surrounding context is proportional.
-    const box = cropBox({ x: 0, y: 0, width: 400, height: 300 }, 0, 0);
-    expect(box.width).toBe(400 + 120 * 2);
-    expect(box.height).toBe(300 + 90 * 2);
+    // 500x400 * 0.3 = 150x120, both between the floor and cap -> proportional.
+    const box = cropBox({ x: 0, y: 0, width: 500, height: 400 }, 0, 0);
+    expect(box.width).toBe(500 + 150 * 2);
+    expect(box.height).toBe(400 + 120 * 2);
   });
 
   it("caps the context margin for a very large target", () => {

@@ -70,10 +70,14 @@ export const MIN_CROP_PX = 32;
  * and a cap (a big selection does not balloon the crop).
  */
 export const CROP_PAD_RATIO = 0.3;
-/** Minimum context margin per side, in CSS px. */
-export const CROP_PAD_MIN_PX = 28;
-/** Maximum context margin per side, in CSS px. */
-export const CROP_PAD_MAX_PX = 150;
+/**
+ * Minimum context margin per side, in CSS px. Deliberately generous so a small
+ * target (a lone icon) is shown within its neighborhood — enough surrounding
+ * area for an agent reading the screenshot to place it — not cropped tight.
+ */
+export const CROP_PAD_MIN_PX = 110;
+/** Maximum context margin per side, in CSS px, so a small target never becomes a speck. */
+export const CROP_PAD_MAX_PX = 240;
 /** Guard against the browser's max canvas dimension on very long pages. */
 export const MAX_CANVAS_DIM = 8192;
 /** The persimmon used for the "this exact area" mark (matches the pin colour). */
