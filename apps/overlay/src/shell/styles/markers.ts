@@ -63,17 +63,17 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
 }
 
 /* Comment popover ----------------------------------------------------- */
-/* Opens when a pin is clicked: the reviewer reads the thread on the live
-   deploy. Same quiet-gallery language as the form/modal — white surface,
-   layered float shadow, warm ink, one persimmon accent. */
+/* Opens when a pin is clicked: the reviewer reads and replies to the thread on
+   the live deploy. Same quiet-gallery language as the form/modal — white surface,
+   layered float shadow, warm ink, one persimmon accent — with a titled header
+   bar, round name-hashed avatars, and a pill reply input. */
 .sc-comment-pop {
   position: absolute;
   z-index: 1;
-  max-width: 280px;
-  min-width: 200px;
+  max-width: 320px;
+  min-width: 264px;
   width: max-content;
-  padding: 14px 16px;
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-float);
   color: var(--ink);
@@ -82,20 +82,31 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  overflow: hidden;
 }
-.sc-comment-pop-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
+
+/* Header bar: "Comment(s)" title + close. */
+.sc-pop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.sc-pop-title {
+  font-weight: 650;
+  color: var(--ink);
+}
+.sc-pop-close {
   appearance: none;
   border: 0;
   background: transparent;
   color: var(--ink-3);
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  font-size: 16px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -104,39 +115,67 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   transition: background-color 160ms ease, color 160ms ease;
 }
 @media (hover: hover) and (pointer: fine) {
-  .sc-comment-pop-close:hover {
+  .sc-pop-close:hover {
     background: var(--soft);
     color: var(--ink);
   }
 }
+
+/* Round avatar — the name's initial on a name-hashed color (bg set inline). */
+.sc-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 650;
+  font-size: 12px;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+}
+.sc-avatar-sm {
+  width: 22px;
+  height: 22px;
+  font-size: 10.5px;
+}
+
+/* One comment (thread root). */
 .sc-comment-entry {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  padding: 14px 16px;
 }
 .sc-comment-entry + .sc-comment-entry {
-  padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 .sc-comment-head {
-  font-weight: 600;
-  color: var(--ink);
-  padding-right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.sc-comment-num {
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
+.sc-comment-byline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .sc-comment-author {
-  color: var(--ink-2);
-  font-weight: 550;
-}
-.sc-comment-meta {
-  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: capitalize;
-  color: var(--accent-deep);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-comment-sub {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 .sc-comment-tag {
   align-self: flex-start;
@@ -153,19 +192,15 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.sc-comment-time {
-  font-size: 11px;
+.sc-comment-entry.is-resolved .sc-comment-note {
   color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-3);
 }
 
-/* Thread: actions, replies, reply box (0033) -------------------------- */
-.sc-comment-head {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
+/* Thread: actions (mark-done + member menu), replies, reply box (0033). */
 .sc-comment-actions {
-  margin-left: auto;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -174,11 +209,11 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--ink-3);
   font-size: 14px;
@@ -199,7 +234,7 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
 }
 .sc-act-menu {
   position: absolute;
-  top: 28px;
+  top: 30px;
   right: 0;
   z-index: 2;
   min-width: 150px;
@@ -229,20 +264,21 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
 .sc-act-menu-item.is-danger:hover {
   background: rgba(192, 57, 43, 0.1);
 }
-.sc-comment-entry.is-resolved .sc-comment-note {
-  color: var(--ink-3);
-  text-decoration: line-through;
-  text-decoration-color: var(--ink-3);
-}
 
 .sc-reply-list {
   display: grid;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 10px;
 }
 .sc-reply {
-  padding: 7px 10px;
-  border-radius: 9px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.sc-reply-main {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 11px;
+  border-radius: 10px;
   background: var(--soft);
 }
 .sc-reply-head {
@@ -285,39 +321,49 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
 
 .sc-reply-box {
   display: flex;
-  gap: 6px;
-  align-items: flex-end;
-  margin-top: 10px;
+  gap: 8px;
+  align-items: center;
 }
 .sc-reply-input {
   flex: 1;
   min-width: 0;
   resize: none;
   max-height: 96px;
-  padding: 8px 10px;
-  border-radius: 9px;
+  padding: 8px 14px;
+  border-radius: 18px;
   border: none;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink);
   font: inherit;
   font-size: 13px;
   line-height: 1.4;
 }
+.sc-reply-input::placeholder {
+  color: var(--ink-3);
+}
 .sc-reply-input:focus {
   outline: none;
+  background: var(--surface);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 .sc-reply-send {
   flex-shrink: 0;
-  padding: 8px 12px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: none;
-  border-radius: 9px;
+  border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 140ms ease;
 }
 .sc-reply-send:hover {
   background: var(--accent-deep);
@@ -327,9 +373,9 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   cursor: default;
 }
 .sc-comment-flash {
-  margin-top: 8px;
+  margin-top: 2px;
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: 8px;
   font-size: 12px;
   color: #c0392b;
   background: rgba(192, 57, 43, 0.1);
@@ -350,7 +396,10 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   .sc-multi-confirm,
   .sc-btn-primary,
   .sc-btn-secondary,
-  .sc-marker {
+  .sc-marker,
+  .sc-pop-close,
+  .sc-act,
+  .sc-reply-send {
     transition-duration: 0ms;
   }
 }

@@ -253,18 +253,13 @@ export class MarkerLayer {
     pop.setAttribute("role", "dialog");
     pop.setAttribute("aria-label", "Comment");
 
-    const close = this.doc.createElement("button");
-    close.type = "button";
-    close.className = "sc-comment-pop-close";
-    close.setAttribute("aria-label", "Close");
-    close.textContent = "×"; // ×
-    close.addEventListener("click", () => this.closePopover());
-    pop.appendChild(close);
-
     const wanted = new Set(numbers);
-    for (const m of this.markers.filter((mk) => wanted.has(mk.number))) {
-      pop.appendChild(this.buildEntry(m));
-    }
+    const entries = this.markers.filter((mk) => wanted.has(mk.number));
+
+    // A titled header bar (like a comment tool's card): "Comment(s)" + close.
+    pop.appendChild(this.buildPopHeader(entries.length));
+
+    for (const m of entries) pop.appendChild(this.buildEntry(m));
 
     this.parent.appendChild(pop);
     this.popover = pop;
@@ -279,9 +274,41 @@ export class MarkerLayer {
     this.popoverNumbers = null;
   }
 
+  /** The popover's top bar: a "Comment(s)" title on the left, close on the right. */
+  private buildPopHeader(count: number): HTMLElement {
+    const header = this.doc.createElement("div");
+    header.className = "sc-pop-header";
+
+    const title = this.doc.createElement("div");
+    title.className = "sc-pop-title";
+    title.textContent = count > 1 ? "Comments" : "Comment";
+    header.appendChild(title);
+
+    const close = this.doc.createElement("button");
+    close.type = "button";
+    close.className = "sc-pop-close";
+    close.setAttribute("aria-label", "Close");
+    close.title = "Close";
+    close.textContent = "×"; // ×
+    close.addEventListener("click", () => this.closePopover());
+    header.appendChild(close);
+
+    return header;
+  }
+
+  /** A round avatar: the name's first letter on a color hashed from the name. */
+  private buildAvatar(name: string, size: "sm" | "md" = "md"): HTMLElement {
+    const av = this.doc.createElement("div");
+    av.className = size === "sm" ? "sc-avatar sc-avatar-sm" : "sc-avatar";
+    av.textContent = (name.trim()[0] || "?").toUpperCase();
+    av.style.background = avatarColor(name);
+    av.setAttribute("aria-hidden", "true");
+    return av;
+  }
+
   /**
-   * Build one thread: the root comment (#N · author, meta, note, time), its
-   * replies, a reply box, and the mark-done / delete actions. When no thread
+   * Build one thread: the root comment (avatar + author + "#N · time", note),
+   * its replies, a reply box, and the mark-done / delete actions. When no thread
    * client is wired (tunnel / tests) it degrades to the read-only card.
    */
   private buildEntry(m: PlacedMarker): HTMLElement {
@@ -293,31 +320,25 @@ export class MarkerLayer {
 
     const head = this.doc.createElement("div");
     head.className = "sc-comment-head";
-    const num = this.doc.createElement("span");
-    num.className = "sc-comment-num";
-    num.textContent = `#${m.number}`;
-    head.appendChild(num);
-    const author = m.content?.authorDisplayName;
-    if (author) {
-      const who = this.doc.createElement("span");
-      who.className = "sc-comment-author";
-      who.textContent = ` · ${author}`; // ·
-      head.appendChild(who);
-    }
+
+    const author = m.content?.authorDisplayName || "Guest";
+    head.appendChild(this.buildAvatar(author));
+
+    const byline = this.doc.createElement("div");
+    byline.className = "sc-comment-byline";
+    const who = this.doc.createElement("div");
+    who.className = "sc-comment-author";
+    who.textContent = author;
+    byline.appendChild(who);
+    const sub = this.doc.createElement("div");
+    sub.className = "sc-comment-sub";
+    const when = shortTime(m.content?.createdAt);
+    sub.textContent = when ? `#${m.number} · ${when}` : `#${m.number}`; // ·
+    byline.appendChild(sub);
+    head.appendChild(byline);
+
     if (interactive) head.appendChild(this.buildActions(m, entry));
     entry.appendChild(head);
-
-    const metaParts = [
-      m.content?.intent,
-      m.content?.severity,
-      m.content?.status,
-    ].filter((v): v is string => !!v);
-    if (metaParts.length > 0) {
-      const meta = this.doc.createElement("div");
-      meta.className = "sc-comment-meta";
-      meta.textContent = metaParts.join(" · "); // ·
-      entry.appendChild(meta);
-    }
 
     // U16 (R11): mark a visual-edit template distinctly in the popover.
     if (m.content?.kind === "template") {
@@ -333,14 +354,6 @@ export class MarkerLayer {
       note.className = "sc-comment-note";
       note.textContent = noteText;
       entry.appendChild(note);
-    }
-
-    const when = shortTime(m.content?.createdAt);
-    if (when) {
-      const time = this.doc.createElement("div");
-      time.className = "sc-comment-time";
-      time.textContent = when;
-      entry.appendChild(time);
     }
 
     if (interactive) {
@@ -459,6 +472,9 @@ export class MarkerLayer {
   private buildReplyElement(r: ReplyRow, container: HTMLElement): HTMLElement {
     const el = this.doc.createElement("div");
     el.className = "sc-reply";
+    el.appendChild(this.buildAvatar(r.author_display_name, "sm"));
+    const main = this.doc.createElement("div");
+    main.className = "sc-reply-main";
     const head = this.doc.createElement("div");
     head.className = "sc-reply-head";
     const who = this.doc.createElement("span");
@@ -495,11 +511,12 @@ export class MarkerLayer {
       });
       head.appendChild(del);
     }
-    el.appendChild(head);
+    main.appendChild(head);
     const body = this.doc.createElement("div");
     body.className = "sc-reply-body";
     body.textContent = r.body;
-    el.appendChild(body);
+    main.appendChild(body);
+    el.appendChild(main);
     return el;
   }
 
@@ -507,6 +524,7 @@ export class MarkerLayer {
   private buildReplyBox(commentId: string, list: HTMLElement): HTMLElement {
     const box = this.doc.createElement("div");
     box.className = "sc-reply-box";
+    box.appendChild(this.buildAvatar(this.currentUser?.displayName ?? "", "sm"));
     const input = this.doc.createElement("textarea");
     input.className = "sc-reply-input";
     input.rows = 1;
@@ -515,7 +533,8 @@ export class MarkerLayer {
     const send = this.doc.createElement("button");
     send.type = "button";
     send.className = "sc-reply-send";
-    send.textContent = "Send";
+    send.textContent = "↑"; // ↑ send arrow
+    send.title = "Send reply";
     send.setAttribute("aria-label", "Send reply");
     const submit = async () => {
       const body = input.value.trim();
@@ -652,4 +671,23 @@ function shortTime(iso?: string): string {
   const day = Math.round(hr / 24);
   if (day < 7) return `${day}d ago`;
   return new Date(t).toLocaleDateString();
+}
+
+/** A small, pleasant palette for name-hashed avatars (white text reads on each). */
+const AVATAR_COLORS = [
+  "#2f9e6f",
+  "#3b82c4",
+  "#8b5cf6",
+  "#d9822b",
+  "#c0398b",
+  "#0d9488",
+  "#6366f1",
+  "#db5461",
+];
+
+/** Deterministic avatar color from a name (stable across renders; no RNG). */
+function avatarColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]!;
 }
