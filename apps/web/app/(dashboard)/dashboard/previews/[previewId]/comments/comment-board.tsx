@@ -1,18 +1,22 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
 
 import { createClient } from '@/lib/supabase/client';
 import { toCommentView } from '@/lib/comments/transform';
 import type { CommentRow, CommentView } from '@/lib/comments/types';
 import {
   mergeComment,
+  reconcileUnread,
   selectView,
   countByStatus,
+  countUnread,
+  filterUnread,
+  groupByPage,
   type DashboardFilter,
 } from '@/lib/comments/view';
-import { CommentCard } from './comment-card';
+import { PageGroupSection } from './page-group';
 
 const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
@@ -31,11 +35,17 @@ const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
  */
 export function CommentBoard({
   previewId,
+  slug,
+  baseUrl = '',
   initialComments,
   canMutate,
   canSendToAgent,
 }: {
   previewId: string;
+  /** Preview slug for the per-page "Open page" deep link (`/s/<slug><path>`). */
+  slug: string;
+  /** App origin for the deep link; '' yields a same-origin relative link. */
+  baseUrl?: string;
   initialComments: CommentView[];
   canMutate: boolean;
   /** Phase 2: current user may send to the coding agent (gates the send button). */
@@ -43,6 +53,7 @@ export function CommentBoard({
 }) {
   const [comments, setComments] = useState<CommentView[]>(initialComments);
   const [filter, setFilter] = useState<DashboardFilter>('open');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [connection, setConnection] = useState<'connecting' | 'live' | 'error'>(
     'connecting',
   );
@@ -59,7 +70,16 @@ export function CommentBoard({
         | undefined;
       const record = p?.record ?? p?.payload?.record;
       if (!record || !record.id) return;
-      setComments((current) => mergeComment(current, toCommentView(record)));
+      setComments((current) => {
+        const incoming = toCommentView(record);
+        // The broadcast carries no read receipt; preserve the viewer's read state
+        // for a thread already on screen so a status/reply update never un-reads it.
+        const existing = current.find((c) => c.id === incoming.id);
+        return mergeComment(
+          current,
+          existing ? reconcileUnread(existing, incoming) : incoming,
+        );
+      });
     }
 
     channel
@@ -76,8 +96,21 @@ export function CommentBoard({
     };
   }, [previewId]);
 
-  const visible = useMemo(() => selectView(comments, filter), [comments, filter]);
+  const visible = useMemo(
+    () => filterUnread(selectView(comments, filter), unreadOnly),
+    [comments, filter, unreadOnly],
+  );
+  const groups = useMemo(() => groupByPage(visible), [visible]);
   const counts = useMemo(() => countByStatus(comments), [comments]);
+  const unreadTotal = useMemo(
+    () => countUnread(selectView(comments, filter)),
+    [comments, filter],
+  );
+
+  function openPageUrlFor(key: string): string | null {
+    if (!key.startsWith('/')) return null; // the "Other" (unparseable) bucket
+    return `${baseUrl.replace(/\/+$/, '')}/s/${slug}${key}`;
+  }
 
   function handleLocalUpdate(updated: CommentView) {
     setComments((current) => mergeComment(current, updated));
@@ -94,33 +127,54 @@ export function CommentBoard({
         <ConnectionIndicator state={connection} />
       </div>
 
-      {visible.length === 0 ? (
-        <EmptyState filter={filter} />
+      <div className="comments-subhead">
+        <UnreadToggle
+          active={unreadOnly}
+          count={unreadTotal}
+          onToggle={() => setUnreadOnly((v) => !v)}
+        />
+      </div>
+
+      {groups.length === 0 ? (
+        <EmptyState filter={filter} unreadOnly={unreadOnly} />
       ) : (
-        <ul className="comment-list">
-          <AnimatePresence initial={false} mode="popLayout">
-            {visible.map((comment) => (
-              <motion.li
-                key={comment.id}
-                layout
-                initial={{ opacity: 0, y: 14, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                transition={spring}
-              >
-                <CommentCard
-                  canSendToAgent={canSendToAgent}
-                  comment={comment}
-                  canMutate={canMutate}
-                  onLocalUpdate={handleLocalUpdate}
-                  onLocalRemove={handleLocalRemove}
-                />
-              </motion.li>
-            ))}
-          </AnimatePresence>
+        <ul className="page-group-list">
+          {groups.map((group) => (
+            <PageGroupSection
+              key={group.key}
+              group={group}
+              openPageUrl={openPageUrlFor(group.key)}
+              canMutate={canMutate}
+              canSendToAgent={canSendToAgent}
+              onLocalUpdate={handleLocalUpdate}
+              onLocalRemove={handleLocalRemove}
+            />
+          ))}
         </ul>
       )}
     </section>
+  );
+}
+
+function UnreadToggle({
+  active,
+  count,
+  onToggle,
+}: {
+  active: boolean;
+  count: number;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={active ? 'unread-toggle is-active' : 'unread-toggle'}
+      onClick={onToggle}
+      aria-pressed={active}
+    >
+      <span className="unread-dot" aria-hidden="true" />
+      Unread only{count > 0 ? <span className="seg-count">{count}</span> : null}
+    </button>
   );
 }
 
@@ -182,7 +236,20 @@ function ConnectionIndicator({ state }: { state: 'connecting' | 'live' | 'error'
   );
 }
 
-function EmptyState({ filter }: { filter: DashboardFilter }) {
+function EmptyState({
+  filter,
+  unreadOnly,
+}: {
+  filter: DashboardFilter;
+  unreadOnly: boolean;
+}) {
+  if (unreadOnly) {
+    return (
+      <div className="empty-state">
+        <p className="empty-sub">No unread comments. You are all caught up.</p>
+      </div>
+    );
+  }
   if (filter === 'open') {
     return (
       <div className="empty-state">

@@ -7,6 +7,7 @@
  * exhaustively unit-tested in a node env. The UI is a thin shell over these.
  */
 
+import { isThreadUnread } from "@supercomment/shared";
 import type { CommentStatus, Severity } from "@supercomment/shared";
 import type { CommentView } from "./types";
 
@@ -81,8 +82,38 @@ function shallowEqualComment(a: CommentView, b: CommentView): boolean {
     a.resolvedSummary === b.resolvedSummary &&
     a.fidelity === b.fidelity &&
     a.path === b.path &&
+    a.pageKey === b.pageKey &&
+    a.unread === b.unread &&
+    a.lastReadAt === b.lastReadAt &&
+    a.statusChangedAt === b.statusChangedAt &&
     a.createdAt === b.createdAt
   );
+}
+
+/**
+ * Reconcile a realtime-delivered comment against the one already on screen. The
+ * broadcast payload carries the row's own fields but NOT the viewer's private
+ * read receipt, so a naive re-projection would mark a previously-read thread
+ * unread on any status update. We carry the existing receipt forward and recompute
+ * unread against the incoming activity (createdAt / statusChangedAt / latestReply).
+ */
+export function reconcileUnread(
+  existing: CommentView,
+  incoming: CommentView,
+): CommentView {
+  const lastReadAt = existing.lastReadAt;
+  const latestReplyAt = incoming.latestReplyAt ?? existing.latestReplyAt;
+  return {
+    ...incoming,
+    lastReadAt,
+    latestReplyAt,
+    unread: isThreadUnread({
+      createdAt: incoming.createdAt,
+      statusChangedAt: incoming.statusChangedAt,
+      latestReplyAt,
+      lastReadAt,
+    }),
+  };
 }
 
 /**
@@ -188,6 +219,72 @@ export function applyStatusTransition(
     resolvedSummary: summary ?? comments[idx]!.resolvedSummary,
   };
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// Per-page grouping + unread (per-viewer).
+// ---------------------------------------------------------------------------
+
+/** Keep only unread comments when `unreadOnly`; otherwise pass through. */
+export function filterUnread(
+  comments: readonly CommentView[],
+  unreadOnly: boolean,
+): CommentView[] {
+  return unreadOnly ? comments.filter((c) => c.unread) : (comments as CommentView[]);
+}
+
+/** How many of these comments are unread for the current viewer. */
+export function countUnread(comments: readonly CommentView[]): number {
+  let n = 0;
+  for (const c of comments) if (c.unread) n += 1;
+  return n;
+}
+
+/** A page section in the index: its comments plus count + unread rollup. */
+export interface PageGroup {
+  /** Normalized page key (pageKeyOf); UNKNOWN for unparseable URLs. */
+  key: string;
+  /** Human label (path, "Home", or "Other"). */
+  label: string;
+  comments: CommentView[];
+  count: number;
+  unreadCount: number;
+  hasUnread: boolean;
+}
+
+/**
+ * Group comments by their page key, already-sorted comments preserved within each
+ * group. Ordering: pages with unread first, then alphabetical by label, with the
+ * "Other" (unparseable) bucket always last.
+ */
+export function groupByPage(comments: readonly CommentView[]): PageGroup[] {
+  const byKey = new Map<string, CommentView[]>();
+  for (const c of comments) {
+    const arr = byKey.get(c.pageKey);
+    if (arr) arr.push(c);
+    else byKey.set(c.pageKey, [c]);
+  }
+  const groups: PageGroup[] = [];
+  for (const [key, list] of byKey) {
+    const unreadCount = countUnread(list);
+    groups.push({
+      key,
+      label: list[0]!.pageLabel,
+      comments: list,
+      count: list.length,
+      unreadCount,
+      hasUnread: unreadCount > 0,
+    });
+  }
+  return groups.sort((a, b) => {
+    // Real pages are pathnames ("/..."); the unparseable "Other" bucket is not,
+    // and always sorts last regardless of unread.
+    const aOther = !a.key.startsWith("/");
+    const bOther = !b.key.startsWith("/");
+    if (aOther !== bOther) return aOther ? 1 : -1;
+    if (a.hasUnread !== b.hasUnread) return a.hasUnread ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 // ---------------------------------------------------------------------------

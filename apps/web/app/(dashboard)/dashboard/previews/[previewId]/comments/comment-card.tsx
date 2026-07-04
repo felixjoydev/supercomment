@@ -47,6 +47,26 @@ export function CommentCard({
     if (!error) onLocalRemove(comment.id);
     else setConfirmDelete(false);
   }
+
+  /** Mark this thread read/unread for the current member (0037). Optimistic. */
+  async function setRead(read: boolean) {
+    onLocalUpdate({
+      ...comment,
+      unread: !read,
+      lastReadAt: read ? new Date().toISOString() : null,
+    });
+    await createClient().rpc(read ? 'mark_thread_read' : 'mark_thread_unread', {
+      p_comment_id: comment.id,
+    });
+  }
+
+  /** Opening the context marks the thread read (Figma-style), on first open. */
+  function toggleExpand() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && comment.unread) void setRead(true);
+  }
+
   const resolved = comment.status === 'resolved';
   const dismissed = comment.status === 'dismissed';
   const muted = resolved || dismissed;
@@ -55,6 +75,7 @@ export function CommentCard({
     'comment-card',
     `sev-${comment.severity}`,
     muted ? 'is-muted' : '',
+    comment.unread ? 'is-unread' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -65,6 +86,9 @@ export function CommentCard({
         <span className="comment-num" aria-label={`Comment number ${comment.number}`}>
           {comment.number}
         </span>
+        {comment.unread ? (
+          <span className="unread-dot" title="Unread" aria-label="Unread" />
+        ) : null}
 
         <div className="comment-body">
           <div className="badges">
@@ -113,7 +137,7 @@ export function CommentCard({
             <button
               type="button"
               className="text-btn"
-              onClick={() => setExpanded((v) => !v)}
+              onClick={toggleExpand}
               aria-expanded={expanded}
             >
               <motion.span
@@ -125,6 +149,15 @@ export function CommentCard({
                 <ChevronIcon />
               </motion.span>
               Context
+            </button>
+
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => void setRead(comment.unread)}
+              title={comment.unread ? 'Mark this thread read' : 'Mark this thread unread'}
+            >
+              {comment.unread ? 'Mark read' : 'Mark unread'}
             </button>
 
             {comment.status === 'open' && (

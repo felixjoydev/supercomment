@@ -116,6 +116,8 @@ export default async function PreviewPage({
           <p className="panel-sub">Feedback lands here in realtime as reviewers annotate.</p>
           <CommentBoard
             previewId={preview.id}
+            slug={preview.slug}
+            baseUrl={baseUrl}
             initialComments={initialComments}
             canMutate={canMutate}
             canSendToAgent={canSendToAgent}
