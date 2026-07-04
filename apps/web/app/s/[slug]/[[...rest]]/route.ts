@@ -73,6 +73,7 @@ h1{font-size:1.25rem}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}<
 async function tryEmbedded(
   request: NextRequest,
   slug: string,
+  subPath?: string,
 ): Promise<Response | null> {
   const k = request.nextUrl.searchParams.get('k');
   const token = generateReviewToken();
@@ -93,7 +94,8 @@ async function tryEmbedded(
       case 'not_embeddable':
         return null; // fall back to tunnel mode
       case 'login_required': {
-        const next = safeNextPath(`/s/${slug}`);
+        // Carry the deep-linked page through login so the member returns to it.
+        const next = safeNextPath(subPath ? `/s/${slug}${subPath}` : `/s/${slug}`);
         return NextResponse.redirect(
           new URL(`/login?next=${encodeURIComponent(next)}`, request.nextUrl.origin),
           { status: 307 },
@@ -115,7 +117,7 @@ async function tryEmbedded(
     | undefined;
   if (!row?.deploy_url) return null;
 
-  const target = buildEmbeddedRedirectUrl(row.deploy_url, row.token ?? token);
+  const target = buildEmbeddedRedirectUrl(row.deploy_url, row.token ?? token, subPath);
   if (!target) {
     return infoPage('This preview has an invalid deploy target.', 502);
   }
@@ -255,12 +257,14 @@ async function handle(
 ): Promise<Response> {
   const { slug, rest } = await ctx.params;
 
-  // Embedded mode only applies to the root activation hit, not sub-asset paths
-  // (those only exist in tunnel mode). For embedded previews, sub-paths are
-  // served by the customer's own deploy, not us.
-  const isRootHit = !rest || rest.length === 0;
-  if (isRootHit && (request.method === 'GET' || request.method === 'HEAD')) {
-    const embedded = await tryEmbedded(request, slug);
+  // Embedded activation applies to the root hit AND to a per-page deep link
+  // (/s/<slug><path>, U10): mint first-party and redirect to that page of the
+  // customer's deploy. A non-embedded (tunnel) preview raises not_embeddable, so
+  // tryEmbedded returns null and we fall through to the dormant tunnel proxy with
+  // sub-asset behavior unchanged.
+  const subPath = rest && rest.length > 0 ? '/' + rest.join('/') : undefined;
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    const embedded = await tryEmbedded(request, slug, subPath);
     if (embedded) return embedded;
   }
 

@@ -44,12 +44,45 @@ export function generateReviewToken(): string {
  * registered deploy_url. Returns null if deploy_url is not allowlisted — a
  * defense-in-depth re-check (register_deploy_target already validated it on
  * write), so a poisoned deploy_url can never become a redirect target.
+ *
+ * `subPath` (U10) lands the reviewer on a specific PAGE of the deploy (the per-
+ * page "Open page" deep link `/s/<slug><path>`) rather than the root. The path is
+ * resolved against the deploy origin and re-asserted to stay ON that origin, so a
+ * protocol-relative ("//evil") or traversal ("../") path can never redirect off
+ * the customer's own deploy.
  */
 export function buildEmbeddedRedirectUrl(
   deployUrl: string,
   token: string,
+  subPath?: string | null,
 ): string | null {
   if (!isAllowedDeployUrl(deployUrl)) return null;
   const base = deployUrl.replace(/#.*$/, "").replace(/\/+$/, "");
-  return `${base}#sc_token=${encodeURIComponent(token)}`;
+  const path = normalizeSubPath(subPath);
+  if (path === "/") {
+    // Root activation — unchanged behavior (no trailing slash).
+    return `${base}#sc_token=${encodeURIComponent(token)}`;
+  }
+  let target: URL;
+  let baseOrigin: string;
+  try {
+    target = new URL(path, base + "/");
+    baseOrigin = new URL(base).origin;
+  } catch {
+    return null;
+  }
+  // Open-redirect guard: the resolved page must stay on the deploy origin.
+  if (target.origin !== baseOrigin) return null;
+  target.hash = `sc_token=${encodeURIComponent(token)}`;
+  return target.toString();
+}
+
+/**
+ * Normalize an incoming sub-path to a single-leading-slash, root-relative path so
+ * it resolves against the deploy origin (never protocol-relative). Empty → "/".
+ */
+export function normalizeSubPath(subPath: string | null | undefined): string {
+  if (!subPath) return "/";
+  const trimmed = subPath.replace(/^\/+/, "");
+  return trimmed ? "/" + trimmed : "/";
 }

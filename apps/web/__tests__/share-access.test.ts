@@ -54,3 +54,37 @@ describe("buildEmbeddedRedirectUrl", () => {
     expect(buildEmbeddedRedirectUrl("https://localhost", "tok")).toBeNull();
   });
 });
+
+describe("buildEmbeddedRedirectUrl with a page path (U10)", () => {
+  it("lands on the given page of an allowlisted deploy", () => {
+    expect(
+      buildEmbeddedRedirectUrl("https://staging.acme.com", "tok", "/pricing"),
+    ).toBe("https://staging.acme.com/pricing#sc_token=tok");
+  });
+  it("preserves a deploy base path already carried in the page path", () => {
+    expect(
+      buildEmbeddedRedirectUrl("https://x.vercel.app/app", "tok", "/app/pricing"),
+    ).toBe("https://x.vercel.app/app/pricing#sc_token=tok");
+  });
+  it("keeps the root case unchanged when no page path is given", () => {
+    expect(buildEmbeddedRedirectUrl("https://x.vercel.app", "tok", undefined)).toBe(
+      "https://x.vercel.app#sc_token=tok",
+    );
+    expect(buildEmbeddedRedirectUrl("https://x.vercel.app", "tok", "/")).toBe(
+      "https://x.vercel.app#sc_token=tok",
+    );
+  });
+  it("never escapes the deploy origin (protocol-relative + traversal de-fanged)", () => {
+    expect(
+      buildEmbeddedRedirectUrl("https://x.vercel.app", "tok", "//evil.com/x"),
+    ).toBe("https://x.vercel.app/evil.com/x#sc_token=tok");
+    expect(
+      buildEmbeddedRedirectUrl("https://x.vercel.app", "tok", "/../../etc"),
+    ).toBe("https://x.vercel.app/etc#sc_token=tok");
+  });
+  it("still returns null for a non-allowlisted deploy even with a path", () => {
+    expect(
+      buildEmbeddedRedirectUrl("http://x.vercel.app", "tok", "/pricing"),
+    ).toBeNull();
+  });
+});
