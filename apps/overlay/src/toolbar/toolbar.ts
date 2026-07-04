@@ -48,6 +48,8 @@ export interface ToolbarCallbacks {
   onModeChange(mode: SelectionMode): void;
   onConfirmMulti(): void;
   onChangeName(): void;
+  /** Open the per-page comment index popover (U12). */
+  onOpenPages(): void;
   /** Fired when the reviewer clicks "Exit". Absent → the Exit button is hidden. */
   onExit?(): void;
 }
@@ -97,6 +99,16 @@ export class Toolbar {
       this.buttons.set(def.mode, btn);
       this.el.appendChild(btn);
     }
+
+    // Pages: opens the per-page comment index (U12).
+    const pagesBtn = doc.createElement("button");
+    pagesBtn.type = "button";
+    pagesBtn.className = "sc-pages-btn";
+    pagesBtn.title = "Pages with comments";
+    pagesBtn.setAttribute("aria-label", "Pages with comments");
+    pagesBtn.textContent = "Pages";
+    pagesBtn.addEventListener("click", () => callbacks.onOpenPages());
+    this.el.appendChild(pagesBtn);
 
     this.confirmBtn = doc.createElement("button");
     this.confirmBtn.type = "button";

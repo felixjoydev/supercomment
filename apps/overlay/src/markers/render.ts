@@ -461,6 +461,8 @@ export class MarkerLayer {
 
   /** Load and render the thread's replies into `container` (best-effort). */
   private async loadReplies(commentId: string, container: HTMLElement): Promise<void> {
+    // Opening a thread marks it read for the viewer (0037/U12), best-effort.
+    void this.thread?.markRead?.(commentId);
     const replies = await this.thread!.listReplies(commentId);
     // The popover may have closed/re-opened while loading; only fill if still live.
     if (!container.isConnected) return;

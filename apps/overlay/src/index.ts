@@ -357,6 +357,15 @@ async function activateSession(
       previewId: session.previewId,
       getAccessToken,
     }),
+    // U12: the Pages popover reloads the preview's comments each open (fresh
+    // snapshot); fail-closed to an empty list so it never throws into the page.
+    loadComments: () =>
+      loadReviewComments({
+        supabaseUrl,
+        supabaseAnonKey,
+        previewId: session.previewId,
+        getAccessToken,
+      }).catch(() => []),
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),

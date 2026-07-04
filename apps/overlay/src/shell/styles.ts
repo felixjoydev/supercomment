@@ -24,6 +24,7 @@ import { MARKERS_STYLES } from "./styles/markers.js";
 import { RESPONSIVE_STYLES } from "./styles/responsive.js";
 import { EDITOR_STYLES } from "./styles/editor.js";
 import { INSPECTOR_STYLES } from "./styles/inspector.js";
+import { PAGES_STYLES } from "./styles/pages.js";
 
 export const OVERLAY_STYLES =
   BASE_STYLES +
@@ -32,4 +33,5 @@ export const OVERLAY_STYLES =
   MARKERS_STYLES +
   RESPONSIVE_STYLES +
   EDITOR_STYLES +
-  INSPECTOR_STYLES;
+  INSPECTOR_STYLES +
+  PAGES_STYLES;

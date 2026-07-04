@@ -38,6 +38,8 @@ import { primaryElementOf } from "./core/target.js";
 import { GuestModal } from "./guest/modal.js";
 import { GuestEmailModal } from "./guest/email-modal.js";
 import { GuestNameStore, GuestEmailStore } from "./guest/store.js";
+import { PageIndexPopover } from "./pages/index-popover.js";
+import { groupPagesForIndex } from "./pages/page-index.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
@@ -91,6 +93,7 @@ export class OverlayController {
   private form: CommentForm | null = null;
   private modal: GuestModal | null = null;
   private emailModal: GuestEmailModal | null = null;
+  private pagesPopover: PageIndexPopover | null = null;
   /** The Exit-confirmation dialog (U18); open only while confirming exit. */
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
@@ -138,6 +141,7 @@ export class OverlayController {
       onModeChange: (m) => this.changeMode(m),
       onConfirmMulti: () => this.confirmMulti(),
       onChangeName: () => this.promptForName(null),
+      onOpenPages: () => void this.openPagesPopover(),
       // Exit ends the whole review session; never on the device-mode child
       // (which shares the parent's session and lives inside the iframe).
       ...(config.deviceChild ? {} : { onExit: () => this.requestExit() }),
@@ -198,6 +202,9 @@ export class OverlayController {
     this.previewLog.revertAll();
     this.inspector.hide();
     this.dismissConfirm();
+    // The pages popover registers a document keydown listener; unbind it before
+    // the shell (which owns the rest of the overlay DOM) is torn down.
+    this.dismissPagesPopover();
     // Remove the toolbar's window `resize` listener (OV-8) before the shell —
     // which owns the toolbar's DOM — is torn down.
     this.toolbar.destroy();
@@ -701,6 +708,39 @@ export class OverlayController {
       },
       this.guestEmailStore.get() ?? "",
     );
+  }
+
+  /**
+   * Open the per-page comment index (U12): reload the preview's comments (fresh
+   * snapshot), fold them into page entries, and show the popover above the toolbar.
+   * Clicking a page navigates same-origin (location.origin + path), NOT the
+   * comment's captured origin, so the origin-stamped session survives and the
+   * overlay re-mounts on the destination page.
+   */
+  private async openPagesPopover(): Promise<void> {
+    this.dismissPagesPopover();
+    const comments = (await this.config.loadComments?.()) ?? [];
+    const currentUrl = typeof location !== "undefined" ? location.href : "";
+    const entries = groupPagesForIndex(comments, currentUrl);
+    this.pagesPopover = new PageIndexPopover(
+      this.doc,
+      this.shell.layer,
+      entries,
+      {
+        onOpenPage: (path) => {
+          this.dismissPagesPopover();
+          if (typeof location !== "undefined") {
+            location.assign(location.origin + path);
+          }
+        },
+        onClose: () => this.dismissPagesPopover(),
+      },
+    );
+  }
+
+  private dismissPagesPopover(): void {
+    this.pagesPopover?.destroy();
+    this.pagesPopover = null;
   }
 
   // --- Exit review session (U18) ------------------------------------------

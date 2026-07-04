@@ -37,6 +37,9 @@ export interface ThreadClient {
   resolve(commentId: string, resolved: boolean): Promise<boolean>;
   deleteReply(replyId: string): Promise<boolean>;
   deleteThread(commentId: string): Promise<boolean>;
+  /** Mark a thread read/unread for the current viewer (0037/U12). */
+  markRead(commentId: string): Promise<boolean>;
+  markUnread(commentId: string): Promise<boolean>;
 }
 
 export class SessionThreadClient implements ThreadClient {
@@ -98,6 +101,14 @@ export class SessionThreadClient implements ThreadClient {
 
   async deleteThread(commentId: string): Promise<boolean> {
     return this.rpcOk("delete_review_thread", { p_comment_id: commentId });
+  }
+
+  async markRead(commentId: string): Promise<boolean> {
+    return this.rpcOk("mark_thread_read", { p_comment_id: commentId });
+  }
+
+  async markUnread(commentId: string): Promise<boolean> {
+    return this.rpcOk("mark_thread_unread", { p_comment_id: commentId });
   }
 
   /** POST an RPC and return its single-row result, or null on any failure. */

@@ -15,6 +15,7 @@ import type {
   DeviceSurface,
 } from "@supercomment/shared";
 import type { ThreadClient } from "../submit/thread.js";
+import type { ReviewComment } from "../read/load-comments.js";
 
 /**
  * The toolbar modes (R9). `browse` is the passive default: the overlay
@@ -254,6 +255,11 @@ export interface OverlayConfig {
    * tests) → the email is stored locally only.
    */
   captureGuestEmail?: (email: string) => Promise<boolean>;
+  /**
+   * Reload the preview's comments for the per-page index popover (U12), so it is a
+   * fresh snapshot each open. Absent → the Pages popover shows no pages.
+   */
+  loadComments?: () => Promise<ReviewComment[]>;
   /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
   readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */
