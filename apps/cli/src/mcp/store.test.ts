@@ -128,6 +128,31 @@ describe("SupabaseCommentStore", () => {
     expect(first.previewId).toBe(PREVIEW_ID);
   });
 
+  it("never leaks per-viewer unread or guest email to the agent (U13)", async () => {
+    // Even if the underlying read-model row carries the per-viewer / guest-identity
+    // fields (0036/0037), the agent-facing projection must drop them.
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 9,
+          unread: true,
+          last_read_at: "2026-07-04T10:00:00.000Z",
+          status_changed_at: "2026-07-04T10:00:00.000Z",
+          email_ci: "client@example.com",
+        }),
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c] = await store.listOpenComments({ includeGuests: true });
+    const keys = Object.keys(c!);
+    for (const leak of ["unread", "lastReadAt", "statusChangedAt", "email", "authorEmail"]) {
+      expect(keys).not.toContain(leak);
+    }
+    expect(JSON.stringify(c)).not.toContain("client@example.com");
+    // The agent still knows which page the comment is on, via context.url.
+    expect(c!.context?.url).toBe("https://x");
+  });
+
   it("redacts reviewer-authored free-text (note + change-set) at the agent boundary (U8)", async () => {
     const secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const client = fakeClient({
