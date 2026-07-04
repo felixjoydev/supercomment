@@ -19,6 +19,7 @@ import {
 } from "./cluster.js";
 import { edgeDirection } from "../core/geometry.js";
 import { popIn } from "../shell/motion.js";
+import type { ReplyRow, ThreadClient } from "../submit/thread.js";
 
 /** Comment-popover sizing (CSS px). Mirrors `.sc-comment-pop` in styles.ts. */
 const POPOVER_WIDTH = 280;
@@ -64,6 +65,10 @@ export class MarkerLayer {
     private readonly doc: Document,
     private readonly parent: HTMLElement,
     private readonly thresholdPx: number = DEFAULT_CLUSTER_THRESHOLD_PX,
+    /** Reply / resolve / delete client (0033); absent → read-only popover. */
+    private readonly thread?: ThreadClient,
+    /** The current reviewer, for own-reply delete + member-only thread delete. */
+    private readonly currentUser?: { displayName: string; role: string },
   ) {
     this.container = doc.createElement("div");
     this.container.className = "sc-marker-container";
@@ -135,6 +140,12 @@ export class MarkerLayer {
         .filter((m) => m.content?.kind === "template")
         .map((m) => m.number),
     );
+    // A resolved (marked-done) comment dims its pin.
+    const resolvedNumbers = new Set<number>(
+      this.markers
+        .filter((m) => m.content?.status === "resolved")
+        .map((m) => m.number),
+    );
 
     const clusters = clusterMarkers(visible, this.thresholdPx);
     for (const cluster of clusters) {
@@ -149,6 +160,7 @@ export class MarkerLayer {
         let cls = "sc-marker";
         if (templateNumbers.has(n)) cls += " sc-template";
         if (staleNumbers.has(n)) cls += " sc-stale";
+        if (resolvedNumbers.has(n)) cls += " sc-resolved";
         el.className = cls;
       }
       el.style.left = `${cluster.point.x}px`;
@@ -267,10 +279,17 @@ export class MarkerLayer {
     this.popoverNumbers = null;
   }
 
-  /** Build one comment entry: `#N · Author`, meta, note, and a short time. */
+  /**
+   * Build one thread: the root comment (#N · author, meta, note, time), its
+   * replies, a reply box, and the mark-done / delete actions. When no thread
+   * client is wired (tunnel / tests) it degrades to the read-only card.
+   */
   private buildEntry(m: PlacedMarker): HTMLElement {
     const entry = this.doc.createElement("div");
     entry.className = "sc-comment-entry";
+    const commentId = m.content?.id;
+    const interactive = !!(this.thread && commentId);
+    if (m.content?.status === "resolved") entry.classList.add("is-resolved");
 
     const head = this.doc.createElement("div");
     head.className = "sc-comment-head";
@@ -285,6 +304,7 @@ export class MarkerLayer {
       who.textContent = ` · ${author}`; // ·
       head.appendChild(who);
     }
+    if (interactive) head.appendChild(this.buildActions(m, entry));
     entry.appendChild(head);
 
     const metaParts = [
@@ -323,7 +343,224 @@ export class MarkerLayer {
       entry.appendChild(time);
     }
 
+    if (interactive) {
+      const replies = this.doc.createElement("div");
+      replies.className = "sc-reply-list";
+      entry.appendChild(replies);
+      void this.loadReplies(commentId!, replies);
+      entry.appendChild(this.buildReplyBox(commentId!, replies));
+    }
+
     return entry;
+  }
+
+  /** Mark-done toggle + the members-only "..." menu (delete thread). */
+  private buildActions(m: PlacedMarker, entry: HTMLElement): HTMLElement {
+    const commentId = m.content!.id!;
+    const actions = this.doc.createElement("div");
+    actions.className = "sc-comment-actions";
+
+    const done = this.doc.createElement("button");
+    done.type = "button";
+    done.className = "sc-act sc-act-done";
+    const setDoneUi = () => {
+      const on = m.content?.status === "resolved";
+      done.classList.toggle("is-on", on);
+      done.title = on ? "Reopen" : "Mark as done";
+      done.setAttribute("aria-label", done.title);
+    };
+    done.textContent = "✓";
+    setDoneUi();
+    done.addEventListener("click", async () => {
+      const want = m.content?.status !== "resolved";
+      done.disabled = true;
+      const ok = await this.thread!.resolve(commentId, want);
+      done.disabled = false;
+      if (ok) {
+        if (m.content) m.content.status = want ? "resolved" : "open";
+        entry.classList.toggle("is-resolved", want);
+        setDoneUi();
+        this.render(); // dim / undim the pin
+      } else {
+        this.flash(entry, "Could not update. Try again.");
+      }
+    });
+    actions.appendChild(done);
+
+    // Delete a whole thread is owner-only; only members can be the owner, so the
+    // action is hidden from guests entirely (a client can never wipe a thread).
+    if (this.currentUser?.role === "member") {
+      actions.appendChild(this.buildThreadMenu(m, entry));
+    }
+    return actions;
+  }
+
+  /** The "..." menu with a two-click "Delete thread" confirm (owner-gated by RPC). */
+  private buildThreadMenu(m: PlacedMarker, entry: HTMLElement): HTMLElement {
+    const commentId = m.content!.id!;
+    const wrap = this.doc.createElement("div");
+    wrap.className = "sc-act-more-wrap";
+    const btn = this.doc.createElement("button");
+    btn.type = "button";
+    btn.className = "sc-act sc-act-more";
+    btn.textContent = "···";
+    btn.title = "More";
+    btn.setAttribute("aria-label", "More actions");
+    const menu = this.doc.createElement("div");
+    menu.className = "sc-act-menu";
+    menu.hidden = true;
+    const del = this.doc.createElement("button");
+    del.type = "button";
+    del.className = "sc-act-menu-item is-danger";
+    del.textContent = "Delete thread";
+    let armed = false;
+    del.addEventListener("click", async () => {
+      if (!armed) {
+        armed = true;
+        del.textContent = "Click again to delete";
+        return;
+      }
+      del.disabled = true;
+      const ok = await this.thread!.deleteThread(commentId);
+      if (ok) {
+        this.removeMarker(m.number);
+        this.closePopover();
+      } else {
+        del.disabled = false;
+        armed = false;
+        del.textContent = "Delete thread";
+        menu.hidden = true;
+        this.flash(entry, "Only the workspace owner can delete a thread.");
+      }
+    });
+    menu.appendChild(del);
+    btn.addEventListener("click", () => {
+      menu.hidden = !menu.hidden;
+      if (menu.hidden) {
+        armed = false;
+        del.textContent = "Delete thread";
+      }
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    return wrap;
+  }
+
+  /** Load and render the thread's replies into `container` (best-effort). */
+  private async loadReplies(commentId: string, container: HTMLElement): Promise<void> {
+    const replies = await this.thread!.listReplies(commentId);
+    // The popover may have closed/re-opened while loading; only fill if still live.
+    if (!container.isConnected) return;
+    container.replaceChildren();
+    for (const r of replies) container.appendChild(this.buildReplyElement(r, container));
+  }
+
+  /** One reply row: author · time, body, and a delete for the reviewer's own reply. */
+  private buildReplyElement(r: ReplyRow, container: HTMLElement): HTMLElement {
+    const el = this.doc.createElement("div");
+    el.className = "sc-reply";
+    const head = this.doc.createElement("div");
+    head.className = "sc-reply-head";
+    const who = this.doc.createElement("span");
+    who.className = "sc-reply-author";
+    who.textContent = r.author_display_name;
+    head.appendChild(who);
+    const when = shortTime(r.created_at);
+    if (when) {
+      const t = this.doc.createElement("span");
+      t.className = "sc-reply-time";
+      t.textContent = ` · ${when}`;
+      head.appendChild(t);
+    }
+    // Own reply -> deletable. Matched on name + trust (the RPC still enforces it).
+    const mine =
+      !!this.currentUser &&
+      r.author_display_name === this.currentUser.displayName &&
+      r.trust_level === this.currentUser.role;
+    if (mine) {
+      const del = this.doc.createElement("button");
+      del.type = "button";
+      del.className = "sc-reply-del";
+      del.textContent = "×";
+      del.title = "Delete reply";
+      del.setAttribute("aria-label", "Delete reply");
+      del.addEventListener("click", async () => {
+        del.disabled = true;
+        const ok = await this.thread!.deleteReply(r.id);
+        if (ok) el.remove();
+        else {
+          del.disabled = false;
+          this.flash(container, "Could not delete. Try again.");
+        }
+      });
+      head.appendChild(del);
+    }
+    el.appendChild(head);
+    const body = this.doc.createElement("div");
+    body.className = "sc-reply-body";
+    body.textContent = r.body;
+    el.appendChild(body);
+    return el;
+  }
+
+  /** The reply input + send button; posts via the thread client and appends. */
+  private buildReplyBox(commentId: string, list: HTMLElement): HTMLElement {
+    const box = this.doc.createElement("div");
+    box.className = "sc-reply-box";
+    const input = this.doc.createElement("textarea");
+    input.className = "sc-reply-input";
+    input.rows = 1;
+    input.placeholder = "Reply";
+    input.setAttribute("aria-label", "Reply");
+    const send = this.doc.createElement("button");
+    send.type = "button";
+    send.className = "sc-reply-send";
+    send.textContent = "Send";
+    send.setAttribute("aria-label", "Send reply");
+    const submit = async () => {
+      const body = input.value.trim();
+      if (!body) return;
+      send.disabled = true;
+      input.disabled = true;
+      const reply = await this.thread!.createReply(commentId, body);
+      send.disabled = false;
+      input.disabled = false;
+      if (reply) {
+        list.appendChild(this.buildReplyElement(reply, list));
+        input.value = "";
+        input.focus();
+      } else {
+        this.flash(box, "Could not send. Try again.");
+      }
+    };
+    send.addEventListener("click", () => void submit());
+    // Enter sends; Shift+Enter is a newline.
+    input.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void submit();
+      }
+    });
+    box.appendChild(input);
+    box.appendChild(send);
+    return box;
+  }
+
+  /** Remove a marker entirely (after its thread is deleted) and repaint. */
+  removeMarker(number: number): void {
+    const i = this.markers.findIndex((m) => m.number === number);
+    if (i >= 0) this.markers.splice(i, 1);
+    this.render();
+  }
+
+  /** Flash a transient message inside the popover (no native dialogs). */
+  private flash(host: HTMLElement, message: string): void {
+    const el = this.doc.createElement("div");
+    el.className = "sc-comment-flash";
+    el.textContent = message;
+    host.appendChild(el);
+    const view = this.doc.defaultView;
+    view?.setTimeout(() => el.remove(), 2600);
   }
 
   /** Place the popover near `anchor` (a pin center), clamped to the viewport. */

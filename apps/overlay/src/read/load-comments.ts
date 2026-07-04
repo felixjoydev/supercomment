@@ -33,6 +33,7 @@ export interface ListReviewCommentsArgs {
 
 /** The raw row shape PostgREST returns from list_review_comments (snake_case). */
 export interface RawReviewCommentRow {
+  id?: string;
   number?: number;
   intent?: string;
   severity?: string;
@@ -46,6 +47,8 @@ export interface RawReviewCommentRow {
 
 /** A typed existing comment loaded back onto the live deploy. */
 export interface ReviewComment {
+  /** The comment's DB id (0034) — used to reply / resolve / delete the thread. */
+  id: string;
   number: number;
   intent: string;
   severity: string;
@@ -125,6 +128,7 @@ export async function loadReviewComments(
 /** Map a raw PostgREST row to a typed `ReviewComment`. */
 function mapRow(row: RawReviewCommentRow): ReviewComment {
   return {
+    id: typeof row.id === "string" ? row.id : "",
     number: row.number as number,
     intent: row.intent ?? "",
     severity: row.severity ?? "",
@@ -159,6 +163,7 @@ export function toExistingMarkers(
     anchors: readAnchors(c.context),
     surface: readSurface(c.context),
     content: {
+      id: c.id,
       note: c.note,
       authorDisplayName: c.authorDisplayName,
       intent: c.intent,

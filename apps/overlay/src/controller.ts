@@ -120,7 +120,13 @@ export class OverlayController {
     this.selection = new SelectionState(this.rectFor);
 
     this.highlights = new HighlightLayer(this.doc, this.shell.layer);
-    this.markers = new MarkerLayer(this.doc, this.shell.layer);
+    this.markers = new MarkerLayer(
+      this.doc,
+      this.shell.layer,
+      undefined,
+      config.threadClient,
+      config.currentUser,
+    );
     this.inspector = new InspectorLayer(this.doc, this.shell.layer);
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
 
@@ -536,6 +542,7 @@ export class OverlayController {
       // so the pin tracks the page as it scrolls.
       rect: element ? this.documentRect(element) : this.viewportToDocument(target.rect),
       content: {
+        ...(result.id ? { id: result.id } : {}),
         note: draft.note.trim(),
         authorDisplayName: name,
         intent: draft.intent,

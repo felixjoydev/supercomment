@@ -8,6 +8,7 @@ import {
 import { MarkerLayer } from "./render.js";
 import { edgeDirection } from "../core/geometry.js";
 import type { MarkerComment } from "../core/types.js";
+import type { ThreadClient } from "../submit/thread.js";
 import {
   makeFakeDom,
   makeRect,
@@ -304,5 +305,84 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     expect(parent.querySelector(".sc-marker")).not.toBeNull();
     layer.showPopover([2], { x: 100, y: 100 });
     expect(parent.querySelector(".sc-comment-tag")).toBeNull();
+  });
+
+  function stubThread(): { thread: ThreadClient; listedFor: () => string } {
+    let listed = "";
+    const thread = {
+      listReplies: async (id: string) => {
+        listed = id;
+        return [];
+      },
+      createReply: async () => null,
+      resolve: async () => true,
+      deleteReply: async () => true,
+      deleteThread: async () => true,
+    } as unknown as ThreadClient;
+    return { thread, listedFor: () => listed };
+  }
+
+  it("renders an interactive thread (reply box + actions) for a member", async () => {
+    const { thread, listedFor } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role: "member" },
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-reply-input")).not.toBeNull();
+    expect(parent.querySelector(".sc-reply-send")).not.toBeNull();
+    expect(parent.querySelector(".sc-act-done")).not.toBeNull();
+    expect(parent.querySelector(".sc-act-more")).not.toBeNull(); // member: delete menu
+    await Promise.resolve();
+    expect(listedFor()).toBe("c1"); // replies loaded for the thread
+  });
+
+  it("hides the delete-thread menu from a guest, but still allows reply + mark-done", () => {
+    const { thread } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Guest", role: "guest" },
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Guest", status: "open" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-act-more")).toBeNull(); // guest never deletes a thread
+    expect(parent.querySelector(".sc-act-done")).not.toBeNull(); // can mark done
+    expect(parent.querySelector(".sc-reply-input")).not.toBeNull(); // can reply
+  });
+
+  it("stays read-only when no thread client is wired (tunnel / tests)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-reply-input")).toBeNull();
+    expect(parent.querySelector(".sc-act-done")).toBeNull();
   });
 });

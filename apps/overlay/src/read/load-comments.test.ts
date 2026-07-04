@@ -19,6 +19,7 @@ const BASE = {
 
 const ROWS: RawReviewCommentRow[] = [
   {
+    id: "cmt-1",
     number: 1,
     intent: "fix",
     severity: "important",
@@ -30,6 +31,7 @@ const ROWS: RawReviewCommentRow[] = [
     display_name: "Ada",
   },
   {
+    id: "cmt-2",
     number: 2,
     intent: "change",
     severity: "minor",
@@ -95,6 +97,7 @@ describe("loadReviewComments — response mapping", () => {
 
     expect(comments).toHaveLength(2);
     expect(comments[0]).toEqual({
+      id: "cmt-1",
       number: 1,
       intent: "fix",
       severity: "important",
@@ -193,6 +196,7 @@ describe("makeFetchListRpcCaller — bearer + URL shaping", () => {
 
 describe("filterCommentsForPage (per-page marker scoping)", () => {
   const commentOn = (number: number, url: string): ReviewComment => ({
+    id: String(number),
     number,
     intent: "fix",
     severity: "minor",
@@ -242,6 +246,7 @@ describe("toExistingMarkers", () => {
   it("projects comments to markers, pulling rect from context.boundingBox", () => {
     const comments: ReviewComment[] = [
       {
+        id: "c1",
         number: 1,
         intent: "fix",
         severity: "minor",
@@ -253,6 +258,7 @@ describe("toExistingMarkers", () => {
         authorDisplayName: "Ada",
       },
       {
+        id: "c2",
         number: 2,
         intent: "fix",
         severity: "minor",
@@ -273,6 +279,7 @@ describe("toExistingMarkers", () => {
         isStale: false,
         anchors: [],
         content: {
+          id: "c1",
           note: "n",
           authorDisplayName: "Ada",
           intent: "fix",
@@ -287,6 +294,7 @@ describe("toExistingMarkers", () => {
         isStale: true,
         anchors: [],
         content: {
+          id: "c2",
           note: "n",
           authorDisplayName: "Grace",
           intent: "fix",
@@ -305,6 +313,7 @@ describe("toExistingMarkers", () => {
   it("carries the captured anchors through for the U8 re-anchor pass", () => {
     const markers = toExistingMarkers([
       {
+        id: "c1",
         number: 1,
         intent: "fix",
         severity: "minor",
@@ -331,6 +340,7 @@ describe("toExistingMarkers", () => {
   it("yields a null rect for a context with a malformed boundingBox", () => {
     const markers = toExistingMarkers([
       {
+        id: "c9",
         number: 9,
         intent: "fix",
         severity: "minor",

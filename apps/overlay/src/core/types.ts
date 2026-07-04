@@ -14,6 +14,7 @@ import type {
   ElementAnchor,
   DeviceSurface,
 } from "@supercomment/shared";
+import type { ThreadClient } from "../submit/thread.js";
 
 /**
  * The toolbar modes (R9). `browse` is the passive default: the overlay
@@ -57,6 +58,8 @@ export interface Rect {
 
 /** Human-readable content of a comment, shown in a popover when its marker is clicked. */
 export interface MarkerComment {
+  /** The comment's DB id — needed to reply / resolve / delete the thread (0033). */
+  id?: string;
   note: string;
   authorDisplayName: string;
   intent?: string;
@@ -233,6 +236,18 @@ export interface OverlayConfig {
    * / tunnel / tests) the action just saves the comment.
    */
   enqueuer?: AgentEnqueuer;
+  /**
+   * Reply / resolve / delete client for a comment thread (0033). Wired in embedded
+   * activation with the reviewer's session creds; absent (tunnel / tests) the
+   * popover stays read-only.
+   */
+  threadClient?: ThreadClient;
+  /**
+   * The current reviewer's identity, used by the popover to mark their own replies
+   * (which they may delete) and to show the owner-gated "delete thread" action to
+   * members. Absent (tunnel / tests) → read-only popover.
+   */
+  currentUser?: { displayName: string; role: string };
   /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
   readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */

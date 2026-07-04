@@ -40,6 +40,7 @@ import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
 import { CaptureUploader } from "./submit/upload.js";
+import { SessionThreadClient } from "./submit/thread.js";
 import {
   filterCommentsForPage,
   loadReviewComments,
@@ -335,6 +336,13 @@ async function activateSession(
     // Phase 2: carry the member's send-to-agent grant into the editor footer.
     canSendToAgent: session.canSendToAgent === true,
     enqueuer,
+    // Comment threads (0033): reply / mark-done / delete from the pin popover.
+    threadClient: new SessionThreadClient({
+      supabaseUrl,
+      supabaseAnonKey,
+      getAccessToken,
+    }),
+    currentUser: { displayName: session.displayName, role: session.role },
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),

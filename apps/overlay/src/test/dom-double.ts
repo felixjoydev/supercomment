@@ -105,6 +105,35 @@ export class FakeElement {
     this.tagName = tagName.toUpperCase();
   }
 
+  /** Minimal DOMTokenList backed by `className` (real elements have this). */
+  get classList() {
+    const tokens = () => this.className.split(/\s+/).filter(Boolean);
+    const write = (s: Set<string>) => {
+      this.className = [...s].join(" ");
+    };
+    return {
+      add: (...cls: string[]) => {
+        const s = new Set(tokens());
+        cls.forEach((c) => s.add(c));
+        write(s);
+      },
+      remove: (...cls: string[]) => {
+        const s = new Set(tokens());
+        cls.forEach((c) => s.delete(c));
+        write(s);
+      },
+      toggle: (c: string, force?: boolean) => {
+        const s = new Set(tokens());
+        const want = force === undefined ? !s.has(c) : force;
+        if (want) s.add(c);
+        else s.delete(c);
+        write(s);
+        return want;
+      },
+      contains: (c: string) => tokens().includes(c),
+    };
+  }
+
   get textContent(): string {
     if (this.children.length === 0) return this.text;
     return this.children.map((c) => c.textContent).join("");
