@@ -42,11 +42,28 @@ export interface CommentView {
   path: string | null;
   resolvedSummary: string | null;
   createdAt: string;
+  /** When status last changed (0037); feeds thread-aware unread on reopen. */
+  statusChangedAt: string | null;
   /**
    * Persisted "Send to Claude" status from comment_queue, hydrated server-side
    * so the button survives a page refresh. Null when the comment was never
    * enqueued (or for realtime-delivered rows, which carry no queue join).
    */
   sendStatus: SendStatus | null;
+  /** Normalized page identity for grouping (pageKeyOf(context.url)). */
+  pageKey: string;
+  /** Human label for the page group (path, or "Home" / "Other"). */
+  pageLabel: string;
+  /**
+   * The guest author's email (member dashboard only; null for members or when
+   * not captured). NEVER surfaced to guests or the agent.
+   */
+  authorEmail: string | null;
+  /** Newest reply's created_at, if any (feeds unread). */
+  latestReplyAt: string | null;
+  /** The current viewer's read receipt for this thread (null = never read). */
+  lastReadAt: string | null;
+  /** Per-viewer thread-aware unread, derived from the three timestamps above. */
+  unread: boolean;
 }
 

@@ -18,7 +18,7 @@
  * no_review_session guard, RLS bypass via SECURITY DEFINER, CORS from the
  * customer origin) cannot run in this sandbox — only arg/row mapping is tested.
  */
-import { pagePathOf } from "@supercomment/shared";
+import { pagePathOf, isThreadUnread } from "@supercomment/shared";
 import type { DeviceSurface, ElementAnchor } from "@supercomment/shared";
 
 import type { ExistingCommentMarker, Rect } from "../core/types.js";
@@ -44,6 +44,11 @@ export interface RawReviewCommentRow {
   context?: unknown;
   created_at?: string;
   display_name?: string;
+  /** Added in 0037: page key + timestamps for the per-page index + unread. */
+  path?: string | null;
+  status_changed_at?: string | null;
+  latest_reply_at?: string | null;
+  last_read_at?: string | null;
 }
 
 /** A typed existing comment loaded back onto the live deploy. */
@@ -63,6 +68,12 @@ export interface ReviewComment {
   context: Record<string, unknown>;
   createdAt: string;
   authorDisplayName: string;
+  /** Page key the comment was made on (0037; falls back to context.url). */
+  path: string | null;
+  /** Per-viewer thread-aware unread, derived from the timestamps below (0037). */
+  unread: boolean;
+  latestReplyAt: string | null;
+  lastReadAt: string | null;
 }
 
 /**
@@ -142,6 +153,15 @@ function mapRow(row: RawReviewCommentRow): ReviewComment {
         : {},
     createdAt: row.created_at ?? "",
     authorDisplayName: row.display_name ?? "",
+    path: row.path ?? null,
+    latestReplyAt: row.latest_reply_at ?? null,
+    lastReadAt: row.last_read_at ?? null,
+    unread: isThreadUnread({
+      createdAt: row.created_at ?? "",
+      statusChangedAt: row.status_changed_at ?? null,
+      latestReplyAt: row.latest_reply_at ?? null,
+      lastReadAt: row.last_read_at ?? null,
+    }),
   };
 }
 

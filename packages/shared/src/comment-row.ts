@@ -41,8 +41,8 @@ import {
  */
 export const COMMENT_ROW_COLUMNS =
   "id, preview_id, number, author_participant, trust_level, intent, severity, " +
-  "note, path, context, status, fidelity, kind, is_stale, resolved_by, " +
-  "resolved_summary, created_at";
+  "note, path, context, status, status_changed_at, fidelity, kind, is_stale, " +
+  "resolved_by, resolved_summary, created_at";
 
 /**
  * A raw `comments` row as returned by PostgREST (REST select) or the broadcast
@@ -63,6 +63,7 @@ export const commentRowSchema = z.object({
   path: z.string().nullable().optional(),
   context: z.unknown().optional(),
   status: commentStatusSchema,
+  status_changed_at: z.string().nullable().optional(),
   fidelity: captureFidelitySchema.nullable().optional(),
   kind: commentKindSchema.nullable().optional(),
   is_stale: z.boolean().nullable().optional(),
@@ -107,6 +108,8 @@ export interface NormalizedCommentRow {
   path: string | null;
   context: CapturedContext | null;
   status: CommentStatus;
+  /** When status last changed (0037); complements createdAt for unread. */
+  statusChangedAt: string | null;
   fidelity: CaptureFidelity;
   kind: CommentKind;
   isStale: boolean;
@@ -134,6 +137,7 @@ export function normalizeCommentRow(row: CommentRow): NormalizedCommentRow {
     path: row.path ?? null,
     context: coerceCommentContext(row.context),
     status: row.status,
+    statusChangedAt: row.status_changed_at ?? null,
     fidelity: row.fidelity ?? "live",
     kind: row.kind ?? "comment",
     isStale: row.is_stale ?? false,

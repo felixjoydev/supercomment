@@ -30,8 +30,9 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
 
   const { data, error } = await supabase
     .from('comments')
-    // Shared column list + the participant join for the author display name.
-    .select(`${COMMENT_ROW_COLUMNS}, participants:author_participant(display_name)`)
+    // Shared column list + the participant join for the author display name and
+    // email (member dashboard only; email is never sent to guests or the agent).
+    .select(`${COMMENT_ROW_COLUMNS}, participants:author_participant(display_name, email_ci)`)
     .eq('preview_id', previewId)
     .order('created_at', { ascending: false })
     .limit(COMMENTS_INITIAL_LOAD_LIMIT);
@@ -43,6 +44,10 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   // Working / Done) instead of resetting to "Send to Claude" after a refresh.
   // RLS scopes this to the member's previews, same as the comments read above.
   const sendStatusByComment = await getSendStatusMap(supabase, previewId);
+  // Bulk sources for thread-aware unread: newest reply per thread + this member's
+  // own read receipts (RLS scopes comment_read_state to the caller's member rows).
+  const latestReplyByComment = await getLatestReplyMap(supabase, previewId);
+  const lastReadByComment = await getReadReceiptMap(supabase, previewId);
 
   // The select column list is a runtime string (COMMENT_ROW_COLUMNS), so
   // PostgREST's compile-time select inference can't narrow the row type; we cast
@@ -50,12 +55,55 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   const rows = (data ?? []) as unknown as Record<string, unknown>[];
   return rows.map((raw) => {
     const participant = Array.isArray(raw.participants)
-      ? (raw.participants as { display_name?: string | null }[])[0]
-      : (raw.participants as { display_name?: string | null } | null);
-    const authorName = participant?.display_name ?? null;
-    const view = toCommentView(raw as unknown as CommentRow, authorName);
+      ? (raw.participants as { display_name?: string | null; email_ci?: string | null }[])[0]
+      : (raw.participants as { display_name?: string | null; email_ci?: string | null } | null);
+    const view = toCommentView(raw as unknown as CommentRow, {
+      authorName: participant?.display_name ?? null,
+      authorEmail: participant?.email_ci ?? null,
+      latestReplyAt: latestReplyByComment.get((raw.id as string) ?? '') ?? null,
+      lastReadAt: lastReadByComment.get((raw.id as string) ?? '') ?? null,
+    });
     return { ...view, sendStatus: sendStatusByComment.get(view.id) ?? null };
   });
+}
+
+/** Map each comment id → its newest reply's created_at, for unread derivation. */
+async function getLatestReplyMap(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  previewId: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const { data, error } = await supabase
+    .from('comment_replies')
+    .select('comment_id, created_at')
+    .eq('preview_id', previewId)
+    .order('created_at', { ascending: true });
+  if (error) return map; // non-critical; unread degrades to root-only
+  for (const row of (data ?? []) as { comment_id: string; created_at: string }[]) {
+    map.set(row.comment_id, row.created_at); // ascending → last write wins = newest
+  }
+  return map;
+}
+
+/**
+ * Map each comment id → the current member's last_read_at. RLS on
+ * comment_read_state restricts the rows to the caller's own member receipts, so
+ * no other viewer's read state is ever exposed here.
+ */
+async function getReadReceiptMap(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  previewId: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const { data, error } = await supabase
+    .from('comment_read_state')
+    .select('comment_id, last_read_at')
+    .eq('preview_id', previewId);
+  if (error) return map; // non-critical; degrade to "everything unread"
+  for (const row of (data ?? []) as { comment_id: string; last_read_at: string }[]) {
+    map.set(row.comment_id, row.last_read_at);
+  }
+  return map;
 }
 
 /**

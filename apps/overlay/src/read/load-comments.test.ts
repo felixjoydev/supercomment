@@ -107,11 +107,42 @@ describe("loadReviewComments — response mapping", () => {
       context: { boundingBox: { x: 10, y: 20, width: 100, height: 40 } },
       createdAt: "2026-06-29T00:00:00Z",
       authorDisplayName: "Ada",
+      path: null,
+      // No last_read_at on the row → never read → unread.
+      unread: true,
+      latestReplyAt: null,
+      lastReadAt: null,
     });
     // is_stale -> isStale, created_at -> createdAt, display_name -> authorDisplayName
     expect(comments[1]!.isStale).toBe(true);
     expect(comments[1]!.createdAt).toBe("2026-06-29T01:00:00Z");
     expect(comments[1]!.authorDisplayName).toBe("Grace");
+  });
+
+  it("derives unread from the 0037 timestamps (read when the receipt is newer)", async () => {
+    const comments = await loadReviewComments({
+      ...BASE,
+      getAccessToken: () => "jwt",
+      rpc: async () => [
+        {
+          number: 1,
+          note: "read",
+          created_at: "2026-06-29T00:00:00Z",
+          last_read_at: "2026-06-29T02:00:00Z",
+          path: "/pricing",
+        },
+        {
+          number: 2,
+          note: "new reply after read",
+          created_at: "2026-06-29T00:00:00Z",
+          last_read_at: "2026-06-29T01:00:00Z",
+          latest_reply_at: "2026-06-29T03:00:00Z",
+        },
+      ],
+    });
+    expect(comments[0]!.unread).toBe(false);
+    expect(comments[0]!.path).toBe("/pricing");
+    expect(comments[1]!.unread).toBe(true); // reply newer than the receipt
   });
 
   it("returns an empty list when there are no comments (clean empty render)", async () => {
@@ -206,6 +237,10 @@ describe("filterCommentsForPage (per-page marker scoping)", () => {
     context: { url },
     createdAt: "2026-07-04T00:00:00Z",
     authorDisplayName: "Ada",
+    path: null,
+    unread: false,
+    latestReplyAt: null,
+    lastReadAt: null,
   });
   const home = commentOn(1, "https://felixjoy.me/");
   const supergoal = commentOn(2, "https://felixjoy.me/supergoal");
@@ -256,6 +291,10 @@ describe("toExistingMarkers", () => {
         context: { boundingBox: { x: 10, y: 20, width: 100, height: 40 } },
         createdAt: "",
         authorDisplayName: "Ada",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
       },
       {
         id: "c2",
@@ -268,6 +307,10 @@ describe("toExistingMarkers", () => {
         context: {},
         createdAt: "",
         authorDisplayName: "Grace",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
       },
     ];
 
@@ -329,6 +372,10 @@ describe("toExistingMarkers", () => {
         },
         createdAt: "",
         authorDisplayName: "Ada",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
       },
     ]);
     expect(markers[0]!.anchors).toEqual([
@@ -350,7 +397,7 @@ describe("toExistingMarkers", () => {
         context: { boundingBox: { x: "nope" } as unknown },
         createdAt: "",
         authorDisplayName: "X",
-      } as ReviewComment,
+      } as unknown as ReviewComment,
     ]);
     expect(markers[0]!.rect).toBeNull();
   });

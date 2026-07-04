@@ -43,12 +43,12 @@ function row(over: Partial<CommentRow> = {}): CommentRow {
 }
 
 function view(over: Partial<CommentRow> = {}, author?: string | null): CommentView {
-  return toCommentView(row(over), author);
+  return toCommentView(row(over), { authorName: author });
 }
 
 describe("toCommentView", () => {
   it("normalizes a DB row to the dashboard view, with author name", () => {
-    const v = toCommentView(row({ id: "a", number: 5 }), "Dana");
+    const v = toCommentView(row({ id: "a", number: 5 }), { authorName: "Dana" });
     expect(v.id).toBe("a");
     expect(v.number).toBe(5);
     expect(v.author).toBe("Dana");
