@@ -11,6 +11,7 @@ import { CaptureThumb } from './capture-image';
 import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
+import { GuestEmail } from './guest-email';
 
 const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
@@ -114,7 +115,19 @@ export function CommentCard({
           </p>
 
           <div className="comment-byline">
-            {comment.author ?? 'Unknown'} · {comment.path ?? '—'}
+            {comment.author ?? 'Unknown'}
+            {comment.trustLevel === 'guest' ? (
+              <>
+                {' · '}
+                <GuestEmail
+                  comment={comment}
+                  canMutate={canMutate}
+                  onLocalUpdate={onLocalUpdate}
+                />
+              </>
+            ) : null}
+            {' · '}
+            {comment.path ?? 'no page'}
           </div>
 
           {comment.context?.screenshot && (
@@ -215,9 +228,7 @@ export function CommentCard({
             ) : null}
           </AnimatePresence>
 
-          {canMutate && comment.status === 'open' && (
-            <LifecycleControls comment={comment} onLocalUpdate={onLocalUpdate} />
-          )}
+          {canMutate && <LifecycleControls comment={comment} onLocalUpdate={onLocalUpdate} />}
         </div>
       </div>
     </article>

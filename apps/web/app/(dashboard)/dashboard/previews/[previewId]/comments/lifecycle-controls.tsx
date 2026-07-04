@@ -64,28 +64,66 @@ export function LifecycleControls({
     setText('');
   }
 
+  /**
+   * Reopen a resolved/dismissed comment (U9). Uses resolve_review_comment(false),
+   * which a workspace member may call; the 0037 status trigger bumps
+   * status_changed_at, so reopening re-flags unread for viewers who had read it.
+   */
+  async function reopen() {
+    setBusy(true);
+    setError(null);
+    const { error: rpcError } = await createClient().rpc('resolve_review_comment', {
+      p_comment_id: comment.id,
+      p_resolved: false,
+    });
+    setBusy(false);
+    if (rpcError) {
+      setError(rpcError.message || 'Could not reopen. Try again.');
+      return;
+    }
+    onLocalUpdate({
+      ...comment,
+      status: 'open',
+      resolvedSummary: null,
+      statusChangedAt: new Date().toISOString(),
+    });
+  }
+
   return (
     <div>
       <div className="comment-toolbar" style={{ marginTop: 4 }}>
-        <button
-          type="button"
-          className="text-btn"
-          onClick={() => setMode(mode === 'resolve' ? 'idle' : 'resolve')}
-          disabled={busy}
-        >
-          Resolve
-        </button>
-        <button
-          type="button"
-          className="text-btn"
-          onClick={() => setMode(mode === 'dismiss' ? 'idle' : 'dismiss')}
-          disabled={busy}
-        >
-          Dismiss
-        </button>
+        {comment.status === 'open' ? (
+          <>
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setMode(mode === 'resolve' ? 'idle' : 'resolve')}
+              disabled={busy}
+            >
+              Resolve
+            </button>
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setMode(mode === 'dismiss' ? 'idle' : 'dismiss')}
+              disabled={busy}
+            >
+              Dismiss
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="text-btn"
+            onClick={() => void reopen()}
+            disabled={busy}
+          >
+            {busy ? 'Reopening' : 'Reopen'}
+          </button>
+        )}
       </div>
 
-      {comment.isStale && mode === 'idle' && (
+      {comment.status === 'open' && comment.isStale && mode === 'idle' && (
         // R16/AE6: a stale comment (element gone on redeploy) stays open and
         // resolvable — surface that the resolve/dismiss path is still available.
         <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--ink-3)' }}>

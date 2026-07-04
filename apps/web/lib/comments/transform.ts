@@ -38,6 +38,7 @@ export function toCommentView(
     // Prefer the joined participant name; fall back to a broadcast-payload
     // author_name, then null.
     author: extras?.authorName ?? n.authorName ?? null,
+    authorParticipant: n.authorParticipant,
     trustLevel: n.trustLevel,
     intent: n.intent,
     severity: n.severity,

@@ -1280,6 +1280,33 @@ a.tile:active {
   color: var(--ink-3);
 }
 
+/* Guest email display + inline member edit (U8). */
+.guest-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.guest-email-value {
+  color: var(--ink-2);
+}
+
+.guest-email-none {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.input-inline {
+  padding: 2px 7px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  min-width: 170px;
+}
+
 .comment-outcome {
   margin: 10px 0 0;
   font-size: 13px;

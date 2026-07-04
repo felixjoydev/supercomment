@@ -28,6 +28,8 @@ export interface CommentView {
   previewId: string;
   number: number;
   author: string | null;
+  /** The authoring participant id (for member-only guest-email edit, U8). */
+  authorParticipant: string | null;
   trustLevel: TrustLevel;
   intent: Intent;
   severity: Severity;

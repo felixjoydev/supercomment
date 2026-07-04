@@ -13,6 +13,7 @@ function mk(over: Partial<CommentView>): CommentView {
     previewId: "p1",
     number: over.number ?? 1,
     author: null,
+    authorParticipant: null,
     trustLevel: "guest",
     intent: "fix",
     severity: "minor",
