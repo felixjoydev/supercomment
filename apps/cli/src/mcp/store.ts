@@ -13,7 +13,7 @@
  * and testable in one place. `listOpenComments({ includeGuests })` simply lets
  * the tool ask for the unfiltered set when the developer explicitly opts in.
  */
-import type { McpComment, CommentRow } from "@supercomment/shared";
+import type { McpComment, McpReply, CommentRow } from "@supercomment/shared";
 import {
   redactContextChangeSet,
   redactSecrets,
@@ -336,7 +336,37 @@ export class SupabaseCommentStore implements CommentStore {
       .maybeSingle();
     if (error) throw asError(error, `Failed to get comment #${number}`);
     if (!data) return null;
-    return rowToMcpComment(data as CommentRow);
+    const comment = rowToMcpComment(data as CommentRow);
+    // Attach the discussion thread (0033) so the agent reads the whole
+    // back-and-forth; the last reply is the decisive instruction.
+    const thread = await this.fetchThread((data as CommentRow).id);
+    return thread.length > 0 ? { ...comment, thread } : comment;
+  }
+
+  /**
+   * A comment's replies in chronological order, each body redacted (untrusted
+   * input, same boundary as the note). Best-effort: a read failure yields none.
+   */
+  private async fetchThread(commentId: string): Promise<McpReply[]> {
+    const { data, error } = await this.client
+      .from("comment_replies")
+      .select("author_display_name, trust_level, body, created_at")
+      .eq("comment_id", commentId)
+      .order("created_at", { ascending: true });
+    if (error || !data) return [];
+    return (
+      data as {
+        author_display_name: string;
+        trust_level: string;
+        body: string;
+        created_at: string;
+      }[]
+    ).map((r) => ({
+      author: r.author_display_name,
+      trustLevel: r.trust_level as McpReply["trustLevel"],
+      body: redactSecrets(r.body),
+      createdAt: r.created_at,
+    }));
   }
 
   async resolveComment(

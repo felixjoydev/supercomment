@@ -5,8 +5,10 @@ import { AnimatePresence, motion } from 'motion/react';
 
 import type { CommentView } from '@/lib/comments/types';
 import { severityLabel, intentLabel, trustLabel, statusLabel } from '@/lib/comments/labels';
+import { createClient } from '@/lib/supabase/client';
 import { ContextDetail } from './context-detail';
 import { CaptureThumb } from './capture-image';
+import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
 
@@ -22,14 +24,29 @@ export function CommentCard({
   canMutate,
   canSendToAgent,
   onLocalUpdate,
+  onLocalRemove,
 }: {
   comment: CommentView;
   canMutate: boolean;
   /** Phase 2: gates the "Send to agent" button visibility for the current user. */
   canSendToAgent: boolean;
   onLocalUpdate: (updated: CommentView) => void;
+  /** Remove the comment from the list after its thread is deleted (owner-only). */
+  onLocalRemove: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteThread() {
+    setDeleting(true);
+    const { error } = await createClient().rpc('delete_review_thread', {
+      p_comment_id: comment.id,
+    });
+    setDeleting(false);
+    if (!error) onLocalRemove(comment.id);
+    else setConfirmDelete(false);
+  }
   const resolved = comment.status === 'resolved';
   const dismissed = comment.status === 'dismissed';
   const muted = resolved || dismissed;
@@ -90,6 +107,8 @@ export function CommentCard({
             </p>
           )}
 
+          <CommentThread commentId={comment.id} />
+
           <div className="comment-toolbar">
             <button
               type="button"
@@ -115,6 +134,37 @@ export function CommentCard({
                 canSendToAgent={canSendToAgent}
               />
             )}
+
+            {canMutate &&
+              (confirmDelete ? (
+                <span className="delete-confirm">
+                  <button
+                    type="button"
+                    className="text-btn is-danger"
+                    onClick={() => void deleteThread()}
+                    disabled={deleting}
+                  >
+                    {deleting ? 'Deleting…' : 'Confirm delete'}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-btn"
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={deleting}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="text-btn is-danger"
+                  onClick={() => setConfirmDelete(true)}
+                  title="Delete this whole thread (owner only)"
+                >
+                  Delete
+                </button>
+              ))}
           </div>
 
           <AnimatePresence initial={false}>

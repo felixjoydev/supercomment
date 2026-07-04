@@ -74,11 +74,13 @@ describe("InMemoryCommentStore", () => {
 // enough of the chained query builder used by SupabaseCommentStore.
 function fakeClient(opts: {
   rows: Record<string, unknown>[];
+  replies?: Record<string, unknown>[];
   rpcSpy?: (fn: string, args: Record<string, unknown>) => void;
 }): SupabaseLike {
-  const { rows, rpcSpy } = opts;
+  const { rows, replies = [], rpcSpy } = opts;
   return {
-    from() {
+    from(table: string) {
+      const source = table === "comment_replies" ? replies : rows;
       return {
         select() {
           return {
@@ -87,16 +89,17 @@ function fakeClient(opts: {
                 eq(_c2: string, v2: unknown) {
                   return {
                     order: async () => ({
-                      data: rows.filter((r) => r.status === "open"),
+                      data: source.filter((r) => r.status === "open"),
                       error: null,
                     }),
                     maybeSingle: async () => ({
-                      data: rows.find((r) => r.number === v2) ?? null,
+                      data: source.find((r) => r.number === v2) ?? null,
                       error: null,
                     }),
                   };
                 },
-                order: async () => ({ data: rows, error: null }),
+                // Single-.eq().order() — comment_replies by comment_id.
+                order: async () => ({ data: source, error: null }),
               };
             },
             // Unfiltered select().order() (projects / previews listing).
@@ -166,6 +169,37 @@ describe("SupabaseCommentStore", () => {
     const client = fakeClient({ rows: [row({ number: 1 })] });
     const store = new SupabaseCommentStore(client, PREVIEW_ID);
     expect(await store.getComment(42)).toBeNull();
+  });
+
+  it("getComment attaches the thread (replies in order); the last is decisive", async () => {
+    const client = fakeClient({
+      rows: [row({ number: 5 })],
+      replies: [
+        {
+          author_display_name: "Client",
+          trust_level: "guest",
+          body: "make it blue",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          author_display_name: "dev@x.com",
+          trust_level: "member",
+          body: "actually green",
+          created_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(5);
+    expect(c?.thread).toHaveLength(2);
+    expect(c?.thread?.[0]?.author).toBe("Client");
+    expect(c?.thread?.[1]?.body).toBe("actually green"); // last reply = decisive
+  });
+
+  it("getComment omits the thread when there are no replies", async () => {
+    const client = fakeClient({ rows: [row({ number: 5 })], replies: [] });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    expect((await store.getComment(5))?.thread).toBeUndefined();
   });
 
   it("resolveComment resolves number->id then calls the resolve_comment RPC with that id", async () => {

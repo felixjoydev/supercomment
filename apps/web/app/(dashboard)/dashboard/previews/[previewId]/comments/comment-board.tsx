@@ -83,6 +83,10 @@ export function CommentBoard({
     setComments((current) => mergeComment(current, updated));
   }
 
+  function handleLocalRemove(id: string) {
+    setComments((current) => current.filter((c) => c.id !== id));
+  }
+
   return (
     <section>
       <div className="comments-head">
@@ -109,6 +113,7 @@ export function CommentBoard({
                   comment={comment}
                   canMutate={canMutate}
                   onLocalUpdate={handleLocalUpdate}
+                  onLocalRemove={handleLocalRemove}
                 />
               </motion.li>
             ))}

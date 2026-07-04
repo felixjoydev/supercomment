@@ -1504,6 +1504,87 @@ a.tile:active {
   }
 }
 
+/* ════════ Comment thread: replies + reply box (0033) ════════ */
+
+.thread {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.thread-reply {
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--surface-inset);
+}
+.thread-reply-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+}
+.thread-reply-author {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.thread-reply-time {
+  color: var(--ink-3);
+}
+.thread-reply-del {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.thread-reply-del:hover {
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
+}
+.thread-reply-body {
+  margin-top: 3px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.thread-box {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.thread-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  min-height: 38px;
+  max-height: 120px;
+}
+.text-btn.is-danger {
+  color: #c0392b;
+}
+.text-btn.is-danger:hover {
+  color: #a5281c;
+}
+.delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 /* ════════ Guest confirm (send to Claude) ════════ */
 
 .guest-confirm {
