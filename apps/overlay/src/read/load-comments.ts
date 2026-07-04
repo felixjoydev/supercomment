@@ -18,6 +18,7 @@
  * no_review_session guard, RLS bypass via SECURITY DEFINER, CORS from the
  * customer origin) cannot run in this sandbox — only arg/row mapping is tested.
  */
+import { pagePathOf } from "@supercomment/shared";
 import type { DeviceSurface, ElementAnchor } from "@supercomment/shared";
 
 import type { ExistingCommentMarker, Rect } from "../core/types.js";
@@ -200,17 +201,6 @@ function readContextUrl(context: unknown): string | null {
   if (!context || typeof context !== "object") return null;
   const u = (context as { url?: unknown }).url;
   return typeof u === "string" ? u : null;
-}
-
-/** A URL's pathname with a trailing slash normalized off (the root stays "/"). */
-function pagePathOf(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    const p = new URL(url).pathname;
-    return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
-  } catch {
-    return null;
-  }
 }
 
 /** Defensively read the captured device `surface` out of a comment's context. */
