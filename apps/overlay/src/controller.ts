@@ -40,6 +40,7 @@ import { GuestEmailModal } from "./guest/email-modal.js";
 import { GuestNameStore, GuestEmailStore } from "./guest/store.js";
 import { PageIndexPopover } from "./pages/index-popover.js";
 import { groupPagesForIndex } from "./pages/page-index.js";
+import type { ReviewComment } from "./read/load-comments.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
@@ -94,6 +95,9 @@ export class OverlayController {
   private modal: GuestModal | null = null;
   private emailModal: GuestEmailModal | null = null;
   private pagesPopover: PageIndexPopover | null = null;
+  /** Last non-empty comment load, so the Pages popover never blanks if a later
+   * reload lapses (e.g. the review session token expires after a few hours). */
+  private lastPages: ReviewComment[] = [];
   /** The Exit-confirmation dialog (U18); open only while confirming exit. */
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
@@ -717,9 +721,22 @@ export class OverlayController {
    * comment's captured origin, so the origin-stamped session survives and the
    * overlay re-mounts on the destination page.
    */
+  /**
+   * Seed the pages cache from the mount-time comment load, so the Pages popover
+   * has a fallback snapshot even before its first reload.
+   */
+  seedPages(comments: ReviewComment[]): void {
+    if (comments.length > 0) this.lastPages = comments;
+  }
+
   private async openPagesPopover(): Promise<void> {
     this.dismissPagesPopover();
-    const comments = (await this.config.loadComments?.()) ?? [];
+    const fresh = (await this.config.loadComments?.()) ?? [];
+    // The reload can come back empty once the review session/token lapses (a few
+    // hours in); fall back to the last non-empty load so the popover shows the
+    // known pages instead of going blank while the toolbar survives.
+    if (fresh.length > 0) this.lastPages = fresh;
+    const comments = fresh.length > 0 ? fresh : this.lastPages;
     const currentUrl = typeof location !== "undefined" ? location.href : "";
     const entries = groupPagesForIndex(comments, currentUrl);
     this.pagesPopover = new PageIndexPopover(

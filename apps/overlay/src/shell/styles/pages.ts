@@ -45,14 +45,14 @@ export const PAGES_STYLES = `
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: var(--soft);
+  color: rgba(35, 31, 24, 0.55);
   padding: 6px 10px 8px;
 }
 
 .sc-pages-empty {
   padding: 10px;
   font-size: 13px;
-  color: var(--soft);
+  color: rgba(35, 31, 24, 0.6);
 }
 
 .sc-pages-list { display: flex; flex-direction: column; gap: 2px; }
@@ -83,6 +83,7 @@ button.sc-pages-row:hover { background: var(--accent-soft); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--ink);
 }
 
 .sc-pages-dot {
@@ -103,9 +104,10 @@ button.sc-pages-row:hover { background: var(--accent-soft); }
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: rgba(35, 31, 24, 0.06);
-  color: var(--soft);
+  background: rgba(35, 31, 24, 0.08);
+  color: var(--ink);
   font-size: 11px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 `;

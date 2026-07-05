@@ -390,6 +390,9 @@ async function activateSession(
   // render here (their markers would mis-anchor or show as stale clutter).
   void commentsPromise.then((comments) => {
     if (!comments) return;
+    // Seed the Pages popover cache with the full (all-pages) load so it has a
+    // fallback if a later reload-on-open lapses (U12).
+    controller.seedPages(comments);
     const forThisPage =
       typeof location !== "undefined"
         ? filterCommentsForPage(comments, location.href)
