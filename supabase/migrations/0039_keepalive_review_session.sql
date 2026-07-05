@@ -29,7 +29,16 @@ begin
   if not found then raise exception 'no_review_session' using errcode = '42501'; end if;
 
   if v_session.role = 'member' then
-    v_ok := public.is_preview_workspace_member(p_preview_id);
+    -- The overlay authenticates as an ANONYMOUS user, so auth.uid() is not the
+    -- member; the real account is review_sessions.member_user_id. Check that
+    -- account's workspace membership directly (is_preview_workspace_member would
+    -- test the anon uid and always fail for member review sessions).
+    select exists (
+      select 1 from public.previews pv
+      join public.projects pr on pr.id = pv.project_id
+      join public.workspace_members wm on wm.workspace_id = pr.workspace_id
+      where pv.id = p_preview_id and wm.user_id = v_session.member_user_id
+    ) into v_ok;
   else
     select (pv.access_mode = 'guest_link'
             and pv.link_secret is not null
