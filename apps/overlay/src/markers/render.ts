@@ -105,6 +105,12 @@ export class MarkerLayer {
     return this.markers.length;
   }
 
+  /** Hide/show every pin (used while the review session is lapsed). */
+  setHidden(hidden: boolean): void {
+    this.container.style.display = hidden ? "none" : "";
+    if (hidden) this.closePopover();
+  }
+
   /** Re-paint all markers against the current viewport. */
   render(viewport?: { width: number; height: number }): void {
     const vp = viewport ?? this.viewport();

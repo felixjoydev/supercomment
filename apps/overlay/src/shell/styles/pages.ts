@@ -110,4 +110,44 @@ button.sc-pages-row:hover { background: var(--accent-soft); }
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+.sc-lapse {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--shadow-float);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.sc-lapse-msg {
+  color: rgba(35, 31, 24, 0.7);
+}
+
+.sc-lapse-btn {
+  appearance: none;
+  border: 0;
+  padding: 7px 15px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 140ms var(--ease-out);
+}
+
+.sc-lapse-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 `;

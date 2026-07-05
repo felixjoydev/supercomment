@@ -40,6 +40,7 @@ import { GuestEmailModal } from "./guest/email-modal.js";
 import { GuestNameStore, GuestEmailStore } from "./guest/store.js";
 import { PageIndexPopover } from "./pages/index-popover.js";
 import { groupPagesForIndex } from "./pages/page-index.js";
+import { SessionLapsePanel } from "./session/lapse-panel.js";
 import type { ReviewComment } from "./read/load-comments.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
@@ -98,6 +99,12 @@ export class OverlayController {
   /** Last non-empty comment load, so the Pages popover never blanks if a later
    * reload lapses (e.g. the review session token expires after a few hours). */
   private lastPages: ReviewComment[] = [];
+  // Sliding session lifetime (0039).
+  private lapsePanel: SessionLapsePanel | null = null;
+  private sessionExpiresAt: number | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private lastKeepAliveAt = 0;
+  private readonly onOverlayActivity = (): void => void this.touchSession();
   /** The Exit-confirmation dialog (U18); open only while confirming exit. */
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
@@ -152,6 +159,11 @@ export class OverlayController {
     });
     this.toolbar.setMode(this.selection.getMode());
     this.toolbar.setReviewerName(this.guestStore.get());
+
+    // Keep the review session alive while the reviewer is active, and surface a
+    // Renew panel when it lapses after inactivity (0039). Top-level only; the
+    // device-mode child shares the parent session.
+    if (!config.deviceChild) this.startSessionLifecycle();
 
     // Responsive device-mode toolbar — top-level controllers only. The child
     // controller mounted inside the device iframe must not nest its own.
@@ -209,6 +221,11 @@ export class OverlayController {
     // The pages popover registers a document keydown listener; unbind it before
     // the shell (which owns the rest of the overlay DOM) is torn down.
     this.dismissPagesPopover();
+    // Session lifecycle cleanup (0039): idle timer + activity listeners + panel.
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    this.shell.layer.removeEventListener("pointerdown", this.onOverlayActivity);
+    this.shell.layer.removeEventListener("keydown", this.onOverlayActivity);
+    this.lapsePanel?.destroy();
     // Remove the toolbar's window `resize` listener (OV-8) before the shell —
     // which owns the toolbar's DOM — is torn down.
     this.toolbar.destroy();
@@ -758,6 +775,66 @@ export class OverlayController {
   private dismissPagesPopover(): void {
     this.pagesPopover?.destroy();
     this.pagesPopover = null;
+  }
+
+  // --- Sliding session lifetime (0039) -----------------------------------
+
+  private startSessionLifecycle(): void {
+    if (!this.config.keepAlive) return;
+    // Seed the expiry + slide on mount (mount counts as activity).
+    void this.touchSession(true);
+    // Extend on real interaction with the overlay (throttled inside touchSession).
+    this.shell.layer.addEventListener("pointerdown", this.onOverlayActivity);
+    this.shell.layer.addEventListener("keydown", this.onOverlayActivity);
+    // Proactively surface the lapse once the session expires with no activity.
+    this.keepaliveTimer = setInterval(() => {
+      if (this.lapsePanel) return;
+      if (this.sessionExpiresAt != null && Date.now() >= this.sessionExpiresAt) {
+        this.showLapsed();
+      }
+    }, 30_000);
+  }
+
+  /** Extend the session on activity (throttled). null result => lapsed. */
+  private async touchSession(force = false): Promise<void> {
+    if (this.lapsePanel) return; // lapsed → only the Renew button revives
+    const now = Date.now();
+    if (!force && now - this.lastKeepAliveAt < 60_000) return; // throttle
+    this.lastKeepAliveAt = now;
+    const expiry = await this.config.keepAlive?.();
+    if (expiry == null) this.showLapsed();
+    else this.sessionExpiresAt = expiry;
+  }
+
+  /** Swap the toolbar + pins for the Renew panel. */
+  private showLapsed(): void {
+    if (this.lapsePanel) return;
+    this.dismissForm();
+    this.dismissModal();
+    this.closeEditor();
+    this.dismissPagesPopover();
+    this.dismissConfirm();
+    this.toolbar.setHidden(true);
+    this.markers.setHidden(true);
+    this.lapsePanel = new SessionLapsePanel(this.doc, this.shell.layer, {
+      onRenew: () => this.renewSession(),
+    });
+  }
+
+  private async renewSession(): Promise<void> {
+    const expiry = await this.config.keepAlive?.();
+    if (expiry != null) {
+      this.sessionExpiresAt = expiry;
+      this.lastKeepAliveAt = Date.now();
+      this.lapsePanel?.destroy();
+      this.lapsePanel = null;
+      this.toolbar.setHidden(false);
+      this.markers.setHidden(false);
+    } else {
+      this.lapsePanel?.showError(
+        "Your access has ended. Reopen your review link to continue.",
+      );
+    }
   }
 
   // --- Exit review session (U18) ------------------------------------------

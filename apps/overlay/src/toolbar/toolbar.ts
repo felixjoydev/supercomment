@@ -159,6 +159,11 @@ export class Toolbar {
     if (view) this.listeners.add(view, "resize", () => this.placePill(true));
   }
 
+  /** Hide/show the whole toolbar (used while the review session is lapsed). */
+  setHidden(hidden: boolean): void {
+    this.el.style.display = hidden ? "none" : "";
+  }
+
   /** Highlight the active mode and toggle the multi confirm button. */
   setMode(mode: SelectionMode): void {
     for (const [m, btn] of this.buttons) {

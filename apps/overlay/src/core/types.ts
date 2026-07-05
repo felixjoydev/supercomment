@@ -260,6 +260,12 @@ export interface OverlayConfig {
    * fresh snapshot each open. Absent → the Pages popover shows no pages.
    */
   loadComments?: () => Promise<ReviewComment[]>;
+  /**
+   * Extend/revive the review session (keepalive_review_session, 0039). Returns the
+   * new expiry (ms since epoch), or null when the session has lapsed and cannot be
+   * revived (link revoked/expired). Drives sliding renewal + the Renew panel.
+   */
+  keepAlive?: () => Promise<number | null>;
   /** Read a reference-image file to a data URL (U17); defaults to a FileReader. */
   readFile?: FileReaderFn;
   /** Document to operate on; defaults to the ambient `document` in browsers. */

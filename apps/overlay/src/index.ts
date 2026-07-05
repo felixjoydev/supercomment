@@ -39,6 +39,7 @@ import { createRegionRasterizer, type DomToCanvas } from "./capture/region.js";
 import { submitterFromBootConfig } from "./submit/index.js";
 import { SessionCommentSubmitter } from "./submit/session.js";
 import { makeSetGuestEmail } from "./submit/email.js";
+import { makeKeepAlive } from "./submit/keepalive.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { SessionThreadClient } from "./submit/thread.js";
@@ -366,6 +367,14 @@ async function activateSession(
         previewId: session.previewId,
         getAccessToken,
       }).catch(() => []),
+    // Sliding session lifetime (0039): extend while active, revive from the Renew
+    // panel after a lapse (gated on the link still being valid).
+    keepAlive: makeKeepAlive({
+      supabaseUrl,
+      supabaseAnonKey,
+      previewId: session.previewId,
+      getAccessToken,
+    }),
     // U18: Exit clears the persisted review session so the overlay stays dormant
     // on reload / navigation; the controller tears its own UI down.
     onExit: () => clearSession(),
