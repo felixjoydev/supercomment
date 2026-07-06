@@ -48,6 +48,7 @@ import {
   loadReviewComments,
   toExistingMarkers,
 } from "./read/load-comments.js";
+import { subscribePreviewChanges } from "./read/realtime.js";
 import { isDeviceChild } from "./device/device-mode.js";
 import {
   REFRESH_SKEW_MS,
@@ -358,15 +359,16 @@ async function activateSession(
       previewId: session.previewId,
       getAccessToken,
     }),
-    // U12: the Pages popover reloads the preview's comments each open (fresh
-    // snapshot); fail-closed to an empty list so it never throws into the page.
+    // U12: the Pages popover + live/poll sync reload the preview's comments (fresh
+    // snapshot). Fail-closed to `null` (NOT []): a read failure must not read as
+    // "no comments" and clear every pin — only a real empty list does that.
     loadComments: () =>
       loadReviewComments({
         supabaseUrl,
         supabaseAnonKey,
         previewId: session.previewId,
         getAccessToken,
-      }).catch(() => []),
+      }).catch(() => null),
     // Sliding session lifetime (0039): extend while active, revive from the Renew
     // panel after a lapse (gated on the link still being valid).
     keepAlive: makeKeepAlive({
@@ -408,6 +410,26 @@ async function activateSession(
         : comments;
     controller.loadExistingComments(toExistingMarkers(forThisPage));
   });
+
+  // Live updates: join the preview's broadcast topic so a comment/reply created,
+  // edited, or deleted anywhere (the dashboard, another reviewer) reflects in the
+  // overlay INSTANTLY. On any change the controller re-reads + diffs pins and
+  // refreshes an open thread's replies. The background poll stays as a fallback,
+  // so a blocked / RLS-rejected / dropped socket degrades to "fresh within a few
+  // seconds" instead of going stale. Never throws into the host page.
+  try {
+    controller.attachRealtime(
+      subscribePreviewChanges({
+        supabaseUrl,
+        supabaseAnonKey,
+        previewId: session.previewId,
+        getAccessToken,
+        onChange: () => controller.scheduleLiveRefresh(),
+      }),
+    );
+  } catch {
+    // No live socket available → the poll fallback still keeps the overlay fresh.
+  }
 }
 
 /**

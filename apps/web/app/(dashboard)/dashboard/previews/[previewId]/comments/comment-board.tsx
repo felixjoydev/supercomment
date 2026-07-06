@@ -4,11 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 
 import { createClient } from '@/lib/supabase/client';
-import { toCommentView } from '@/lib/comments/transform';
-import type { CommentRow, CommentView } from '@/lib/comments/types';
+import type { CommentView } from '@/lib/comments/types';
+import { applyBroadcast, type BroadcastOp } from '@/lib/comments/realtime';
 import {
   mergeComment,
-  reconcileUnread,
   selectView,
   countByStatus,
   countUnread,
@@ -63,28 +62,17 @@ export function CommentBoard({
     const topic = `preview:${previewId}`;
     const channel = supabase.channel(topic, { config: { private: true } });
 
-    function ingest(payload: unknown) {
-      // broadcast_changes delivers { record, old_record, operation, ... }.
-      const p = payload as
-        | { record?: CommentRow; payload?: { record?: CommentRow } }
-        | undefined;
-      const record = p?.record ?? p?.payload?.record;
-      if (!record || !record.id) return;
-      setComments((current) => {
-        const incoming = toCommentView(record);
-        // The broadcast carries no read receipt; preserve the viewer's read state
-        // for a thread already on screen so a status/reply update never un-reads it.
-        const existing = current.find((c) => c.id === incoming.id);
-        return mergeComment(
-          current,
-          existing ? reconcileUnread(existing, incoming) : incoming,
-        );
-      });
-    }
+    // One reducer for every delivery on the topic. It distinguishes comment rows
+    // from comment_replies rows (0038) by the payload's `table`, so a reply
+    // re-flags its parent thread instead of appearing as a phantom card, and it
+    // handles DELETE so a thread deleted by one viewer drops from another's board.
+    const handle = (op: BroadcastOp) => (msg: { payload?: unknown }) =>
+      setComments((current) => applyBroadcast(current, msg.payload, op));
 
     channel
-      .on('broadcast', { event: 'INSERT' }, (msg: { payload?: unknown }) => ingest(msg.payload))
-      .on('broadcast', { event: 'UPDATE' }, (msg: { payload?: unknown }) => ingest(msg.payload))
+      .on('broadcast', { event: 'INSERT' }, handle('INSERT'))
+      .on('broadcast', { event: 'UPDATE' }, handle('UPDATE'))
+      .on('broadcast', { event: 'DELETE' }, handle('DELETE'))
       .subscribe((status: string) => {
         if (status === 'SUBSCRIBED') setConnection('live');
         else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')

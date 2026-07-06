@@ -19,7 +19,9 @@ import type {
   ScreenshotUploader,
   FileReaderFn,
   AgentEnqueuer,
+  ExistingCommentMarker,
 } from "./core/types.js";
+import type { ReviewComment } from "./read/load-comments.js";
 
 // Edit-mode (U9) integration over the real controller + panel + EditSession.
 
@@ -598,6 +600,119 @@ describe("OverlayController — exit review session (U18)", () => {
     expect(q(".sc-modal-hint")!.textContent.toLowerCase()).toContain(
       "unsaved edits",
     );
+  });
+});
+
+describe("OverlayController — live comment sync", () => {
+  function reviewComment(number: number): ReviewComment {
+    return {
+      id: `c${number}`,
+      number,
+      intent: "change",
+      severity: "important",
+      note: `note ${number}`,
+      status: "open",
+      isStale: false,
+      context: {},
+      createdAt: "2026-07-01T00:00:00.000Z",
+      authorDisplayName: "Ada",
+      path: null,
+      unread: false,
+      latestReplyAt: null,
+      lastReadAt: null,
+    };
+  }
+
+  function existingMarker(number: number): ExistingCommentMarker {
+    return {
+      number,
+      rect: null,
+      isStale: false,
+      anchors: [],
+      content: { note: `note ${number}`, authorDisplayName: "Ada", status: "open" },
+    };
+  }
+
+  function build(loadComments: () => Promise<ReviewComment[] | null>) {
+    const { doc } = makeFakeDom();
+    const controller = new OverlayController({
+      previewId: "11111111-1111-4111-8111-111111111111",
+      previewKey: "preview-a",
+      capturer: new StubCapturer(),
+      submitter: new StubSubmitter(),
+      loadComments,
+      doc: doc as unknown as Document,
+      storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
+    });
+    return { controller, doc };
+  }
+
+  it("re-reads on demand and keeps the loaded set in step (no manual refresh)", async () => {
+    let calls = 0;
+    const { controller } = build(async () => {
+      calls++;
+      return [reviewComment(1), reviewComment(2)];
+    });
+    controller.loadExistingComments([existingMarker(1), existingMarker(2)]);
+    await controller.reloadComments();
+    expect(calls).toBe(1);
+    expect(controller.loadedCommentCount).toBe(2);
+    controller.destroy();
+  });
+
+  it("discovers a comment from another reviewer on the next read", async () => {
+    const { controller } = build(async () => [reviewComment(1), reviewComment(2)]);
+    controller.loadExistingComments([existingMarker(1)]);
+    await controller.reloadComments();
+    expect(controller.loadedCommentCount).toBe(2); // #2 appeared without a reload
+    controller.destroy();
+  });
+
+  it("drops a pin from the set when its thread was deleted elsewhere", async () => {
+    const { controller } = build(async () => [reviewComment(1)]);
+    controller.loadExistingComments([existingMarker(1), existingMarker(2)]);
+    expect(controller.loadedCommentCount).toBe(2);
+    await controller.reloadComments();
+    expect(controller.loadedCommentCount).toBe(1); // #2 removed
+    controller.destroy();
+  });
+
+  it("fails closed on a FAILED read (null) — keeps the pins already shown", async () => {
+    let calls = 0;
+    const { controller } = build(async () => {
+      calls++;
+      return null; // read failed (network / token) → do not touch the pins
+    });
+    controller.loadExistingComments([existingMarker(1), existingMarker(2)]);
+    await controller.reloadComments();
+    expect(calls).toBe(1);
+    expect(controller.loadedCommentCount).toBe(2); // unchanged
+    controller.destroy();
+  });
+
+  it("clears every pin when the last comment was deleted (empty read, not a failure)", async () => {
+    const { controller } = build(async () => []);
+    controller.loadExistingComments([existingMarker(1), existingMarker(2)]);
+    expect(controller.loadedCommentCount).toBe(2);
+    await controller.reloadComments();
+    expect(controller.loadedCommentCount).toBe(0); // all pins dropped
+    controller.destroy();
+  });
+
+  it("scheduleLiveRefresh coalesces a burst of broadcasts into one re-read", async () => {
+    let calls = 0;
+    const { controller } = build(async () => {
+      calls++;
+      return [reviewComment(1)];
+    });
+    controller.loadExistingComments([existingMarker(1)]);
+    // A comment + its first reply arrive back-to-back → still one read.
+    controller.scheduleLiveRefresh();
+    controller.scheduleLiveRefresh();
+    controller.scheduleLiveRefresh();
+    await new Promise((r) => setTimeout(r, 320));
+    expect(calls).toBe(1);
+    controller.destroy();
   });
 });
 

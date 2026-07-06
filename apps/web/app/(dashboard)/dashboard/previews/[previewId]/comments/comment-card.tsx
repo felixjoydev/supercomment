@@ -49,12 +49,17 @@ export function CommentCard({
     else setConfirmDelete(false);
   }
 
-  /** Mark this thread read/unread for the current member (0037). Optimistic. */
-  async function setRead(read: boolean) {
+  /**
+   * Mark this thread read/unread for the current member (0037). Optimistic. `at`
+   * pins the optimistic read receipt to a specific time (the timestamp of a reply
+   * the viewer just posted) so their own reply broadcast can't re-flag it unread;
+   * defaults to now for a plain "Mark read".
+   */
+  async function setRead(read: boolean, at?: string) {
     onLocalUpdate({
       ...comment,
       unread: !read,
-      lastReadAt: read ? new Date().toISOString() : null,
+      lastReadAt: read ? at ?? new Date().toISOString() : null,
     });
     await createClient().rpc(read ? 'mark_thread_read' : 'mark_thread_unread', {
       p_comment_id: comment.id,
@@ -144,7 +149,11 @@ export function CommentCard({
             </p>
           )}
 
-          <CommentThread commentId={comment.id} />
+          <CommentThread
+            commentId={comment.id}
+            latestReplyAt={comment.latestReplyAt}
+            onReplied={(replyAt) => void setRead(true, replyAt ?? undefined)}
+          />
 
           <div className="comment-toolbar">
             <button

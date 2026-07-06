@@ -85,6 +85,10 @@ function shallowEqualComment(a: CommentView, b: CommentView): boolean {
     a.pageKey === b.pageKey &&
     a.unread === b.unread &&
     a.lastReadAt === b.lastReadAt &&
+    // A reply broadcast can move latestReplyAt without flipping unread (an
+    // already-unread thread); it must still yield a new row so an open thread
+    // re-fetches its replies (comment-thread keys its reply load on latestReplyAt).
+    a.latestReplyAt === b.latestReplyAt &&
     a.statusChangedAt === b.statusChangedAt &&
     a.createdAt === b.createdAt
   );

@@ -256,10 +256,13 @@ export interface OverlayConfig {
    */
   captureGuestEmail?: (email: string) => Promise<boolean>;
   /**
-   * Reload the preview's comments for the per-page index popover (U12), so it is a
-   * fresh snapshot each open. Absent → the Pages popover shows no pages.
+   * Reload the preview's comments — for the per-page index popover (U12) and the
+   * live/poll sync. Returns a fresh snapshot, `[]` when the preview genuinely has
+   * no comments (e.g. the last one was deleted), or `null` when the READ FAILED
+   * (network/token), so the sync can clear pins on a real empty but keep them on a
+   * failure. Absent → the Pages popover shows no pages and the sync is a no-op.
    */
-  loadComments?: () => Promise<ReviewComment[]>;
+  loadComments?: () => Promise<ReviewComment[] | null>;
   /**
    * Extend/revive the review session (keepalive_review_session, 0039). Returns the
    * new expiry (ms since epoch), or null when the session has lapsed and cannot be

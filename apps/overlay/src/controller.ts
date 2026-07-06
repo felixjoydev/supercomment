@@ -41,7 +41,12 @@ import { GuestNameStore, GuestEmailStore } from "./guest/store.js";
 import { PageIndexPopover } from "./pages/index-popover.js";
 import { groupPagesForIndex } from "./pages/page-index.js";
 import { SessionLapsePanel } from "./session/lapse-panel.js";
-import type { ReviewComment } from "./read/load-comments.js";
+import {
+  filterCommentsForPage,
+  toExistingMarkers,
+  type ReviewComment,
+} from "./read/load-comments.js";
+import { diffMarkersByNumber } from "./read/marker-diff.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
@@ -63,6 +68,17 @@ import { filterBySurface, countBySurface } from "./device/surface-filter.js";
  * settle window (~N frames) rather than being falsely marked stale on frame 0.
  */
 const REANCHOR_MAX_ATTEMPTS = 10;
+
+/**
+ * How often the overlay re-reads the preview's comments so a pin created by
+ * ANOTHER reviewer appears without a manual page refresh (ms). Also refreshed
+ * immediately on tab focus / visibility change. Kept modest on purpose: the
+ * reviewer is actively viewing one page and cross-reviewer inserts are
+ * infrequent, so a short poll + focus catch-up reads live without the weight of a
+ * realtime websocket client in the injected bundle (the dashboard owns instant
+ * delivery). A backgrounded tab is skipped entirely.
+ */
+const COMMENT_SYNC_INTERVAL_MS = 15_000;
 
 export class OverlayController {
   private readonly doc: Document;
@@ -104,6 +120,12 @@ export class OverlayController {
   private sessionExpiresAt: number | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastKeepAliveAt = 0;
+  /** Background comment-sync poll: keeps on-page pins live without a reload. */
+  private commentSyncTimer: ReturnType<typeof setInterval> | null = null;
+  /** Live broadcast subscription (instant updates); the poll is the fallback. */
+  private realtime: { close(): void } | null = null;
+  /** Debounce handle coalescing a burst of live broadcasts into one re-read. */
+  private liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly onOverlayActivity = (): void => void this.touchSession();
   /** The Exit-confirmation dialog (U18); open only while confirming exit. */
   private confirmModal: ConfirmModal | null = null;
@@ -165,6 +187,11 @@ export class OverlayController {
     // device-mode child shares the parent session.
     if (!config.deviceChild) this.startSessionLifecycle();
 
+    // Keep on-page pins live: background-refresh the preview's comments so a pin
+    // created by ANOTHER reviewer appears without a manual page reload. Top-level
+    // only; the device-mode child renders the parent's already-loaded set.
+    if (!config.deviceChild) this.startCommentSync();
+
     // Responsive device-mode toolbar — top-level controllers only. The child
     // controller mounted inside the device iframe must not nest its own.
     if (!config.deviceChild) {
@@ -223,6 +250,13 @@ export class OverlayController {
     this.dismissPagesPopover();
     // Session lifecycle cleanup (0039): idle timer + activity listeners + panel.
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    // Background comment-sync poll cleanup; its focus/visibility listeners go
+    // through the listener bag (disposed above).
+    if (this.commentSyncTimer) clearInterval(this.commentSyncTimer);
+    // Live subscription + its debounce cleanup.
+    if (this.liveRefreshTimer) clearTimeout(this.liveRefreshTimer);
+    this.realtime?.close();
+    this.realtime = null;
     this.shell.layer.removeEventListener("pointerdown", this.onOverlayActivity);
     this.shell.layer.removeEventListener("keydown", this.onOverlayActivity);
     this.lapsePanel?.destroy();
@@ -271,6 +305,15 @@ export class OverlayController {
     this.refreshSurfaceCounts();
     const mine = filterBySurface(comments, this.surface);
     void this.reanchorExistingComments(mine).catch(() => {});
+  }
+
+  /**
+   * How many comments are currently loaded across all surfaces. The live sync
+   * keeps this in step with the server; exposed so a test can assert a refresh
+   * adopted the fresh set without reaching into private state.
+   */
+  get loadedCommentCount(): number {
+    return this.existingComments.length;
   }
 
   /** Recompute per-surface counts from the loaded set and push to the toolbar. */
@@ -775,6 +818,112 @@ export class OverlayController {
   private dismissPagesPopover(): void {
     this.pagesPopover?.destroy();
     this.pagesPopover = null;
+  }
+
+  // --- Live comment sync -------------------------------------------------
+  // The overlay is otherwise load-once-on-activate, so a pin from ANOTHER
+  // reviewer only showed up after a manual page refresh. Poll the same read RPC
+  // the mount used and reconcile the on-page pins, plus catch up instantly when
+  // the reviewer returns to the tab.
+
+  private startCommentSync(): void {
+    // No reader wired (tunnel / stub / tests) → nothing to sync.
+    if (!this.config.loadComments) return;
+    const view = this.doc.defaultView;
+    if (!view) return;
+    this.commentSyncTimer = setInterval(() => {
+      // Don't poll a backgrounded tab; the visibility listener catches it up on
+      // return, so a hidden tab costs nothing.
+      if (view.document?.visibilityState === "hidden") return;
+      void this.reloadComments();
+    }, COMMENT_SYNC_INTERVAL_MS);
+    // Instant catch-up when the reviewer switches back to this tab / window.
+    this.on(this.doc, "visibilitychange", () => {
+      if (view.document?.visibilityState !== "hidden") void this.reloadComments();
+    });
+    this.on(view, "focus", () => void this.reloadComments());
+  }
+
+  /**
+   * Re-read the preview's comments and reconcile the on-page pins WITHOUT a
+   * manual refresh: a pin from another reviewer appears, a deleted thread drops,
+   * and a status change (e.g. marked done elsewhere) restyles the pin. Diffed by
+   * comment number so it is flicker-free and non-destructive. Fail-closed and
+   * non-disruptive:
+   *   - lapsed session   → skip (only the Renew panel revives, 0039);
+   *   - popover open      → skip (never yank a thread the reviewer is reading);
+   *   - empty/failed read → keep the current pins (also covers a token lapse).
+   * Public so a test can drive one refresh deterministically (the poll interval
+   * itself is real-env).
+   */
+  async reloadComments(): Promise<void> {
+    if (this.lapsePanel) return;
+    const all = await this.config.loadComments?.();
+    // null / undefined = the READ FAILED (or no reader) → keep the pins we show.
+    // An empty array is a real "no comments left" (e.g. the last was deleted) and
+    // flows through the diff below to clear every remaining pin.
+    if (all == null) return;
+
+    // Refresh the Pages-popover fallback cache from the same read.
+    this.seedPages(all);
+
+    const forThisPage =
+      typeof location !== "undefined"
+        ? filterCommentsForPage(all, location.href)
+        : all;
+    const incoming = toExistingMarkers(forThisPage);
+    const diff = diffMarkersByNumber(this.existingComments, incoming);
+
+    // Adopt the fresh set as authoritative FIRST so the per-surface toggle badges
+    // reflect the new totals even when only counts changed.
+    this.existingComments = incoming;
+    this.refreshSurfaceCounts();
+
+    for (const number of diff.removedNumbers) this.markers.removeMarker(number);
+    for (const c of diff.updated) {
+      this.markers.updateContent(c.number, c.content, c.isStale);
+    }
+    // Only place numbers not already on the page — never duplicate the reviewer's
+    // own just-submitted optimistic pin the server read now echoes back.
+    const trulyNew = diff.added.filter((c) => !this.markers.hasNumber(c.number));
+    if (trulyNew.length > 0) {
+      void this.reanchorExistingComments(
+        filterBySurface(trulyNew, this.surface),
+      ).catch(() => {});
+    }
+  }
+
+  /**
+   * Adopt the live broadcast subscription (built by the embedded bootstrap with
+   * the reviewer's session creds). Owned here so {@link destroy} tears the socket
+   * down with the rest of the overlay.
+   */
+  attachRealtime(subscription: { close(): void }): void {
+    this.realtime?.close();
+    this.realtime = subscription;
+  }
+
+  /**
+   * Debounced live refresh, called on each broadcast: re-read + diff the pins and
+   * reload an open thread's replies. Coalesces a burst (e.g. a comment + its first
+   * reply) into a single read. The instant path; the poll remains the fallback.
+   */
+  scheduleLiveRefresh(): void {
+    if (this.liveRefreshTimer) return; // already scheduled within the window
+    this.liveRefreshTimer = setTimeout(() => {
+      this.liveRefreshTimer = null;
+      void this.reloadComments();
+      this.refreshOpenThreadReplies();
+    }, 250);
+  }
+
+  /**
+   * Re-fetch the replies inside the currently-open pin popover — a reply arrived
+   * live. Safe while open: only the reply list is replaced, not the popover or a
+   * half-typed reply draft. No-op when nothing is open.
+   */
+  refreshOpenThreadReplies(): void {
+    this.markers.refreshOpenReplies();
   }
 
   // --- Sliding session lifetime (0039) -----------------------------------

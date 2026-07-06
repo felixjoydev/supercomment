@@ -19,22 +19,55 @@ interface Reply {
  * the card (owner-only). Every write goes through the SECURITY DEFINER RPCs, which
  * re-check permissions server-side, so the client checks are only for affordances.
  *
+ * Live: the board bumps `latestReplyAt` when a reply broadcast arrives, so this
+ * component re-fetches its replies then — a reply from another member appears in
+ * an already-open thread without a page refresh.
+ *
  * VERIFY IN REAL ENV: the live Supabase reads/RPCs need a member session.
  */
-export function CommentThread({ commentId }: { commentId: string }) {
+export function CommentThread({
+  commentId,
+  latestReplyAt = null,
+  onReplied,
+}: {
+  commentId: string;
+  /**
+   * Newest reply timestamp for this thread, from the board. A change (a reply
+   * broadcast, or the newest reply deleted) re-fetches the reply list so it stays
+   * live in an open thread.
+   */
+  latestReplyAt?: string | null;
+  /**
+   * Called after THIS viewer posts a reply, with the reply's timestamp, so the
+   * card can mark the thread read up to it — otherwise the viewer's own reply
+   * broadcast would re-flag their own thread unread.
+   */
+  onReplied?: (replyAt: string | null) => void;
+}) {
   const [replies, setReplies] = useState<Reply[] | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Identity is loaded once — it does not change while the card is mounted.
   useEffect(() => {
     let active = true;
-    const supabase = createClient();
-    void supabase.auth.getUser().then(({ data }) => {
-      if (active) setEmail(data.user?.email ?? null);
-    });
-    void supabase
+    void createClient()
+      .auth.getUser()
+      .then(({ data }) => {
+        if (active) setEmail(data.user?.email ?? null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Load replies on mount AND whenever the board signals a reply change for this
+  // thread (latestReplyAt), so another member's reply shows without a refresh.
+  useEffect(() => {
+    let active = true;
+    void createClient()
       .from('comment_replies')
       .select('id,author_display_name,trust_level,body,created_at')
       .eq('comment_id', commentId)
@@ -45,7 +78,7 @@ export function CommentThread({ commentId }: { commentId: string }) {
     return () => {
       active = false;
     };
-  }, [commentId]);
+  }, [commentId, latestReplyAt]);
 
   async function send() {
     const body = text.trim();
@@ -64,6 +97,9 @@ export function CommentThread({ commentId }: { commentId: string }) {
     const row = (Array.isArray(data) ? data[0] : data) as Reply | undefined;
     if (row) setReplies((r) => [...(r ?? []), row]);
     setText('');
+    // Replying implies reading: mark the parent read up to this reply so the
+    // incoming reply broadcast doesn't re-flag the viewer's own thread unread.
+    onReplied?.(row?.created_at ?? null);
   }
 
   async function del(id: string) {

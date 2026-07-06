@@ -142,6 +142,23 @@ describe("MarkerLayer existing comments (U12)", () => {
     expect(layer.renderedPinCount()).toBe(0);
   });
 
+  it("addMany is idempotent by number (a racing re-add never stacks a duplicate pin)", () => {
+    const { layer } = setup();
+    layer.addMany([
+      { number: 1, rect: makeRect(100, 100, 0, 0) },
+      { number: 2, rect: makeRect(500, 500, 0, 0) },
+    ]);
+    // Simulate the mount load + a live-sync poll both handing back #1 and #2.
+    layer.addMany([
+      { number: 1, rect: makeRect(100, 100, 0, 0) },
+      { number: 2, rect: makeRect(500, 500, 0, 0) },
+      { number: 3, rect: makeRect(300, 300, 0, 0) },
+    ]);
+    layer.render({ width: 1000, height: 800 });
+    expect(layer.count()).toBe(3); // 1, 2 once each + the genuinely new 3
+    expect(layer.renderedPinCount()).toBe(3);
+  });
+
   it("renders a stale existing comment with the sc-stale class", () => {
     const { layer, parent } = setup();
     layer.addMany([
@@ -384,5 +401,124 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     layer.showPopover([1], { x: 100, y: 100 });
     expect(parent.querySelector(".sc-reply-input")).toBeNull();
     expect(parent.querySelector(".sc-act-done")).toBeNull();
+  });
+});
+
+describe("MarkerLayer — live refresh (hasNumber / updateContent)", () => {
+  function setup(): { doc: FakeDocument; layer: MarkerLayer; parent: any } {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    doc.body.appendChild(parent);
+    const layer = new MarkerLayer(doc as unknown as Document, parent as any);
+    return { doc, layer, parent };
+  }
+
+  it("hasNumber reflects which comment pins are placed", () => {
+    const { layer } = setup();
+    layer.add({ number: 7, rect: makeRect(100, 100, 0, 0) });
+    expect(layer.hasNumber(7)).toBe(true);
+    expect(layer.hasNumber(8)).toBe(false);
+  });
+
+  it("updateContent restyles a pin marked done elsewhere (dims to sc-resolved)", () => {
+    const { layer, parent } = setup();
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 0, 0),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open" },
+    });
+    layer.render({ width: 1000, height: 800 });
+    expect(parent.querySelector(".sc-marker.sc-resolved")).toBeNull();
+
+    layer.updateContent(1, {
+      id: "c1",
+      note: "hi",
+      authorDisplayName: "Ada",
+      status: "resolved",
+    });
+    expect(parent.querySelector(".sc-marker.sc-resolved")).not.toBeNull();
+  });
+
+  it("updateContent refreshes the note shown in the popover", () => {
+    const { layer, parent } = setup();
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 0, 0),
+      content: { id: "c1", note: "old note", authorDisplayName: "Ada" },
+    });
+    layer.updateContent(1, { id: "c1", note: "new note", authorDisplayName: "Ada" });
+    layer.showPopover([1], { x: 100, y: 100 });
+    const pop = parent.querySelector(".sc-comment-pop")!;
+    expect(pop.textContent).toContain("new note");
+    expect(pop.textContent).not.toContain("old note");
+  });
+
+  it("updateContent is a no-op for an unplaced number", () => {
+    const { layer } = setup();
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0) });
+    expect(() =>
+      layer.updateContent(99, { note: "x", authorDisplayName: "Y" }),
+    ).not.toThrow();
+    expect(layer.count()).toBe(1);
+  });
+});
+
+describe("MarkerLayer — live reply refresh (refreshOpenReplies)", () => {
+  function countingThread(): { thread: ThreadClient; calls: string[] } {
+    const calls: string[] = [];
+    const thread = {
+      listReplies: async (id: string) => {
+        calls.push(id);
+        return [];
+      },
+      createReply: async () => null,
+      resolve: async () => true,
+      deleteReply: async () => true,
+      deleteThread: async () => true,
+      markRead: async () => {},
+    } as unknown as ThreadClient;
+    return { thread, calls };
+  }
+
+  function layerWithThread(thread: ThreadClient) {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role: "member" },
+    );
+    return { layer, parent };
+  }
+
+  it("re-fetches replies for the open thread when a reply arrives live", async () => {
+    const { thread, calls } = countingThread();
+    const { layer } = layerWithThread(thread);
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    await Promise.resolve();
+    expect(calls).toEqual(["c1"]); // loaded once on open
+
+    layer.refreshOpenReplies();
+    await Promise.resolve();
+    expect(calls).toEqual(["c1", "c1"]); // reloaded live, same thread
+  });
+
+  it("is a no-op when no popover is open", () => {
+    const { thread, calls } = countingThread();
+    const { layer } = layerWithThread(thread);
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada" },
+    });
+    layer.refreshOpenReplies(); // nothing open
+    expect(calls).toEqual([]);
   });
 });

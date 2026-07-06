@@ -45,6 +45,9 @@ importers:
 
   apps/overlay:
     dependencies:
+      '@supabase/realtime-js':
+        specifier: 2.106.2
+        version: 2.106.2
       '@supercomment/shared':
         specifier: workspace:*
         version: link:../../packages/shared

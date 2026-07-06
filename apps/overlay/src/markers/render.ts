@@ -92,10 +92,15 @@ export class MarkerLayer {
    * U12: register MANY existing comments at once (loaded back on activate) and
    * repaint once. Unlike add(), these do NOT pop in — they are pre-existing, not
    * freshly created — and any marked stale renders in a distinct state.
+   *
+   * Idempotent by comment number: a number already placed is skipped, so the
+   * mount-time load and the live sync poll (or a device-mode re-hand-off) can
+   * never stack two pins for the same comment if they race.
    */
   addMany(markers: PlacedMarker[]): void {
-    if (markers.length === 0) return;
-    this.markers.push(...markers);
+    const fresh = markers.filter((m) => !this.hasNumber(m.number));
+    if (fresh.length === 0) return;
+    this.markers.push(...fresh);
     this.justAdded = null;
     this.render();
   }
@@ -103,6 +108,27 @@ export class MarkerLayer {
   /** Current marker count (for tests / debugging). */
   count(): number {
     return this.markers.length;
+  }
+
+  /** Whether a marker with this comment number is already placed. Lets the live
+   * comment sync skip re-adding a pin the reviewer already sees (e.g. their own
+   * just-submitted optimistic pin the server read now echoes back). */
+  hasNumber(number: number): boolean {
+    return this.markers.some((m) => m.number === number);
+  }
+
+  /**
+   * Replace a placed marker's content (and stale-ness) after a live re-read, and
+   * repaint so status-driven treatments update in place — e.g. a comment marked
+   * done by someone else dims its pin, an edited note refreshes the popover — all
+   * without re-anchoring or a full clear/repaint. No-op if the number isn't placed.
+   */
+  updateContent(number: number, content: MarkerComment, isStale?: boolean): void {
+    const m = this.markers.find((mk) => mk.number === number);
+    if (!m) return;
+    m.content = content;
+    if (isStale !== undefined) m.isStale = isStale;
+    this.render();
   }
 
   /** Hide/show every pin (used while the review session is lapsed). */
@@ -365,12 +391,31 @@ export class MarkerLayer {
     if (interactive) {
       const replies = this.doc.createElement("div");
       replies.className = "sc-reply-list";
+      // Tag the list with its thread id so a live reply refresh (0040) can reload
+      // just this list in place, without rebuilding the popover or the draft box.
+      replies.setAttribute("data-comment-id", commentId!);
       entry.appendChild(replies);
       void this.loadReplies(commentId!, replies);
       entry.appendChild(this.buildReplyBox(commentId!, replies));
     }
 
     return entry;
+  }
+
+  /**
+   * Re-fetch replies for every thread in the OPEN popover — a reply arrived live
+   * (broadcast) while the reviewer has the pin open. Only each `.sc-reply-list`'s
+   * contents are replaced (loadReplies does `replaceChildren`), so the popover,
+   * the reply-input box, and any half-typed draft survive. No-op when nothing is
+   * open or no thread client is wired.
+   */
+  refreshOpenReplies(): void {
+    if (!this.popover || !this.thread) return;
+    const lists = this.popover.querySelectorAll(".sc-reply-list");
+    for (const list of Array.from(lists as ArrayLike<Element>)) {
+      const id = (list as HTMLElement).getAttribute("data-comment-id");
+      if (id) void this.loadReplies(id, list as HTMLElement);
+    }
   }
 
   /** Mark-done toggle + the members-only "..." menu (delete thread). */

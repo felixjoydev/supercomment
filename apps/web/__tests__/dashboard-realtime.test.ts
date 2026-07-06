@@ -12,6 +12,7 @@ import {
   countByStatus,
   applyStatusTransition,
 } from "../lib/comments/view";
+import { applyBroadcast, readBroadcastChange } from "../lib/comments/realtime";
 
 /**
  * U9 dashboard — realtime merge, default view, sorting/filtering, and the
@@ -200,5 +201,117 @@ describe("trust display", () => {
   it("flags a guest comment as guest and a member comment as member", () => {
     expect(view({ id: "g", trust_level: "guest" }).trustLevel).toBe("guest");
     expect(view({ id: "m", trust_level: "member" }).trustLevel).toBe("member");
+  });
+});
+
+describe("applyBroadcast (realtime deliveries)", () => {
+  function commentPayload(over: Partial<CommentRow>, op: "INSERT" | "UPDATE" | "DELETE") {
+    return op === "DELETE"
+      ? { table: "comments", operation: op, record: null, old_record: row(over) }
+      : { table: "comments", operation: op, record: row(over), old_record: null };
+  }
+
+  function replyPayload(
+    fields: {
+      id?: string;
+      comment_id: string;
+      created_at?: string;
+      author_display_name?: string;
+      trust_level?: string;
+      body?: string;
+    },
+    op: "INSERT" | "DELETE",
+  ) {
+    const rec = {
+      id: fields.id ?? "r1",
+      comment_id: fields.comment_id,
+      preview_id: "p1",
+      created_at: fields.created_at ?? "2026-05-30T12:00:00.000Z",
+      author_display_name: fields.author_display_name ?? "Grace",
+      trust_level: fields.trust_level ?? "member",
+      body: fields.body ?? "a reply",
+    };
+    return op === "DELETE"
+      ? { table: "comment_replies", operation: op, record: null, old_record: rec }
+      : { table: "comment_replies", operation: op, record: rec, old_record: null };
+  }
+
+  /** A parent comment already READ by the viewer (lastReadAt after createdAt). */
+  function readParent(id = "a") {
+    const v = toCommentView(
+      row({ id, created_at: "2026-05-30T10:00:00.000Z" }),
+      { lastReadAt: "2026-05-30T11:00:00.000Z" },
+    );
+    expect(v.unread).toBe(false); // precondition: the viewer has read it
+    return v;
+  }
+
+  it("INSERT of a comment appends it", () => {
+    const list = [view({ id: "a" })];
+    const next = applyBroadcast(list, commentPayload({ id: "b", number: 2 }, "INSERT"), "INSERT");
+    expect(next.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("UPDATE replaces by id and preserves the viewer's read state", () => {
+    const next = applyBroadcast(
+      [readParent("a")],
+      commentPayload(
+        {
+          id: "a",
+          status: "resolved",
+          created_at: "2026-05-30T10:00:00.000Z",
+          status_changed_at: "2026-05-30T10:30:00.000Z",
+        },
+        "UPDATE",
+      ),
+      "UPDATE",
+    );
+    expect(next[0]!.status).toBe("resolved");
+    expect(next[0]!.unread).toBe(false); // status change predates last read → still read
+  });
+
+  it("DELETE of a comment removes it from the board (thread deleted elsewhere)", () => {
+    const list = [view({ id: "a" }), view({ id: "b", number: 2 })];
+    const next = applyBroadcast(list, commentPayload({ id: "a" }, "DELETE"), "DELETE");
+    expect(next.map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("a reply INSERT re-flags the PARENT unread and never adds a phantom card", () => {
+    const next = applyBroadcast(
+      [readParent("a")],
+      replyPayload({ comment_id: "a", created_at: "2026-05-30T12:00:00.000Z" }, "INSERT"),
+      "INSERT",
+    );
+    expect(next).toHaveLength(1); // no blank/phantom comment appended
+    expect(next[0]!.id).toBe("a");
+    expect(next[0]!.unread).toBe(true); // reply after last read → thread re-flagged unread
+    expect(next[0]!.latestReplyAt).toBe("2026-05-30T12:00:00.000Z");
+  });
+
+  it("a reply for a parent not on the board is a no-op (no phantom)", () => {
+    const list = [view({ id: "a" })];
+    const next = applyBroadcast(list, replyPayload({ comment_id: "missing" }, "INSERT"), "INSERT");
+    expect(next).toBe(list); // unchanged reference
+  });
+
+  it("deleting the newest reply clears latestReplyAt so an open thread re-fetches", () => {
+    const parent = toCommentView(
+      row({ id: "a", created_at: "2026-05-30T10:00:00.000Z" }),
+      { lastReadAt: "2026-05-30T09:00:00.000Z", latestReplyAt: "2026-05-30T12:00:00.000Z" },
+    );
+    expect(parent.latestReplyAt).toBe("2026-05-30T12:00:00.000Z");
+    const next = applyBroadcast(
+      [parent],
+      replyPayload({ comment_id: "a", created_at: "2026-05-30T12:00:00.000Z" }, "DELETE"),
+      "DELETE",
+    );
+    expect(next[0]!.latestReplyAt).toBeNull();
+  });
+
+  it("readBroadcastChange unwraps an extra { payload } nesting", () => {
+    const inner = { table: "comments", record: { id: "z" } };
+    expect(readBroadcastChange({ payload: inner })?.record?.id).toBe("z");
+    expect(readBroadcastChange(inner)?.table).toBe("comments");
+    expect(readBroadcastChange(null)).toBeNull();
   });
 });
