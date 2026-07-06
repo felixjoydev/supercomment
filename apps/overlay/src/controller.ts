@@ -901,6 +901,25 @@ export class OverlayController {
   attachRealtime(subscription: { close(): void }): void {
     this.realtime?.close();
     this.realtime = subscription;
+    // Show the dot immediately (amber) until the socket reports SUBSCRIBED.
+    this.toolbar.setConnection("connecting");
+  }
+
+  /**
+   * Reflect the realtime channel status on the toolbar's live dot (wired from the
+   * subscription's status callback): SUBSCRIBED = live, hard errors = reconnecting
+   * (the poll fallback still runs), anything else = connecting.
+   */
+  setRealtimeStatus(status: string): void {
+    const state =
+      status === "SUBSCRIBED"
+        ? "live"
+        : status === "CHANNEL_ERROR" ||
+            status === "TIMED_OUT" ||
+            status === "CLOSED"
+          ? "error"
+          : "connecting";
+    this.toolbar.setConnection(state);
   }
 
   /**

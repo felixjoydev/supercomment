@@ -147,6 +147,56 @@ export const TOOLBAR_STYLES = `/* Toolbar --------------------------------------
   transform: scale(0.96);
 }
 
+/* Live realtime status dot (embedded review only) --------------------- */
+/* Hidden until the controller reports a connection state, so tunnel / stub
+   mounts (no realtime) never show it. Mirrors the dashboard's Live indicator. */
+.sc-live {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+  position: relative;
+}
+.sc-live.is-live,
+.sc-live.is-connecting,
+.sc-live.is-error {
+  display: inline-block;
+}
+.sc-live.is-live {
+  background: #2f9e6f;
+}
+.sc-live.is-connecting {
+  background: #d9a441;
+}
+.sc-live.is-error {
+  background: #d0552f;
+}
+.sc-live.is-live::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background: #2f9e6f;
+  opacity: 0.35;
+  animation: sc-live-pulse 2s var(--ease-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-live.is-live::before {
+    animation: none;
+  }
+}
+@keyframes sc-live-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
 /* Multi confirm ------------------------------------------------------- */
 .sc-multi-confirm {
   appearance: none;

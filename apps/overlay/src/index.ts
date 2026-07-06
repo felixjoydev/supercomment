@@ -425,6 +425,7 @@ async function activateSession(
         previewId: session.previewId,
         getAccessToken,
         onChange: () => controller.scheduleLiveRefresh(),
+        onStatus: (status) => controller.setRealtimeStatus(status),
       }),
     );
   } catch {

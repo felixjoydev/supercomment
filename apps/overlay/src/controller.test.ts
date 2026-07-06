@@ -716,6 +716,24 @@ describe("OverlayController — live comment sync", () => {
   });
 });
 
+describe("OverlayController — realtime connection indicator", () => {
+  it("reflects the realtime status on the toolbar live dot", () => {
+    const { controller, q } = makeController();
+    // Hidden (no state class) until realtime is attached — tunnel/stub never show it.
+    expect(q(".sc-live")).not.toBeNull();
+    expect(q(".sc-live")!.className).toBe("sc-live");
+
+    controller.attachRealtime({ close() {} });
+    expect(q(".sc-live")!.className).toContain("is-connecting");
+
+    controller.setRealtimeStatus("SUBSCRIBED");
+    expect(q(".sc-live")!.className).toContain("is-live");
+
+    controller.setRealtimeStatus("CHANNEL_ERROR");
+    expect(q(".sc-live")!.className).toContain("is-error");
+  });
+});
+
 describe("OverlayController — composer reference images (U17/R19)", () => {
   function attachReference(q: (sel: string) => FakeElement | null): void {
     const input = q(".sc-ref-input")!;

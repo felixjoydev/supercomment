@@ -60,6 +60,8 @@ export class Toolbar {
   private readonly buttons = new Map<SelectionMode, HTMLButtonElement>();
   private readonly confirmBtn: HTMLButtonElement;
   private readonly chipName: HTMLElement;
+  /** Live realtime connection dot; hidden until setConnection reports a state. */
+  private readonly live: HTMLElement;
   private pillPlaced = false;
   private readonly listeners = createListenerBag();
 
@@ -123,6 +125,11 @@ export class Toolbar {
 
     const chip = doc.createElement("div");
     chip.className = "sc-chip";
+    // Live realtime status dot (embedded review). Hidden until the controller
+    // reports a connection state, so tunnel / stub mounts never show it.
+    this.live = doc.createElement("span");
+    this.live.className = "sc-live";
+    this.live.setAttribute("aria-hidden", "true");
     const reviewing = doc.createElement("span");
     reviewing.textContent = "Reviewing as ";
     this.chipName = doc.createElement("span");
@@ -133,7 +140,7 @@ export class Toolbar {
     change.className = "sc-chip-change";
     change.textContent = "Change";
     change.addEventListener("click", () => callbacks.onChangeName());
-    chip.append(reviewing, this.chipName, change);
+    chip.append(this.live, reviewing, this.chipName, change);
 
     this.el.append(this.confirmBtn, sep, chip);
 
@@ -204,6 +211,22 @@ export class Toolbar {
   /** Update the reviewer chip name (R24 "Reviewing as <name>"). */
   setReviewerName(name: string | null): void {
     this.chipName.textContent = name ?? "guest";
+  }
+
+  /**
+   * Reflect the live realtime connection state as a small dot on the reviewer
+   * chip: green pulse = live (updates arrive instantly), amber = connecting,
+   * red = reconnecting (the background poll still keeps things fresh). Making it
+   * visible so the reviewer can tell realtime is working, not a black box.
+   */
+  setConnection(state: "connecting" | "live" | "error"): void {
+    this.live.className = `sc-live is-${state}`;
+    this.live.title =
+      state === "live"
+        ? "Live — updates appear instantly"
+        : state === "error"
+          ? "Reconnecting — still syncing in the background"
+          : "Connecting…";
   }
 
   /**
