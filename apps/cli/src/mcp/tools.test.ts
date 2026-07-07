@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   CaptureFidelity,
   CapturedContext,
+  DesignGrounding,
   Intent,
   McpComment,
   Severity,
@@ -17,8 +18,10 @@ import {
   handleListProjects,
   handleResolveComment,
   handleUseProject,
+  MATURE_DESIGN_GROUNDING_GUIDANCE,
   registerTools,
   STANDING_GUIDANCE,
+  THIN_DESIGN_GROUNDING_GUIDANCE,
   TOOL_NAMES,
   UNTRUSTED_INPUT_NOTICE,
   type McpServerLike,
@@ -45,6 +48,17 @@ const fakeDiscovery: RepoDiscoverySeam = { discover: () => DEGRADED_RESULT };
  */
 const fakeDiscoveryWithDocs: RepoDiscoverySeam = {
   discover: () => ({ governanceDocs: ["AGENTS.md"], maturity: "mature" }),
+};
+
+/** U9 test fixtures: discovery seams reporting each maturity read, no governance docs. */
+const fakeDiscoveryMature: RepoDiscoverySeam = {
+  discover: () => ({ governanceDocs: [], maturity: "mature" }),
+};
+const fakeDiscoveryThin: RepoDiscoverySeam = {
+  discover: () => ({ governanceDocs: [], maturity: "thin" }),
+};
+const fakeDiscoveryIndeterminate: RepoDiscoverySeam = {
+  discover: () => ({ governanceDocs: [], maturity: "indeterminate" }),
 };
 
 function uuid(n: number): string {
@@ -1072,5 +1086,197 @@ describe("U8 always-on standing guidance", () => {
     );
     expect(gotPayload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
     expect(gotPayload.governanceDocs).toEqual(["AGENTS.md"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U9 — design-context grounding + maturity read (R15-R18)
+// ---------------------------------------------------------------------------
+
+describe("U9 design-context grounding", () => {
+  /**
+   * Register tools against an in-memory map of plain handlers (mirrors
+   * `wireTools` in the U6 block above), parametrized by discovery so the
+   * maturity read can vary per test.
+   */
+  function wireWithDiscovery(
+    store: InMemoryCommentStore,
+    discovery: RepoDiscoverySeam,
+  ) {
+    const registered = new Map<
+      string,
+      (args: Record<string, unknown>) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        structuredContent?: unknown;
+        isError?: boolean;
+      }>
+    >();
+    const fakeServer: McpServerLike = {
+      registerTool(name, _config, handler) {
+        registered.set(name, handler);
+      },
+    };
+    registerTools(fakeServer, store, discovery);
+    return registered;
+  }
+
+  type GetCommentPayload = {
+    comment: McpComment | null;
+    designGrounding?: DesignGrounding;
+  };
+
+  /** Fetch #1's design_grounding via get_comment, for a single comment carrying `context`. */
+  async function groundingFor(
+    context: CapturedContext,
+    discovery: RepoDiscoverySeam,
+  ): Promise<DesignGrounding | undefined> {
+    const store = new InMemoryCommentStore([
+      { ...makeComment({ number: 1, trustLevel: "member" }), context },
+    ]);
+    const registered = wireWithDiscovery(store, discovery);
+    const result = await registered.get("get_comment")!({ number: 1 });
+    const payload = result.structuredContent as GetCommentPayload;
+    return payload.designGrounding;
+  }
+
+  it("AE3: a THIN repo's guidance defers to the reference/thread rather than pattern-conformance", async () => {
+    const grounding = await groundingFor(
+      { ...ctx(), referenceImages: ["prev/ref.png"] },
+      fakeDiscoveryThin,
+    );
+    expect(grounding?.maturity).toBe("thin");
+    expect(grounding?.guidance.toLowerCase()).toContain(
+      "lean more on the reference image/thread's converged intent",
+    );
+  });
+
+  it("AE3: a MATURE repo's guidance still yields to a converged reference/thread AND tells the agent to flag the divergence", async () => {
+    const grounding = await groundingFor(ctx(), fakeDiscoveryMature);
+    expect(grounding?.maturity).toBe("mature");
+    // Not just "prefer patterns" — a converged reference/thread still wins...
+    expect(grounding?.guidance).toContain(
+      "if the thread's converged intent (including a resolved reference " +
+        "image) conflicts with the repo's existing patterns, follow the " +
+        "thread's intent",
+    );
+    // ...and the agent must FLAG the divergence rather than silently pick one.
+    expect(grounding?.guidance.toLowerCase()).toContain("flag the divergence");
+  });
+
+  it("emits the exact exported guidance constants (no drift between the constant and what ships)", async () => {
+    const mature = await groundingFor(ctx(), fakeDiscoveryMature);
+    expect(mature?.guidance).toBe(MATURE_DESIGN_GROUNDING_GUIDANCE);
+    const thin = await groundingFor(ctx(), fakeDiscoveryThin);
+    expect(thin?.guidance).toBe(THIN_DESIGN_GROUNDING_GUIDANCE);
+  });
+
+  it("R12 sanity: neither guidance variant is worded as 'prefer computed styles over the reference'", async () => {
+    const mature = await groundingFor(ctx(), fakeDiscoveryMature);
+    const thin = await groundingFor(ctx(), fakeDiscoveryThin);
+    for (const g of [mature, thin]) {
+      expect(g?.guidance.toLowerCase()).not.toContain(
+        "prefer computed styles over the reference",
+      );
+    }
+  });
+
+  it("source: a real build-time stamp becomes the PRIMARY pointer, in sourceRefFromContext's exact format", async () => {
+    const grounding = await groundingFor(
+      {
+        ...ctx(),
+        react: {
+          componentPath: ["App", "Button"],
+          sourceFile: "src/Button.tsx",
+          sourceLine: 42,
+        },
+      },
+      fakeDiscoveryMature,
+    );
+    expect(grounding?.source).toBe("src/Button.tsx:42");
+  });
+
+  it("degrades to selector only when there is no react context at all — never a fabricated path", async () => {
+    const grounding = await groundingFor(ctx(), fakeDiscoveryThin);
+    expect(grounding?.source).toBeNull();
+    expect(grounding?.selector).toBe("button.cta");
+    expect(grounding && "componentPath" in grounding).toBe(false);
+  });
+
+  it("degrades to selector + componentPath when react exists but sourceFile was never stamped", async () => {
+    const grounding = await groundingFor(
+      { ...ctx(), react: { componentPath: ["App", "Button"] } },
+      fakeDiscoveryThin,
+    );
+    expect(grounding?.source).toBeNull();
+    expect(grounding?.selector).toBe("button.cta");
+    expect(grounding?.componentPath).toEqual(["App", "Button"]);
+  });
+
+  it("indeterminate is treated EXACTLY like thin — identical guidance/maturity, no third code path", async () => {
+    const thin = await groundingFor(ctx(), fakeDiscoveryThin);
+    const indeterminate = await groundingFor(ctx(), fakeDiscoveryIndeterminate);
+    expect(indeterminate?.maturity).toBe("thin");
+    expect(indeterminate).toEqual(thin);
+  });
+
+  it("happy path: the grounding block rides get_comment's output ONLY — list tools never carry it", async () => {
+    const store = new InMemoryCommentStore([
+      makeComment({ number: 1, trustLevel: "member" }),
+      makeComment({ number: 2, trustLevel: "member" }),
+    ]);
+    const registered = wireWithDiscovery(store, fakeDiscoveryMature);
+
+    const list = await registered.get("list_open_comments")!({});
+    const listPayload = list.structuredContent as Record<string, unknown> & {
+      comments: Record<string, unknown>[];
+    };
+    expect("designGrounding" in listPayload).toBe(false);
+    for (const c of listPayload.comments) {
+      expect("designGrounding" in c).toBe(false);
+    }
+
+    const allOpen = await registered.get("get_all_open")!({});
+    expect(
+      "designGrounding" in (allOpen.structuredContent as Record<string, unknown>),
+    ).toBe(false);
+
+    const got = await registered.get("get_comment")!({ number: 1 });
+    const gotPayload = got.structuredContent as GetCommentPayload;
+    expect(gotPayload.designGrounding).toBeDefined();
+  });
+
+  it("omits the grounding block when the comment number does not exist at all", async () => {
+    const store = new InMemoryCommentStore([
+      makeComment({ number: 1, trustLevel: "member" }),
+    ]);
+    const registered = wireWithDiscovery(store, fakeDiscoveryMature);
+    const missing = await registered.get("get_comment")!({ number: 99 });
+    const missingPayload = missing.structuredContent as GetCommentPayload;
+    expect(missingPayload.comment).toBeNull();
+    expect(missingPayload.designGrounding).toBeUndefined();
+  });
+
+  it("still attaches grounding for a resolved (not-actionable) comment, since `comment` is non-null", async () => {
+    const store = new InMemoryCommentStore([
+      makeComment({ number: 1, trustLevel: "member", status: "resolved" }),
+    ]);
+    const registered = wireWithDiscovery(store, fakeDiscoveryMature);
+    const got = await registered.get("get_comment")!({ number: 1 });
+    const payload = got.structuredContent as GetCommentPayload;
+    expect(payload.comment).not.toBeNull();
+    expect(payload.designGrounding).toBeDefined();
+  });
+
+  it("stays token-bounded: computedStyles pass through as-is, and the full context is never duplicated inside the block", async () => {
+    const computedStyles = { color: "rgb(17, 24, 39)", fontSize: "14px" };
+    const grounding = await groundingFor(
+      { ...ctx(), computedStyles },
+      fakeDiscoveryMature,
+    );
+    expect(grounding?.computedStyles).toEqual(computedStyles);
+    // Nothing else from `context` rides along inside the block.
+    expect(grounding && "anchors" in grounding).toBe(false);
+    expect(grounding && "url" in grounding).toBe(false);
+    expect(grounding && "context" in grounding).toBe(false);
   });
 });

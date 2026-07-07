@@ -125,13 +125,15 @@ export type McpComment = z.infer<typeof mcpCommentSchema>;
  *     never clutters a result with a repo that has no governance docs.
  *  4. Design-grounding slot — a focus-read (`GetCommentOutput`) addition
  *     carrying source/current-style pointers plus the maturity read
- *     (R16/R17); U9 owns the field name, fed by the same U12 seam.
+ *     (R16/R17). U9 SHIPS this as `designGrounding: DesignGrounding` (see
+ *     `designGroundingSchema` below), attached ONLY when `comment` is
+ *     non-null (a missing/not-actionable comment has nothing to ground) —
+ *     fed by the SAME U12 discovery seam slot 3 uses, but reading its
+ *     `maturity` field rather than `governanceDocs`. Real per-comment payload
+ *     weight (R18), so this never rides `ListOpenCommentsOutput`.
  *
- * Slot 4 deliberately gets no placeholder field yet: its shape depends on
- * parts of the U12 discovery seam this unit does not touch, and a guessed
- * shape would just be replaced. Slots 1-3 are real, needed-now additions, so
- * they are shaped precisely (1-2 above; 3 below, alongside the schemas it
- * attaches to).
+ * All four slots are now real, needed-now additions, so they are shaped
+ * precisely: 1-2 above; 3-4 below, alongside the schemas they attach to.
  */
 
 /**
@@ -150,6 +152,52 @@ export type McpComment = z.infer<typeof mcpCommentSchema>;
  * default (unlike a zero withheld-count, which IS a meaningful signal).
  */
 const governanceDocsField = z.array(z.string()).optional();
+
+/**
+ * Design-grounding block (U9, envelope-contract slot 4 above) — attached ONLY
+ * to `getCommentOutputSchema` (never `listOpenCommentsOutputSchema`): this is
+ * real per-comment payload weight, unlike the lightweight `governanceDocsField`
+ * pointer list, so it stays scoped to the focus read (R18).
+ *
+ * `source` is the PRIMARY pointer: the shared `sourceRefFromContext` (U11)'s
+ * `file:line` string when the build stamped one, else `null` — NEVER a
+ * fabricated path (R16, the same convention as `editTargetSchema`'s
+ * `sourceUnknown` in change-set.ts: rely on the fallback pointers, don't
+ * guess). When `source` is null the agent falls back to `selector` (always
+ * present) and `componentPath` (present whenever the comment's `context.react`
+ * exists, independently of whether a source stamp was captured — see
+ * `reactContextSchema`, where `componentPath` is required but `sourceFile` is
+ * separately optional). `computedStyles` is passed through AS-IS from
+ * `context.computedStyles` — already curated at capture time, so this does not
+ * run a second curation pass.
+ *
+ * `maturity` folds the U12 seam's `"indeterminate"` into `"thin"` for the
+ * agent-facing read (R17) — this schema only ever carries the two-value
+ * simplified reading, never the raw three-value enum. `guidance` is the
+ * sentence actually handed to the agent: a DEFAULT that yields to the
+ * thread's converged intent (R15), never an absolute override — see
+ * `MATURE_DESIGN_GROUNDING_GUIDANCE`/`THIN_DESIGN_GROUNDING_GUIDANCE` in
+ * apps/cli/src/mcp/tools.ts for the exact wording. R12: this must never be
+ * worded as "prefer computed styles over the reference" — a resolved
+ * reference still outranks computed styles as the design target (handled
+ * upstream by U7); this block only points at source/styles, it never re-ranks
+ * the reference below them.
+ */
+export const designGroundingSchema = z.object({
+  /** "file:line" from the build-time source stamp, or `null` when absent (never fabricated, R16). */
+  source: z.string().nullable(),
+  /** Always-present fallback pointer: the element's captured selector. */
+  selector: z.string(),
+  /** Component display-name chain, present only when a `react` context exists. */
+  componentPath: z.array(z.string()).optional(),
+  /** Pass-through of `context.computedStyles` as captured (no new curation pass). */
+  computedStyles: z.record(z.string(), z.string()).optional(),
+  /** The maturity read, `"indeterminate"` folded into `"thin"` (R17). */
+  maturity: z.enum(["mature", "thin"]),
+  /** The guidance sentence handed to the agent (see the constants in tools.ts). */
+  guidance: z.string(),
+});
+export type DesignGrounding = z.infer<typeof designGroundingSchema>;
 
 /** Output for `list_open_comments`. */
 export const listOpenCommentsOutputSchema = z.object({
@@ -170,6 +218,8 @@ export const getCommentOutputSchema = z.object({
   notActionableReason: z.string().optional(),
   /** See `governanceDocsField` above. */
   governanceDocs: governanceDocsField,
+  /** See `designGroundingSchema` above (envelope-contract slot 4, U9). */
+  designGrounding: designGroundingSchema.optional(),
 });
 export type GetCommentOutput = z.infer<typeof getCommentOutputSchema>;
 

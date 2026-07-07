@@ -29,11 +29,21 @@
  *   re-serialized per call, see `STANDING_GUIDANCE`'s doc-comment) — plus,
  *   when the U12 discovery seam found any, a `governanceDocs` pointer list
  *   attached ONCE per result envelope (see `attachGovernanceDocs`).
+ *
+ * U9 design-grounding block (R15/R16/R17/R18):
+ *   `get_comment`'s FOCUS READ ONLY (never list_open_comments/get_all_open —
+ *   R18, this is real per-comment payload weight, not a lightweight pointer
+ *   list) also carries `designGrounding` — the element's real source location
+ *   (or safe fallback pointers, never a fabricated path) plus the U12 seam's
+ *   maturity read, worded as a default that yields to the thread's converged
+ *   intent (see `attachDesignGrounding`/`buildDesignGrounding`).
  */
 import {
   curateContextForAgent,
+  sourceRefFromContext,
   summarizeChangeSet,
   summarizeContextSignals,
+  type DesignGrounding,
   type GetCommentOutput,
   type ListOpenCommentsOutput,
   type McpComment,
@@ -46,7 +56,7 @@ import {
   type CommentStore,
   type ProjectSummary,
 } from "./store.js";
-import type { RepoDiscoverySeam } from "./repo-discovery.js";
+import type { Maturity, RepoDiscoverySeam } from "./repo-discovery.js";
 
 /**
  * Relevance layer (agent payload curation).
@@ -253,6 +263,39 @@ export const STANDING_GUIDANCE =
   "within the requested scope, prefer small surgical changes, preserve " +
   "existing behavior and accessibility, and reuse the project's existing " +
   "patterns/components over inventing new ones.";
+
+/**
+ * U9 — design-grounding guidance sentences (R15/R16/R17), attached to
+ * `get_comment`'s (focus-read only) `designGrounding.guidance` via
+ * `buildDesignGrounding` below. Selected by the U12 discovery seam's
+ * `maturity` read; `"indeterminate"` folds into the THIN variant (R17:
+ * "maturity indeterminate is treated as thin").
+ *
+ * Both are DEFAULTS (R15), never absolute overrides: each explicitly states
+ * that a converged reference/thread intent still wins over the
+ * pattern-conformance guidance where the two conflict — this must never be
+ * worded as "prefer computed styles over the reference" (R12); a resolved
+ * reference already outranks computed styles as the design target (U7's
+ * `UNTRUSTED_INPUT_NOTICE` widening + the store's resolve logic), and this
+ * text must not contradict that ranking. The MATURE variant additionally
+ * tells the agent to FLAG the divergence rather than silently pick one, since
+ * a mature repo's own conventions are worth surfacing as a note even when a
+ * converged intent overrides them.
+ */
+export const MATURE_DESIGN_GROUNDING_GUIDANCE =
+  "This repo's design system reads as mature: read its existing components " +
+  "and design tokens from the source and match them, rather than inventing " +
+  "new patterns. Default only (R15) — if the thread's converged intent " +
+  "(including a resolved reference image) conflicts with the repo's existing " +
+  "patterns, follow the thread's intent, but flag the divergence from " +
+  "convention rather than silently overriding it.";
+
+export const THIN_DESIGN_GROUNDING_GUIDANCE =
+  "This repo's design system reads as thin or work-in-progress: there may " +
+  "not be much established convention to match, so lean more on the " +
+  "reference image/thread's converged intent than on existing patterns. " +
+  "Default only (R15) — a converged reference/thread intent always wins over " +
+  "any partial or inconsistent existing patterns found here.";
 
 // ---------------------------------------------------------------------------
 // Pure handlers (testable without the SDK)
@@ -511,12 +554,74 @@ function labeledCommentResult(
  * never picks up defaults-only clutter. Deliberately narrow: only
  * `governanceDocs` crosses this boundary — `maturity` is U9's separate
  * concern (design-grounding slot 4) and must never leak in here.
+ *
+ * Used directly by `list_open_comments`/`get_all_open`, which need nothing
+ * from `discovery` beyond `governanceDocs`. `get_comment` ALSO needs
+ * `maturity` (for `attachDesignGrounding` below), so its registration calls
+ * `discovery.discover(...)` itself once and applies both attachments from
+ * that single result, rather than calling through this helper (which would
+ * mean a second, redundant `discover()` call in the same handler — harmless
+ * since `discover()` is a pure precomputed lookup, but avoidable).
  */
 function attachGovernanceDocs<
   T extends ListOpenCommentsOutput | GetCommentOutput,
 >(payload: T, discovery: RepoDiscoverySeam, store: CommentStore): T {
   const { governanceDocs } = discovery.discover(store.getActivePreview());
   return governanceDocs.length > 0 ? { ...payload, governanceDocs } : payload;
+}
+
+/**
+ * U9 — assemble the design-grounding block for ONE comment (R16/R17,
+ * envelope-contract slot 4 in packages/shared/src/schema/mcp.ts).
+ *
+ * `source` is the PRIMARY pointer, via the shared `sourceRefFromContext`
+ * (U11) — a real `"file:line"` when the build stamped one, else `null`,
+ * NEVER a fabricated path. When `source` is null the agent falls back to
+ * `selector` (always present on `CapturedContext`) and `componentPath`
+ * (present whenever `context.react` exists, independently of whether a
+ * source stamp was captured — `componentPath` is required within
+ * `reactContextSchema`, `sourceFile`/`sourceLine` are separately optional).
+ * `computedStyles` is passed through AS-IS from `context.computedStyles` —
+ * it is already curated at capture time (the relevance layer); re-curating
+ * it here would duplicate that pass.
+ */
+function buildDesignGrounding(
+  comment: McpComment,
+  maturity: Maturity,
+): DesignGrounding {
+  const { context } = comment;
+  const isMature = maturity === "mature"; // "indeterminate" folds into thin (R17)
+  return {
+    source: sourceRefFromContext(context),
+    selector: context.selector,
+    ...(context.react ? { componentPath: context.react.componentPath } : {}),
+    ...(context.computedStyles
+      ? { computedStyles: context.computedStyles }
+      : {}),
+    maturity: isMature ? "mature" : "thin",
+    guidance: isMature
+      ? MATURE_DESIGN_GROUNDING_GUIDANCE
+      : THIN_DESIGN_GROUNDING_GUIDANCE,
+  };
+}
+
+/**
+ * U9 — attach the design-grounding block to `get_comment`'s FOCUS READ ONLY
+ * output (never `list_open_comments`/`get_all_open` — R18: this is real
+ * per-comment payload weight, unlike the lightweight `governanceDocs` pointer
+ * list attached by `attachGovernanceDocs` above). Attached only when
+ * `payload.comment` is non-null: a missing/not-actionable comment has
+ * nothing to ground.
+ */
+function attachDesignGrounding(
+  payload: GetCommentOutput,
+  maturity: Maturity,
+): GetCommentOutput {
+  if (!payload.comment) return payload;
+  return {
+    ...payload,
+    designGrounding: buildDesignGrounding(payload.comment, maturity),
+  };
 }
 
 /**
@@ -527,11 +632,13 @@ function attachGovernanceDocs<
  * fingerprint, computed at most once per server process (see
  * `repo-discovery.ts`). The comment-hand-off-carrying tools
  * (`list_open_comments`/`get_all_open`/`get_comment`) call
- * `discovery.discover(store.getActivePreview())` once per invocation and
- * attach the result via `attachGovernanceDocs` above (U8); `resolve_comment`/
- * `dismiss_comment`/`list_projects`/`use_project` don't carry a hand-off and
- * so never touch `discovery`. U9 (design grounding) will read the same seam's
- * `maturity` field from within `get_comment`'s handler.
+ * `discovery.discover(store.getActivePreview())` once per invocation.
+ * `list_open_comments`/`get_all_open` attach the result via
+ * `attachGovernanceDocs` above (U8); `get_comment` attaches BOTH
+ * `governanceDocs` and `designGrounding` (U9) from that single `discover()`
+ * call (see `attachDesignGrounding`/`buildDesignGrounding` above).
+ * `resolve_comment`/`dismiss_comment`/`list_projects`/`use_project` don't
+ * carry a hand-off and so never touch `discovery`.
  *
  * Zod input schemas are passed as a raw shape (the SDK expects a ZodRawShape).
  * We declare them inline with zod to keep the binding-free handler functions
@@ -611,7 +718,10 @@ export function registerTools(
         "trust_level is included so untrusted (guest) content is visible. " +
         "Includes the FULL private_prompt (a member's trusted instruction, " +
         "R4/R5) when one exists — unlike the list tools' presence+first-line " +
-        "view. " +
+        "view. Also includes a design_grounding block: the element's real " +
+        "source location (or safe fallback pointers, never a fabricated " +
+        "path) plus a design-system maturity read, worded as a default that " +
+        "yields to the thread's converged intent. " +
         STANDING_GUIDANCE,
       inputSchema: {
         number: numberArg("The per-preview comment number to fetch."),
@@ -622,7 +732,19 @@ export function registerTools(
         const out = await handleGetComment(store, {
           number: Number(args.number),
         });
-        return labeledCommentResult(attachGovernanceDocs(out, discovery, store));
+        // Single discover() call feeds BOTH U8's governanceDocs and U9's
+        // design grounding (unlike list_open_comments/get_all_open above,
+        // which only need governanceDocs and go through attachGovernanceDocs
+        // directly) — see the doc-comments on attachGovernanceDocs/
+        // attachDesignGrounding for why this handler diverges.
+        const discovered = discovery.discover(store.getActivePreview());
+        const withDocs: GetCommentOutput =
+          discovered.governanceDocs.length > 0
+            ? { ...out, governanceDocs: discovered.governanceDocs }
+            : out;
+        return labeledCommentResult(
+          attachDesignGrounding(withDocs, discovered.maturity),
+        );
       } catch (err) {
         return jsonResult({ error: errorMessage(err) }, true);
       }
