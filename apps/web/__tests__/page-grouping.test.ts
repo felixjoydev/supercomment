@@ -34,6 +34,7 @@ function mk(over: Partial<CommentView>): CommentView {
     latestReplyAt: over.latestReplyAt ?? null,
     lastReadAt: over.lastReadAt ?? null,
     unread: over.unread ?? false,
+    privatePrompt: over.privatePrompt ?? null,
     ...over,
   };
 }

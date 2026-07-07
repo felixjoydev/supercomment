@@ -67,5 +67,14 @@ export interface CommentView {
   lastReadAt: string | null;
   /** Per-viewer thread-aware unread, derived from the three timestamps above. */
   unread: boolean;
+  /**
+   * Member-only private instruction for the agent (agent_prompts, U2/U4).
+   * Null when no member has written one, OR when one was written and then
+   * cleared (an empty save deletes the row — both collapse to the same
+   * zero-rows state, see 0043_agent_prompt.sql). NEVER surfaced to guests;
+   * hydrated on initial load in getCommentsForPreview, kept live via
+   * onLocalUpdate after an in-session edit.
+   */
+  privatePrompt: { body: string; authorDisplayName: string } | null;
 }
 
