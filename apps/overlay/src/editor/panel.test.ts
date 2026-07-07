@@ -46,12 +46,14 @@ function mount(opts?: {
   el?: FakeElement;
   doc?: FakeDocument;
   canSendToAgent?: boolean;
+  isMember?: boolean;
+  initialPromptText?: string;
 }) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
   const el = opts?.el ?? makeEl(doc, "button", "Buy");
   const session = new EditSession();
-  const state = { closed: false, saved: false, sentToAgent: false };
+  const state = { closed: false, saved: false, sentToAgent: false, promptText: "" };
   const cb: PanelCallbacks = {
     record: (op) => session.record(op),
     removeEdit: (op) => session.remove(op),
@@ -71,6 +73,15 @@ function mount(opts?: {
           canSendToAgent: true,
           onSendToAgent: () => {
             state.sentToAgent = true;
+          },
+        }
+      : {}),
+    ...(opts?.isMember
+      ? {
+          isMember: true,
+          getPromptText: () => opts.initialPromptText ?? "",
+          onPromptChange: (text: string) => {
+            state.promptText = text;
           },
         }
       : {}),
@@ -383,6 +394,49 @@ describe("PropertiesPanel — footer (N edits · Undo · Save comment)", () => {
     expect(maybe(".sc-ep-save")).not.toBeNull();
     q(".sc-ep-send").dispatch("click", {});
     expect(state.sentToAgent).toBe(true);
+  });
+});
+
+describe("PropertiesPanel — agent prompt field (U5, member-only, AE5)", () => {
+  it("does not render the prompt field for a non-member session (default)", () => {
+    const { doc } = makeFakeDom();
+    const { maybe } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    expect(maybe(".sc-ep-prompt")).toBeNull();
+  });
+
+  it("does not render the prompt field when isMember is explicitly false (guest)", () => {
+    const { doc } = makeFakeDom();
+    const { maybe } = mount({ el: makeEl(doc, "h1", "Hero"), doc, isMember: false });
+    expect(maybe(".sc-ep-prompt")).toBeNull();
+  });
+
+  it("renders the prompt field for a member session, independent of canSendToAgent", () => {
+    const { doc } = makeFakeDom();
+    const { maybe } = mount({ el: makeEl(doc, "h1", "Hero"), doc, isMember: true });
+    expect(maybe(".sc-ep-prompt")).not.toBeNull();
+    // Member-only gating, not also grant-gating: no send button, but the
+    // prompt field is still present.
+    expect(maybe(".sc-ep-send")).toBeNull();
+  });
+
+  it("captures typed text via onPromptChange on every keystroke", () => {
+    const { doc } = makeFakeDom();
+    const { q, state } = mount({ el: makeEl(doc, "h1", "Hero"), doc, isMember: true });
+    const field = q(".sc-ep-prompt");
+    field.value = "Make this pop";
+    field.dispatch("input", {});
+    expect(state.promptText).toBe("Make this pop");
+  });
+
+  it("pre-fills the field from getPromptText at construction (survives switching elements)", () => {
+    const { doc } = makeFakeDom();
+    const { q } = mount({
+      el: makeEl(doc, "h1", "Hero"),
+      doc,
+      isMember: true,
+      initialPromptText: "Earlier text",
+    });
+    expect(q(".sc-ep-prompt").value).toBe("Earlier text");
   });
 });
 

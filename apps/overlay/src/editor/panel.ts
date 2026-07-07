@@ -60,6 +60,22 @@ export interface PanelCallbacks {
   canSendToAgent?: boolean;
   /** Phase 2: "Send to agent" — save the template AND enqueue it for the agent. */
   onSendToAgent?(): void;
+  /**
+   * U5 (R1-R3/R6): true for a workspace MEMBER session — renders the private
+   * "Prompt for agent" field, independent of `canSendToAgent` (a member without
+   * the send-to-agent grant can still author a prompt for someone else to send
+   * later from the dashboard). A guest session: false, and the field does not
+   * render at all.
+   */
+  isMember?: boolean;
+  /**
+   * U5: read ONCE at construction to pre-fill the prompt field, so a reviewer's
+   * typed-but-unsaved prompt survives switching to edit a different element
+   * within the same edit session. Omit (or return "") for a blank field.
+   */
+  getPromptText?(): string;
+  /** U5: fires on every keystroke in the prompt field with its current value. */
+  onPromptChange?(text: string): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -525,6 +541,25 @@ export class PropertiesPanel {
 
   private buildFooter(): void {
     const footer = this.create("div", "sc-ep-footer");
+
+    // U5 (R1-R3/R6): a workspace MEMBER session gets a private prompt field for
+    // the coding agent, rendered where "Send to agent" lives — independent of
+    // canSendToAgent (member-only gating, not also grant-gating: a member
+    // without the send grant can still author a prompt for someone else to
+    // send later from the dashboard). A guest session never sees this at all.
+    if (this.cb.isMember) {
+      const promptWrap = this.create("div", "sc-ep-prompt-wrap");
+      const label = this.create("label", "sc-ep-prompt-label");
+      label.textContent = "Prompt for agent";
+      const field = this.create("textarea", "sc-ep-prompt") as HTMLTextAreaElement;
+      field.setAttribute("aria-label", "Prompt for agent");
+      field.placeholder = "Optional instructions for the coding agent";
+      field.value = this.cb.getPromptText?.() ?? "";
+      this.on(field, "input", () => this.cb.onPromptChange?.(field.value));
+      promptWrap.append(label, field);
+      footer.appendChild(promptWrap);
+    }
+
     this.countEl = this.create("div", "sc-ep-count");
     this.undoBtn = this.button("sc-ep-undo", "Undo", () => {
       this.cb.undo();

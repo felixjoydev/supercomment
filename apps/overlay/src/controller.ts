@@ -131,6 +131,15 @@ export class OverlayController {
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
   private editPanel: PropertiesPanel | null = null;
+  /**
+   * U5: the properties-panel footer's in-progress "prompt for agent" text
+   * (member sessions only — the panel never renders the field for a guest, so
+   * this stays empty for one). Lives on the controller (not the panel) so it
+   * survives the panel closing/reopening across an edit session, mirroring
+   * where `editSession`/`previewLog` live. Bound to a comment only once one is
+   * actually created in `completeSubmit` — there is no id to bind to earlier.
+   */
+  private pendingPromptText = "";
   /** A selection + draft waiting on a guest name before submission. */
 
   /** Responsive device-mode (top-level controllers only; null in the iframe child). */
@@ -644,6 +653,25 @@ export class OverlayController {
     // ride a subsequent unrelated comment.
     if (changeSet) this.editSession.discard();
 
+    // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
+    // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really
+    // is the editor footer's save/send) — same as the enqueue gate below — so
+    // an ORDINARY comment made via a different mode can never pick up a stale
+    // prompt left over from an earlier edit session that was closed (Esc) but
+    // never saved/discarded. Written AFTER the comment is created (there is no
+    // id to bind to any earlier) and BEFORE the enqueue call, so a snapshot
+    // taken by send_comment_to_agent (0044) already sees the live prompt.
+    // Deliberately independent of `enqueueToAgent`: a plain "Save comment"
+    // alone still persists a typed prompt, so it can be sent later from the
+    // dashboard by anyone with the grant.
+    if (changeSet && result.id) {
+      const promptText = this.pendingPromptText.trim();
+      if (promptText && this.config.agentPromptWriter) {
+        await this.config.agentPromptWriter.write(result.id, promptText);
+      }
+      this.pendingPromptText = "";
+    }
+
     // Phase 2 (now U3): the editor's "Send to agent" action also enqueues the
     // saved template. Best-effort — a failed enqueue never breaks the save
     // (the member can still send it from the dashboard). The
@@ -749,6 +777,16 @@ export class OverlayController {
   /** True when the current reviewer is a guest (the email gate applies to them). */
   private isGuest(): boolean {
     return this.config.currentUser?.role === "guest";
+  }
+
+  /**
+   * U5: true when the current reviewer is a workspace MEMBER — the inverse of
+   * {@link isGuest}. Derived from `currentUser.role` (no parallel role field);
+   * absent `currentUser` (tunnel/standalone/tests) is treated as "not a guest",
+   * matching `isGuest()`'s own default.
+   */
+  private isMemberSession(): boolean {
+    return !this.isGuest();
   }
 
   /**
@@ -1113,6 +1151,13 @@ export class OverlayController {
       // enqueue). Guests / non-permitted members see only "Save comment".
       canSendToAgent: this.config.canSendToAgent === true,
       onSendToAgent: () => this.beginEditComment(el, { enqueue: true }),
+      // U5: any workspace member (independent of the send-to-agent grant) gets
+      // the private "Prompt for agent" field; a guest session never does.
+      isMember: this.isMemberSession(),
+      getPromptText: () => this.pendingPromptText,
+      onPromptChange: (text) => {
+        this.pendingPromptText = text;
+      },
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
@@ -1149,6 +1194,9 @@ export class OverlayController {
   private discardEdits(): void {
     this.editSession.discard();
     this.previewLog.revertAll();
+    // U5: an explicit discard throws away the whole in-progress buffer,
+    // including any typed-but-unsaved prompt text (R7).
+    this.pendingPromptText = "";
   }
 
   /**

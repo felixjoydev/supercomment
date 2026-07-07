@@ -41,6 +41,7 @@ import { SessionCommentSubmitter } from "./submit/session.js";
 import { makeSetGuestEmail } from "./submit/email.js";
 import { makeKeepAlive } from "./submit/keepalive.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
+import { SessionAgentPromptWriter } from "./submit/agent-prompt.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { SessionThreadClient } from "./submit/thread.js";
 import {
@@ -321,6 +322,16 @@ async function activateSession(
     getAccessToken,
   });
 
+  // U5: writes a member-authored prompt for the agent (set_agent_prompt) right
+  // after a template comment is created, before any enqueue, using the same
+  // session creds. The RPC re-verifies a MEMBER session server-side; the
+  // panel's own isMember gate (sourced from session.role below) is UX only.
+  const agentPromptWriter = new SessionAgentPromptWriter({
+    supabaseUrl,
+    supabaseAnonKey,
+    getAccessToken,
+  });
+
   // U12 (read-on-activate): start loading the preview's existing comments NOW,
   // concurrently with DOM-ready, so the network round-trip overlaps document
   // parsing instead of waiting until after mount. Fail-closed: a read failure
@@ -345,6 +356,9 @@ async function activateSession(
     // Phase 2: carry the member's send-to-agent grant into the editor footer.
     canSendToAgent: session.canSendToAgent === true,
     enqueuer,
+    // U5: the editor footer's member-only "Prompt for agent" field writes
+    // through this seam right after its comment is created.
+    agentPromptWriter,
     // Comment threads (0033): reply / mark-done / delete from the pin popover.
     threadClient: new SessionThreadClient({
       supabaseUrl,
