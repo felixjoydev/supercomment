@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { McpComment } from "@supercomment/shared";
 import {
+  CAPTURE_SIGN_TTL_SECONDS,
   InMemoryCommentStore,
+  MAX_RESOLVED_REFERENCE_IMAGES,
   SupabaseCommentStore,
   type SupabaseLike,
 } from "./store.js";
@@ -76,9 +78,29 @@ function fakeClient(opts: {
   rows: Record<string, unknown>[];
   replies?: Record<string, unknown>[];
   prompts?: Record<string, unknown>[];
+  /** Rows for `agent_reference_confirmations` — only `comment_id` matters. */
+  confirmations?: Record<string, unknown>[];
   rpcSpy?: (fn: string, args: Record<string, unknown>) => void;
+  /** Records every createSignedUrl call (bucket, path, expiresIn). */
+  signSpy?: (bucket: string, path: string, expiresIn: number) => void;
+  /**
+   * Per-path signing outcome. A path mapped to a string succeeds with that
+   * value as the "signed" URL; a path mapped to `null` simulates a signing
+   * failure (`{ data: null, error }`). A path with NO entry here succeeds
+   * with a deterministic `signed:<path>` default so most tests don't need to
+   * wire this up at all.
+   */
+  signedUrls?: Record<string, string | null>;
 }): SupabaseLike {
-  const { rows, replies = [], prompts = [], rpcSpy } = opts;
+  const {
+    rows,
+    replies = [],
+    prompts = [],
+    confirmations = [],
+    rpcSpy,
+    signSpy,
+    signedUrls = {},
+  } = opts;
   return {
     from(table: string) {
       const source =
@@ -86,7 +108,9 @@ function fakeClient(opts: {
           ? replies
           : table === "agent_prompts"
             ? prompts
-            : rows;
+            : table === "agent_reference_confirmations"
+              ? confirmations
+              : rows;
       return {
         select() {
           return {
@@ -104,7 +128,8 @@ function fakeClient(opts: {
                     }),
                   };
                 },
-                // Single-.eq().order() — comment_replies by comment_id.
+                // Single-.eq().order() — comment_replies by comment_id,
+                // agent_prompts / agent_reference_confirmations by preview_id.
                 order: async () => ({ data: source, error: null }),
               };
             },
@@ -117,6 +142,23 @@ function fakeClient(opts: {
     async rpc(fn: string, args: Record<string, unknown>) {
       rpcSpy?.(fn, args);
       return { data: null, error: null };
+    },
+    storage: {
+      from(bucket: string) {
+        return {
+          async createSignedUrl(path: string, expiresIn: number) {
+            signSpy?.(bucket, path, expiresIn);
+            if (Object.prototype.hasOwnProperty.call(signedUrls, path)) {
+              const url: string | null = signedUrls[path] ?? null;
+              if (url === null) {
+                return { data: null, error: { message: "sign failed" } };
+              }
+              return { data: { signedUrl: url }, error: null };
+            }
+            return { data: { signedUrl: `signed:${path}` }, error: null };
+          },
+        };
+      },
     },
   };
 }
@@ -328,5 +370,166 @@ describe("SupabaseCommentStore", () => {
     const r = await store.resolveComment(999);
     expect(r).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U7 — reference/screenshot resolution + confirm gating (R10-R12, R18)
+// ---------------------------------------------------------------------------
+
+describe("SupabaseCommentStore — U7 reference resolution + confirm gating", () => {
+  function ctxWithRaster(overrides: Record<string, unknown> = {}) {
+    return {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      ...overrides,
+    };
+  }
+
+  it("resolves a MEMBER's screenshot to a signed URL on getComment — no marker needed", async () => {
+    const signCalls: Array<{ bucket: string; path: string; expiresIn: number }> = [];
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 1,
+          trust_level: "member",
+          context: ctxWithRaster({ screenshot: "preview-1/shot.png" }),
+        }),
+      ],
+      signSpy: (bucket, path, expiresIn) => signCalls.push({ bucket, path, expiresIn }),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(1);
+    expect(c?.context?.screenshot).toBe("signed:preview-1/shot.png");
+    expect(signCalls).toEqual([
+      { bucket: "captures", path: "preview-1/shot.png", expiresIn: CAPTURE_SIGN_TTL_SECONDS },
+    ]);
+  });
+
+  it("does NOT resolve (or even attempt to sign) an UNCONFIRMED guest's screenshot on getComment", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 2,
+          trust_level: "guest",
+          context: ctxWithRaster({ screenshot: "preview-1/guest-shot.png" }),
+        }),
+      ],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(2);
+    // Left exactly as stored -- raw, unsigned. tools.ts's forAgent (using the
+    // SAME gating predicate) is what strips this for delivery.
+    expect(c?.context?.screenshot).toBe("preview-1/guest-shot.png");
+    expect(c?.referenceConfirmed).toBeUndefined();
+    expect(signCalls).toHaveLength(0);
+  });
+
+  it("resolves a CONFIRMED guest's screenshot AND referenceImages on getComment", async () => {
+    const client = fakeClient({
+      rows: [
+        row({
+          id: "c-confirmed",
+          number: 3,
+          trust_level: "guest",
+          context: ctxWithRaster({
+            screenshot: "preview-1/confirmed-shot.png",
+            referenceImages: ["preview-1/ref-a.png"],
+          }),
+        }),
+      ],
+      confirmations: [{ comment_id: "c-confirmed" }],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(3);
+    expect(c?.referenceConfirmed).toBe(true);
+    expect(c?.context?.screenshot).toBe("signed:preview-1/confirmed-shot.png");
+    expect(c?.context?.referenceImages).toEqual(["signed:preview-1/ref-a.png"]);
+  });
+
+  it("listOpenComments NEVER signs, even for a confirmed guest reference (R18 hot list path)", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [
+        row({
+          id: "c-list-confirmed",
+          number: 4,
+          trust_level: "guest",
+          context: ctxWithRaster({ screenshot: "preview-1/list-shot.png" }),
+        }),
+      ],
+      confirmations: [{ comment_id: "c-list-confirmed" }],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c] = await store.listOpenComments({ includeGuests: true });
+    expect(c?.referenceConfirmed).toBe(true);
+    // Raw, unsigned -- the list path never resolves, only marks the confirm.
+    expect(c?.context?.screenshot).toBe("preview-1/list-shot.png");
+    expect(signCalls).toHaveLength(0);
+  });
+
+  it("caps referenceImages resolution at MAX_RESOLVED_REFERENCE_IMAGES, latest-first", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 5,
+          trust_level: "member",
+          context: ctxWithRaster({
+            referenceImages: ["r1.png", "r2.png", "r3.png", "r4.png", "r5.png"],
+          }),
+        }),
+      ],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(5);
+    // Only the latest MAX_RESOLVED_REFERENCE_IMAGES are ever attempted --
+    // r1/r2/r3 are superseded and never even reach the signer.
+    expect(signCalls).toEqual(["r5.png", "r4.png"]);
+    expect(signCalls).toHaveLength(MAX_RESOLVED_REFERENCE_IMAGES);
+    expect(c?.context?.referenceImages).toEqual(["signed:r5.png", "signed:r4.png"]);
+  });
+
+  it("degrades gracefully on a signing failure: never throws, keeps the raw value in place", async () => {
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 6,
+          trust_level: "member",
+          context: ctxWithRaster({ screenshot: "preview-1/broken.png" }),
+        }),
+      ],
+      signedUrls: { "preview-1/broken.png": null },
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(6);
+    // The read succeeded (no throw) and the raw value is still present so its
+    // EXISTENCE remains visible to the agent-facing signals inventory, even
+    // though it never turned into a viewable URL this time.
+    expect(c?.context?.screenshot).toBe("preview-1/broken.png");
+  });
+
+  it("a data: image URL passes through unchanged, never sent to the signer", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 7,
+          trust_level: "member",
+          context: ctxWithRaster({ screenshot: "data:image/png;base64,AAA=" }),
+        }),
+      ],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(7);
+    expect(c?.context?.screenshot).toBe("data:image/png;base64,AAA=");
+    expect(signCalls).toHaveLength(0);
   });
 });

@@ -671,3 +671,170 @@ describe("MCP template delivery (U16, R14)", () => {
     expect(UNTRUSTED_INPUT_NOTICE.toLowerCase()).toContain("proposed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// U7 — confirm-gated guest reference passthrough + cap (R10-R12, R18, AE2)
+// ---------------------------------------------------------------------------
+
+function referenceComment(
+  number: number,
+  trustLevel: TrustLevel,
+  opts: {
+    referenceConfirmed?: boolean;
+    referenceImages?: string[];
+    screenshot?: string;
+  } = {},
+): McpComment {
+  return {
+    ...makeComment({ number, trustLevel }),
+    ...(opts.referenceConfirmed !== undefined
+      ? { referenceConfirmed: opts.referenceConfirmed }
+      : {}),
+    context: {
+      ...ctx(),
+      ...(opts.screenshot !== undefined ? { screenshot: opts.screenshot } : {}),
+      ...(opts.referenceImages !== undefined
+        ? { referenceImages: opts.referenceImages }
+        : {}),
+    },
+  };
+}
+
+describe("U7 confirm-gated guest reference passthrough (R10-R12)", () => {
+  /** Register tools against an in-memory map of handlers (mirrors `wire` above). */
+  function wireU7(store: InMemoryCommentStore) {
+    const registered = new Map<
+      string,
+      (args: Record<string, unknown>) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        structuredContent?: unknown;
+        isError?: boolean;
+      }>
+    >();
+    const fakeServer: McpServerLike = {
+      registerTool(name, _config, handler) {
+        registered.set(name, handler);
+      },
+    };
+    registerTools(fakeServer, store, fakeDiscovery);
+    return registered;
+  }
+
+  it("AE2: an UNCONFIRMED guest reference is stripped on BOTH the focus and list reads", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(1, "guest", {
+        screenshot: "prev/shot.png",
+        referenceImages: ["prev/ref.png"],
+      }),
+    ]);
+    const focus = await handleGetComment(store, { number: 1 });
+    expect(focus.comment?.context?.screenshot).toBeUndefined();
+    expect(focus.comment?.context?.referenceImages).toBeUndefined();
+
+    const list = await handleListOpenComments(store, { includeGuests: true });
+    expect(list.comments[0]?.context?.screenshot).toBeUndefined();
+    expect(list.comments[0]?.context?.referenceImages).toBeUndefined();
+    // Existence still visible so a member knows there's something to confirm.
+    expect(list.comments[0]?.contextSignals).toContain("screenshot");
+  });
+
+  it("AE2: once referenceConfirmed is true, the reference passes through on the FOCUS read", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(1, "guest", {
+        referenceConfirmed: true,
+        screenshot: "https://signed.example/prev/shot.png",
+      }),
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.context?.screenshot).toBe(
+      "https://signed.example/prev/shot.png",
+    );
+  });
+
+  it("a MEMBER's reference passes through regardless of referenceConfirmed (absent/irrelevant)", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(1, "member", {
+        screenshot: "https://signed.example/member-shot.png",
+      }),
+    ]);
+    const focus = await handleGetComment(store, { number: 1 });
+    expect(focus.comment?.context?.screenshot).toBe(
+      "https://signed.example/member-shot.png",
+    );
+    const list = await handleListOpenComments(store, { includeGuests: true });
+    expect(list.comments[0]?.context?.screenshot).toBe(
+      "https://signed.example/member-shot.png",
+    );
+  });
+
+  it("regression: an UNCONFIRMED guest's screenshot is stripped exactly as it was before this unit", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(2, "guest", { screenshot: "prev/shot.png" }),
+    ]);
+    const out = await handleGetComment(store, { number: 2 });
+    expect(out.comment?.context?.screenshot).toBeUndefined();
+    expect(out.comment?.contextSignals).toContain("screenshot");
+  });
+
+  it("caps referenceImages at MAX_RESOLVED_REFERENCE_IMAGES on the FOCUS read, latest kept as primary", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(3, "member", {
+        referenceImages: ["r1", "r2", "r3", "r4", "r5"],
+      }),
+    ]);
+    const out = await handleGetComment(store, { number: 3 });
+    // Only the two most recent survive, latest first.
+    expect(out.comment?.context?.referenceImages).toEqual(["r5", "r4"]);
+  });
+
+  it("does NOT cap referenceImages on the LIST read (raw path strings carry no image token cost)", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(3, "member", {
+        referenceImages: ["r1", "r2", "r3", "r4", "r5"],
+      }),
+    ]);
+    const out = await handleListOpenComments(store, { includeGuests: true });
+    expect(out.comments[0]?.context?.referenceImages).toEqual([
+      "r1",
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+    ]);
+  });
+
+  it("the LIST path never strips a CONFIRMED guest reference either (same gating predicate as focus)", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(4, "guest", {
+        referenceConfirmed: true,
+        screenshot: "prev/confirmed.png",
+      }),
+    ]);
+    const out = await handleListOpenComments(store, { includeGuests: true });
+    expect(out.comments[0]?.context?.screenshot).toBe("prev/confirmed.png");
+  });
+
+  it("security: the untrusted-input notice frames a resolved reference as visual-match-only, not instructions", () => {
+    expect(UNTRUSTED_INPUT_NOTICE.toLowerCase()).toContain("design target");
+    expect(UNTRUSTED_INPUT_NOTICE.toLowerCase()).toMatch(
+      /text rendered inside the image/,
+    );
+  });
+
+  it("security: the notice accompanies a get_comment result that actually resolves/passes a reference", async () => {
+    const store = new InMemoryCommentStore([
+      referenceComment(5, "guest", {
+        referenceConfirmed: true,
+        screenshot: "prev/confirmed.png",
+      }),
+    ]);
+    const registered = wireU7(store);
+    const got = await registered.get("get_comment")!({ number: 5 });
+    const payload = got.structuredContent as {
+      comment: McpComment | null;
+      securityNotice?: string;
+    };
+    expect(payload.comment?.context?.screenshot).toBe("prev/confirmed.png");
+    expect(payload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
+  });
+});
