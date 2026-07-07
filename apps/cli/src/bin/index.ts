@@ -20,9 +20,14 @@ import { isTunnelEnabled, TUNNEL_DISABLED_MESSAGE } from "../tunnel-gate.js";
 import type { ChannelSupabaseClient } from "../channel/index.js";
 import type { AccessMode } from "../exposure-warning.js";
 
-/** Default SuperComment web host to authorize against (override with --app-url). */
+/**
+ * Default SuperComment web host to authorize against. The deployed production
+ * host so a freshly `npm i`-d user's `supercomment login` works with no config.
+ * Override with `--app-url` (or SUPERCOMMENT_APP_URL) for local dev
+ * (http://localhost:3000) or a custom domain.
+ */
 const DEFAULT_APP_URL =
-  process.env.SUPERCOMMENT_APP_URL ?? "http://localhost:3000";
+  process.env.SUPERCOMMENT_APP_URL ?? "https://supercomment.vercel.app";
 
 const HELP = `supercomment — team visual feedback for AI-driven development
 
@@ -44,7 +49,8 @@ Typical setup
        Writes ~/.supercomment/binding.json (0600, carries the anon key).
        Flags:
          --app-url <url>      SuperComment host to authorize against
-                              (default \$SUPERCOMMENT_APP_URL or http://localhost:3000)
+                              (default \$SUPERCOMMENT_APP_URL or https://supercomment.vercel.app;
+                               use http://localhost:3000 for local dev)
          --project <name|id>  also set the global default project
          --no-browser         print the URL instead of opening a browser
   2) Register the MCP with Claude Code for ALL workspaces:
