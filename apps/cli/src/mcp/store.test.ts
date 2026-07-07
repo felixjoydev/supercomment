@@ -75,12 +75,18 @@ describe("InMemoryCommentStore", () => {
 function fakeClient(opts: {
   rows: Record<string, unknown>[];
   replies?: Record<string, unknown>[];
+  prompts?: Record<string, unknown>[];
   rpcSpy?: (fn: string, args: Record<string, unknown>) => void;
 }): SupabaseLike {
-  const { rows, replies = [], rpcSpy } = opts;
+  const { rows, replies = [], prompts = [], rpcSpy } = opts;
   return {
     from(table: string) {
-      const source = table === "comment_replies" ? replies : rows;
+      const source =
+        table === "comment_replies"
+          ? replies
+          : table === "agent_prompts"
+            ? prompts
+            : rows;
       return {
         select() {
           return {
@@ -188,6 +194,65 @@ describe("SupabaseCommentStore", () => {
     expect(op?.before).toBe("Welcome"); // non-secret free-text preserved
     expect(op?.after).not.toContain(secret);
     expect(op?.after).toContain("[redacted]");
+  });
+
+  it("listOpenComments attaches a live prompt (U6) via one batch-fetched query, unredacted", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-1", number: 1 }), row({ id: "c-2", number: 2 })],
+      prompts: [
+        { comment_id: "c-1", body: "Match the Figma spec exactly.", author_display_name: "Priya" },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c1, c2] = await store.listOpenComments({ includeGuests: true });
+    expect(c1!.privatePrompt).toEqual({
+      body: "Match the Figma spec exactly.",
+      authorDisplayName: "Priya",
+    });
+    // A comment with no agent_prompts row carries no privatePrompt at all.
+    expect(c2!.privatePrompt).toBeUndefined();
+  });
+
+  it("getComment attaches the same comment's live prompt", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-9", number: 9 })],
+      prompts: [
+        { comment_id: "c-9", body: "Use the brand blue for the CTA.", author_display_name: "Priya" },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(9);
+    expect(c?.privatePrompt).toEqual({
+      body: "Use the brand blue for the CTA.",
+      authorDisplayName: "Priya",
+    });
+  });
+
+  it("never redacts a private prompt body, even when it contains a secret-looking string (unlike note)", async () => {
+    const secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const client = fakeClient({
+      rows: [row({ id: "c-3", number: 3, note: `please rotate ${secret}` })],
+      prompts: [
+        { comment_id: "c-3", body: `Rotate the key ${secret} before shipping.`, author_display_name: "Priya" },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c] = await store.listOpenComments({ includeGuests: true });
+    // The note (untrusted reviewer free-text) IS redacted, unchanged behavior.
+    expect(c!.note).toContain("[redacted]");
+    // The private prompt (trusted-operator input) is delivered verbatim.
+    expect(c!.privatePrompt?.body).toBe(`Rotate the key ${secret} before shipping.`);
+    expect(c!.privatePrompt?.body).not.toContain("[redacted]");
+  });
+
+  it("treats a cleared (empty/whitespace) prompt row exactly like no prompt at all", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-4", number: 4 })],
+      prompts: [{ comment_id: "c-4", body: "   ", author_display_name: "Priya" }],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const [c] = await store.listOpenComments({ includeGuests: true });
+    expect(c!.privatePrompt).toBeUndefined();
   });
 
   it("getComment returns null for a missing number", async () => {

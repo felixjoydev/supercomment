@@ -13,11 +13,17 @@
  * and testable in one place. `listOpenComments({ includeGuests })` simply lets
  * the tool ask for the unfiltered set when the developer explicitly opts in.
  */
-import type { McpComment, McpReply, CommentRow } from "@supercomment/shared";
+import type {
+  McpComment,
+  McpPrivatePrompt,
+  McpReply,
+  CommentRow,
+} from "@supercomment/shared";
 import {
   redactContextChangeSet,
   redactSecrets,
   normalizeCommentRow,
+  withPrivateExtras,
   COMMENT_ROW_COLUMNS,
 } from "@supercomment/shared";
 import { asError } from "../lib/errors.js";
@@ -198,9 +204,21 @@ export interface SupabaseLike {
  * (`normalizeCommentRow` — snake_case→camelCase + defaults + context coercion),
  * then applies the agent-facing redaction that only this (untrusted-input)
  * boundary needs.
+ *
+ * `prompt` (U6, R1-R5) is the live member-only instruction for THIS comment,
+ * already batch-fetched by the caller (`fetchPrompts`) — merged on via
+ * `withPrivateExtras` (U1's seam) rather than a hand-rolled spread, same as
+ * the dashboard's `toCommentView` will do for U7's `referenceConfirmed`.
+ * UNREDACTED: a member's prompt is trusted-operator input (accepted per the
+ * plan's Key Technical Decisions), never run through `redactSecrets` the way
+ * `note`/thread bodies are — that redaction boundary exists for UNTRUSTED
+ * (guest/reviewer) free text, which this is not.
  */
-function rowToMcpComment(row: CommentRow): McpComment {
-  const n = normalizeCommentRow(row);
+function rowToMcpComment(row: CommentRow, prompt?: McpPrivatePrompt): McpComment {
+  const n = withPrivateExtras(
+    normalizeCommentRow(row),
+    prompt ? { privatePrompt: prompt } : undefined,
+  );
   // U8: this is the agent-facing (untrusted-input) delivery boundary. Redact
   // reviewer-authored free-text — the visual change-set values AND the note —
   // through the canonical redactor so a token typed into an edit or note can't
@@ -227,6 +245,7 @@ function rowToMcpComment(row: CommentRow): McpComment {
     isStale: n.isStale,
     ...(n.resolvedBy ? { resolvedBy: n.resolvedBy } : {}),
     ...(n.resolvedSummary ? { resolvedSummary: n.resolvedSummary } : {}),
+    ...(n.privatePrompt ? { privatePrompt: n.privatePrompt } : {}),
     createdAt: n.createdAt,
     trustLevel: n.trustLevel,
   };
@@ -317,14 +336,19 @@ export class SupabaseCommentStore implements CommentStore {
     // the interface but does not change the fetch (RLS already scopes by team;
     // the guard is a tool-layer policy, kept in one place for testability).
     void opts;
-    const { data, error } = await this.client
-      .from("comments")
-      .select(COMMENT_ROW_COLUMNS)
-      .eq("preview_id", this.previewId)
-      .eq("status", "open")
-      .order("number", { ascending: true });
+    const [{ data, error }, prompts] = await Promise.all([
+      this.client
+        .from("comments")
+        .select(COMMENT_ROW_COLUMNS)
+        .eq("preview_id", this.previewId)
+        .eq("status", "open")
+        .order("number", { ascending: true }),
+      this.fetchPrompts(),
+    ]);
     if (error) throw asError(error, "Failed to list open comments");
-    return ((data ?? []) as CommentRow[]).map(rowToMcpComment);
+    return ((data ?? []) as CommentRow[]).map((row) =>
+      rowToMcpComment(row, prompts.get(row.id)),
+    );
   }
 
   async getComment(number: number): Promise<McpComment | null> {
@@ -336,11 +360,59 @@ export class SupabaseCommentStore implements CommentStore {
       .maybeSingle();
     if (error) throw asError(error, `Failed to get comment #${number}`);
     if (!data) return null;
-    const comment = rowToMcpComment(data as CommentRow);
+    const row = data as CommentRow;
+    // Same batch-fetch machinery as the list path (just one comment's worth
+    // of use) rather than a second query shape — one code path to keep
+    // correct, and this read is inherently a single comment already.
+    const prompts = await this.fetchPrompts();
+    const comment = rowToMcpComment(row, prompts.get(row.id));
     // Attach the discussion thread (0033) so the agent reads the whole
     // back-and-forth; the last reply is the decisive instruction.
-    const thread = await this.fetchThread((data as CommentRow).id);
+    const thread = await this.fetchThread(row.id);
     return thread.length > 0 ? { ...comment, thread } : comment;
+  }
+
+  /**
+   * Live member-only prompts (0043/U2) for every comment in the bound
+   * preview, keyed by comment id — ONE query, not N+1 across the open-comments
+   * list. Scoped by `preview_id` (denormalized on the `agent_prompts` row,
+   * 0043) rather than an explicit comment-id IN-list: this store's minimal
+   * `SupabaseLike` surface has no `.in()`, and `preview_id` already bounds the
+   * read to exactly the rows either caller here could need — same shape as
+   * every other read in this class.
+   *
+   * Best-effort, mirroring `fetchThread`: `if (error || !data) return an
+   * empty map` rather than throwing, so a prompt-table read failure omits the
+   * trusted-prompt block instead of failing the whole comment read — the
+   * prompt is additive (R4), never load-bearing for the base payload.
+   *
+   * A row's body is dropped (never merged) when empty/whitespace so this can
+   * never surface an empty-string prompt object — "no prompt" and "cleared
+   * prompt" collapse to the same `undefined`, though in practice
+   * `set_agent_prompt` already DELETES a cleared row so this is a defensive
+   * belt, not the primary mechanism.
+   */
+  private async fetchPrompts(): Promise<Map<string, McpPrivatePrompt>> {
+    const map = new Map<string, McpPrivatePrompt>();
+    const { data, error } = await this.client
+      .from("agent_prompts")
+      .select("comment_id, body, author_display_name")
+      .eq("preview_id", this.previewId)
+      .order("comment_id", { ascending: true });
+    if (error || !data) return map;
+    for (const r of data as {
+      comment_id: string;
+      body: string;
+      author_display_name: string;
+    }[]) {
+      const body = typeof r.body === "string" ? r.body : "";
+      if (body.trim() === "") continue;
+      map.set(r.comment_id, {
+        body,
+        authorDisplayName: r.author_display_name,
+      });
+    }
+    return map;
   }
 
   /**

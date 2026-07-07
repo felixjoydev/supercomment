@@ -66,18 +66,18 @@
 --      assertion sanity-checks the filter actually matched the real
 --      upload/read policies (>= 2), so the "zero UPDATE/DELETE" result can't
 --      be a false-negative from an empty match set.
---   6. resolve_comment's prompt/summary-overlap scrub: SKIPPED. That guard
---      does not exist yet -- it is built in U6, which has not started. Do NOT
---      add scrub logic to resolve_comment here; that would collide with U6's
---      work. A pgTAP pass() marks this as an explicit, visible placeholder in
---      the suite's output rather than a silent gap.
+--   6. resolve_comment's prompt/summary-overlap scrub (U6, 0045): a resolve
+--      summary that normalized-overlaps the comment's live private prompt is
+--      blanked to NULL (not left verbatim, not a placeholder string -- see
+--      0045's header for why NULL specifically); a summary with NO overlap,
+--      and a comment with NO live prompt at all, resolve exactly as before.
 -- =============================================================================
 
 begin;
 
 create extension if not exists pgtap;
 
-select plan(21);
+select plan(24);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (as superuser).
@@ -281,12 +281,66 @@ select cmp_ok(
   'sanity: the captures upload/read policies are still present, so the zero-UPDATE/DELETE result above is not a false negative from an empty match set');
 
 -- ===========================================================================
--- Scenario 6: resolve_comment prompt/summary-overlap scrub -- DEFERRED to U6.
--- That guard does not exist in this schema yet; U6 will extend this file (or
--- add its own) with the real assertion once resolve_comment has the scrub
--- logic. Intentionally not implemented here to avoid colliding with U6.
+-- Scenario 6: resolve_comment's prompt/summary-overlap scrub (U6, 0045).
+-- Comment P (from scenario 2) still carries its live prompt
+-- ('PRIVATE_PROMPT_MARKER_P_9f3d: check the spacing against the Figma
+-- spec.') and is still OPEN -- scenarios 2-5 above never resolve it -- so it
+-- is reused here rather than adding a fresh comment: resolve_comment does
+-- not gate on the CURRENT status when called, matching its pre-U6 behavior,
+-- so resolving it (twice, for the two summary cases below) is safe.
 -- ===========================================================================
-select pass('resolve_comment prompt/summary-overlap scrub is deferred to U6 (not yet built) -- placeholder only');
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"f0040000-0000-0000-0000-000000000001","role":"authenticated","is_anonymous":false}';
+
+-- Case A: a summary that normalized-overlaps the live prompt (verbatim
+-- chunk, different case, extra surrounding text) -- expect the summary
+-- BLANKED to NULL, but the resolve action itself still succeeds.
+create temporary table _resolve_overlap on commit drop as
+  select status, resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000001',
+    'Done: PRIVATE_PROMPT_MARKER_P_9f3d: CHECK THE SPACING against the Figma spec. Verified.'
+  );
+select is(
+  (select resolved_summary from _resolve_overlap),
+  null,
+  'resolve_comment blanks resolved_summary to NULL when it normalized-overlaps the live private prompt (R9)');
+select is(
+  (select status from _resolve_overlap),
+  'resolved',
+  'the resolve action itself still succeeds even when its summary is blanked for overlap');
+
+-- Case B: a summary with NO overlap against the same live prompt -- resolves
+-- with the summary intact (re-resolving the same comment is a benign no-op
+-- status-wise; only resolved_summary is under test here).
+create temporary table _resolve_no_overlap on commit drop as
+  select resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000001',
+    'Adjusted the header padding to match the design.'
+  );
+select is(
+  (select resolved_summary from _resolve_no_overlap),
+  'Adjusted the header padding to match the design.',
+  'a resolve summary with no overlap against the live prompt resolves with the summary intact');
+
+-- Case C: a comment with NO live prompt at all resolves exactly as before --
+-- no scrub effect when there is nothing to scrub against.
+set local role postgres;
+insert into public.comments
+  (id, preview_id, number, author_participant, trust_level, intent, severity, note) values
+  ('f0060000-0000-0000-0000-000000000003', 'f0030000-0000-0000-0000-000000000001', 3,
+     'f0050000-0000-0000-0000-000000000001', 'member', 'fix', 'important', 'comment P2 (no prompt)');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"f0040000-0000-0000-0000-000000000001","role":"authenticated","is_anonymous":false}';
+create temporary table _resolve_no_prompt on commit drop as
+  select resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000003',
+    'No related prompt exists for this comment; summary should pass through untouched.'
+  );
+select is(
+  (select resolved_summary from _resolve_no_prompt),
+  'No related prompt exists for this comment; summary should pass through untouched.',
+  'a comment with no live prompt at all resolves with its summary fully intact (no behavior change)');
 
 select * from finish();
 rollback;
