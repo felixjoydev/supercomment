@@ -7,6 +7,8 @@ import {
   resolveCommentInputSchema,
   visualChangeSetSchema,
   changeOpSchema,
+  mcpCommentSchema,
+  mcpPrivatePromptSchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -463,5 +465,93 @@ describe("visual change-set — stored-DOM-XSS rejection (M1)", () => {
       after: "A helpful tooltip",
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Private prompt + reference confirm (U1: R4, R5, R8, R12, R18)
+// ---------------------------------------------------------------------------
+
+describe("mcpCommentSchema — privatePrompt / referenceConfirmed", () => {
+  it("parses a comment with NO privatePrompt/referenceConfirmed (backward compatible, the common no-prompt path)", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.privatePrompt).toBeUndefined();
+      expect(result.data.referenceConfirmed).toBeUndefined();
+    }
+  });
+
+  it("parses a comment WITH a privatePrompt and referenceConfirmed", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: {
+        body: "Keep the CTA copy, just fix the mobile overflow.",
+        authorDisplayName: "Ada",
+      },
+      referenceConfirmed: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.privatePrompt?.body).toBe(
+        "Keep the CTA copy, just fix the mobile overflow.",
+      );
+      expect(result.data.privatePrompt?.authorDisplayName).toBe("Ada");
+      expect(result.data.referenceConfirmed).toBe(true);
+    }
+  });
+
+  it("distinguishes an ABSENT prompt from an EMPTY/whitespace one — both valid, not the same state", () => {
+    const absent = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+    });
+    const empty = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: { body: "", authorDisplayName: "Ada" },
+    });
+    const whitespace = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: { body: "   ", authorDisplayName: "Ada" },
+    });
+    expect(absent.success).toBe(true);
+    expect(empty.success).toBe(true);
+    expect(whitespace.success).toBe(true);
+    if (absent.success && empty.success && whitespace.success) {
+      expect(absent.data.privatePrompt).toBeUndefined();
+      expect(empty.data.privatePrompt).toBeDefined();
+      expect(empty.data.privatePrompt?.body).toBe("");
+      expect(whitespace.data.privatePrompt?.body).toBe("   ");
+      // Absent and empty are different states even though a downstream
+      // consumer (U6) may choose to treat both as "no block to emit".
+      expect(absent.data.privatePrompt).not.toEqual(empty.data.privatePrompt);
+    }
+  });
+
+  it("mcpPrivatePromptSchema requires both body and authorDisplayName", () => {
+    expect(
+      mcpPrivatePromptSchema.safeParse({ body: "do the thing" }).success,
+    ).toBe(false);
+    expect(
+      mcpPrivatePromptSchema.safeParse({
+        body: "do the thing",
+        authorDisplayName: "Ada",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a non-boolean referenceConfirmed", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      referenceConfirmed: "yes",
+    });
+    expect(result.success).toBe(false);
   });
 });
