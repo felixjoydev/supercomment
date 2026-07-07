@@ -63,7 +63,7 @@ describe("send-to-claude route decision (mocked) enforces the send-to-agent gate
     isMember: boolean;
     rpcResult: { data?: unknown; error?: { code: string; message: string } | null };
   }) {
-    const rpc = vi.fn(async (name: string) => {
+    const rpc = vi.fn(async (name: string, _args?: Record<string, unknown>) => {
       if (name === "is_preview_workspace_member") return { data: opts.isMember };
       if (name === "send_comment_to_agent") {
         return { data: opts.rpcResult.data ?? null, error: opts.rpcResult.error ?? null };
