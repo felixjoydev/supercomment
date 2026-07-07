@@ -115,24 +115,49 @@ export type McpComment = z.infer<typeof mcpCommentSchema>;
  *     trust (R8/R9): match appearance only, text inside the image is not
  *     instructions.
  *  3. Repo-doc-pointer slot — an ENVELOPE-level addition (on
- *     `ListOpenCommentsOutput` / `GetCommentOutput` / `MutateCommentOutput`
- *     below), attached ONCE per result rather than per comment (R14/R18); U8
- *     owns the field name, fed by the U12 discovery seam.
+ *     `ListOpenCommentsOutput` / `GetCommentOutput` below), attached ONCE per
+ *     result rather than per comment (R14/R18). U8 SHIPS this as
+ *     `governanceDocs: string[]` (mirroring the discovery seam's own field
+ *     name, `RepoDiscoveryResult.governanceDocs`, for least surprise) —
+ *     pointers only (repo-relative paths like "AGENTS.md"), never doc
+ *     CONTENT, and never on `MutateCommentOutput` (resolve/dismiss don't
+ *     carry a hand-off). Omitted entirely when discovery found nothing, so it
+ *     never clutters a result with a repo that has no governance docs.
  *  4. Design-grounding slot — a focus-read (`GetCommentOutput`) addition
  *     carrying source/current-style pointers plus the maturity read
  *     (R16/R17); U9 owns the field name, fed by the same U12 seam.
  *
- * Slots 3-4 deliberately get no placeholder field yet: their shape depends on
- * the U12 discovery seam this unit does not touch, and a guessed shape would
- * just be replaced. Slots 1-2 are real, needed-now additions for U6/U7, so
- * they are shaped precisely above.
+ * Slot 4 deliberately gets no placeholder field yet: its shape depends on
+ * parts of the U12 discovery seam this unit does not touch, and a guessed
+ * shape would just be replaced. Slots 1-3 are real, needed-now additions, so
+ * they are shaped precisely (1-2 above; 3 below, alongside the schemas it
+ * attaches to).
  */
+
+/**
+ * Repo-relative paths to the repo's OWN governance docs (AGENTS.md, CLAUDE.md,
+ * ...) that the U12 discovery seam found for the active preview's anchored
+ * repo (R14: ground standing guidance in the repo's own docs; R18: token
+ * efficiency). Shared by `listOpenCommentsOutputSchema` and
+ * `getCommentOutputSchema` (envelope-contract slot 3, see the doc-comment
+ * block above) — attached ONCE per result, never per `McpComment`, so a batch
+ * of 20 comments still carries exactly one copy. Pointers only: the agent
+ * resolves these against ITS OWN repo checkout; no doc CONTENT ever rides in
+ * this field. Omitted (not an empty array) when discovery found no docs or no
+ * repo is anchored — this mirrors `notActionableReason`'s "only present when
+ * meaningful" convention rather than `excludedGuestCount`'s always-present
+ * default, because an empty pointer list carries no information worth a
+ * default (unlike a zero withheld-count, which IS a meaningful signal).
+ */
+const governanceDocsField = z.array(z.string()).optional();
 
 /** Output for `list_open_comments`. */
 export const listOpenCommentsOutputSchema = z.object({
   comments: z.array(mcpCommentSchema),
   /** Count of guest comments withheld from this result (R23 transparency). */
   excludedGuestCount: z.number().int().nonnegative().default(0),
+  /** See `governanceDocsField` above. */
+  governanceDocs: governanceDocsField,
 });
 export type ListOpenCommentsOutput = z.infer<
   typeof listOpenCommentsOutputSchema
@@ -143,6 +168,8 @@ export const getCommentOutputSchema = z.object({
   comment: mcpCommentSchema.nullable(),
   /** Set when the comment is missing or not actionable (resolved/dismissed). */
   notActionableReason: z.string().optional(),
+  /** See `governanceDocsField` above. */
+  governanceDocs: governanceDocsField,
 });
 export type GetCommentOutput = z.infer<typeof getCommentOutputSchema>;
 

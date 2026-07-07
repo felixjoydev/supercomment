@@ -4,6 +4,7 @@ import {
   capturedContextSchema,
   newCommentInputSchema,
   listOpenCommentsOutputSchema,
+  getCommentOutputSchema,
   resolveCommentInputSchema,
   visualChangeSetSchema,
   changeOpSchema,
@@ -236,6 +237,59 @@ describe("MCP tool I/O schemas", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.excludedGuestCount).toBe(0);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // U8 — governanceDocs envelope-level field (R14/R18, envelope-contract slot 3)
+  // -------------------------------------------------------------------------
+
+  it("accepts governanceDocs pointers on listOpenCommentsOutput", () => {
+    const result = listOpenCommentsOutputSchema.safeParse({
+      comments: [{ ...baseComment, trustLevel: "member" }],
+      governanceDocs: ["AGENTS.md", "docs/design-guidelines.md"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toEqual([
+        "AGENTS.md",
+        "docs/design-guidelines.md",
+      ]);
+    }
+  });
+
+  it("omits (not defaults) governanceDocs on listOpenCommentsOutput when absent", () => {
+    const result = listOpenCommentsOutputSchema.safeParse({ comments: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toBeUndefined();
+      expect("governanceDocs" in result.data).toBe(false);
+    }
+  });
+
+  it("accepts governanceDocs pointers on getCommentOutput", () => {
+    const result = getCommentOutputSchema.safeParse({
+      comment: { ...baseComment, trustLevel: "member" },
+      governanceDocs: ["CLAUDE.md"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toEqual(["CLAUDE.md"]);
+    }
+  });
+
+  it("omits governanceDocs on getCommentOutput when absent, and never carries maturity", () => {
+    const result = getCommentOutputSchema.safeParse({
+      comment: { ...baseComment, trustLevel: "member" },
+      // A stray `maturity` key (U9's separate slot-4 concern) must never be
+      // a recognized field of THIS envelope — only governanceDocs crosses
+      // this boundary.
+      maturity: "mature",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toBeUndefined();
+      expect("maturity" in result.data).toBe(false);
     }
   });
 
