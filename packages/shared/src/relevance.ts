@@ -152,6 +152,10 @@ export function summarizeContextSignals(
   if (context.screenshot) {
     parts.push("screenshot");
   }
+  const referenceCount = context.referenceImages?.length ?? 0;
+  if (referenceCount > 0) {
+    parts.push(`reference: ${referenceCount} image(s)`);
+  }
   const editCount = context.changeSet?.ops.length ?? 0;
   if (editCount > 0) {
     parts.push(`change-set: ${editCount} edit(s)`);

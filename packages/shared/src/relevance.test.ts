@@ -125,6 +125,18 @@ describe("summarizeContextSignals", () => {
     );
     expect(s).toContain("surface: mobile (375×812)");
   });
+  it("notes reference images in the signals inventory", () => {
+    const s = summarizeContextSignals(
+      ctx({ referenceImages: ["data:image/png;base64,aaa", "data:image/png;base64,bbb"] }),
+    );
+    expect(s).toContain("reference: 2 image(s)");
+  });
+
+  it("omits the reference signal when referenceImages is absent/empty", () => {
+    expect(summarizeContextSignals(ctx({ referenceImages: [] }))).not.toContain("reference:");
+    expect(summarizeContextSignals(ctx())).not.toContain("reference:");
+  });
+
   it("reports none for an empty context", () => {
     expect(
       summarizeContextSignals({
