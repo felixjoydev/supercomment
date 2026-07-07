@@ -311,9 +311,10 @@ async function activateSession(
     getAccessToken,
   });
 
-  // Phase 2: the editor's "Send to agent" enqueues a saved template via the same
-  // session creds; the enqueue_review_comment RPC re-verifies the member session
-  // + grant server-side. Only actually offered when the session carries the grant.
+  // Phase 2 (now U3): the editor's "Send to agent" enqueues a saved template via
+  // the same session creds; the send_comment_to_agent RPC re-verifies the member
+  // session + grant server-side. Only actually offered when the session carries
+  // the grant.
   const enqueuer = new SessionAgentEnqueuer({
     supabaseUrl,
     supabaseAnonKey,

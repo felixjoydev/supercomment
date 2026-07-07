@@ -193,10 +193,11 @@ export interface ScreenshotUploader {
  *
  * The editor footer's "Send to agent" action (member sessions with the grant)
  * folds the change-set into a `template` comment AND enqueues it. The enqueue
- * goes through the `enqueue_review_comment` RPC, which server-side re-verifies
- * the caller's member review session + send-to-agent grant (the footer button is
- * UX only). Returns false on any failure (never throws) so a failed enqueue can't
- * break the save. Absent (guest / tunnel / tests) the action just saves.
+ * goes through the `send_comment_to_agent` RPC (0044/U3), which server-side
+ * re-verifies the caller's member review session + send-to-agent grant (the
+ * footer button is UX only). Returns false on any failure (never throws) so a
+ * failed enqueue can't break the save. Absent (guest / tunnel / tests) the
+ * action just saves.
  */
 export interface AgentEnqueuer {
   enqueue(commentId: string): Promise<boolean>;

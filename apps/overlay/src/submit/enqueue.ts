@@ -1,12 +1,28 @@
 /**
- * SessionAgentEnqueuer (Phase 2) — the embedded-mode "Send to agent" write path.
+ * SessionAgentEnqueuer (Phase 2, now U3) — the embedded-mode "Send to agent"
+ * write path.
  *
  * After the editor folds a change-set into a `template` comment, a permitted
  * MEMBER session can hand it to the coding agent. This calls the
- * `enqueue_review_comment` RPC (0029) with the reviewer's anon SESSION JWT; the
- * RPC server-side re-verifies the caller holds a live member review session whose
- * member is granted send-to-agent, then inserts a comment_queue row. The client
- * never asserts its own permission — the footer button is UX only.
+ * `send_comment_to_agent` RPC (0044/U3) with the reviewer's anon SESSION JWT;
+ * the RPC server-side re-verifies the caller holds a live member review
+ * session whose member is granted send-to-agent, then atomically inserts a
+ * comment_queue row, stamps a point-in-time snapshot of the live agent_prompt
+ * onto it (R7), and (guest-authored comments only) records a member-only
+ * confirm marker (R11). The client never asserts its own permission — the
+ * footer button is UX only.
+ *
+ * `p_confirm_guest` is passed as `true` unconditionally here rather than
+ * threaded from the caller: the "Send to agent" footer button only ever
+ * renders for a MEMBER session with the send-to-agent grant
+ * (`canSendToAgent` in controller.ts's openEditPanel, sourced from
+ * establish_review_session's can_send_to_agent, which is false whenever
+ * member_user_id is null i.e. any guest session) AND create_review_comment
+ * (0019) always stamps trust_level from the CURRENT session's role — so the
+ * `template` comment this enqueues is always member-authored (trust_level =
+ * 'member'), never guest-authored. The guest-confirm gate is consequently a
+ * no-op on this call site; `true` is passed defensively so a future change
+ * to the footer's gating can never silently start blocking sends here.
  *
  * The HTTP call is injected (`EnqueueRpcCaller`) so the logic is unit-testable
  * with a mock; the live PostgREST round-trip + the agent draining the queue are
@@ -15,7 +31,7 @@
  */
 import type { AgentEnqueuer } from "../core/types.js";
 
-/** Calls enqueue_review_comment with the current session token. Injectable. */
+/** Calls send_comment_to_agent with the current session token. Injectable. */
 export type EnqueueRpcCaller = (
   commentId: string,
   accessToken: string,
@@ -67,19 +83,22 @@ function makeFetchEnqueueCaller(
 ): EnqueueRpcCaller {
   const base = supabaseUrl.replace(/\/+$/, "");
   return async (commentId, accessToken) => {
-    const res = await fetch(`${base}/rest/v1/rpc/enqueue_review_comment`, {
+    const res = await fetch(`${base}/rest/v1/rpc/send_comment_to_agent`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         apikey: anonKey,
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ p_comment_id: commentId }),
+      // See the class doc above for why p_confirm_guest is unconditionally
+      // true on this call site (the comment being enqueued is always
+      // member-authored, so the guest-confirm gate is a no-op here).
+      body: JSON.stringify({ p_comment_id: commentId, p_confirm_guest: true }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(
-        `enqueue_review_comment failed (${res.status}): ${text || res.statusText}`,
+        `send_comment_to_agent failed (${res.status}): ${text || res.statusText}`,
       );
     }
   };

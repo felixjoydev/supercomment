@@ -644,10 +644,11 @@ export class OverlayController {
     // ride a subsequent unrelated comment.
     if (changeSet) this.editSession.discard();
 
-    // Phase 2: the editor's "Send to agent" action also enqueues the saved
-    // template. Best-effort — a failed enqueue never breaks the save (the member
-    // can still send it from the dashboard). The enqueue_review_comment RPC
-    // re-verifies the member session + send-to-agent grant server-side.
+    // Phase 2 (now U3): the editor's "Send to agent" action also enqueues the
+    // saved template. Best-effort — a failed enqueue never breaks the save
+    // (the member can still send it from the dashboard). The
+    // send_comment_to_agent RPC re-verifies the member session +
+    // send-to-agent grant server-side.
     if (enqueueToAgent && changeSet && result.id && this.config.enqueuer) {
       await this.config.enqueuer.enqueue(result.id);
     }
