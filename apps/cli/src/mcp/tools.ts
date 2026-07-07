@@ -32,6 +32,7 @@ import {
   type MutateCommentOutput,
 } from "@supercomment/shared";
 import type { CommentStore, ProjectSummary } from "./store.js";
+import type { RepoDiscoverySeam } from "./repo-discovery.js";
 
 /**
  * Relevance layer (agent payload curation).
@@ -359,11 +360,27 @@ function labeledCommentResult(
 /**
  * Register all SuperComment tools on the given MCP server, backed by `store`.
  *
+ * `discovery` (U12) is the injected, cached repo-discovery seam: it resolves
+ * the active preview's repo root, governance docs, and design-system maturity
+ * fingerprint, computed at most once per server process (see
+ * `repo-discovery.ts`). It is accepted here so later units (U8 standing
+ * guidance, U9 design grounding) can call `discovery.discover(store.getActivePreview())`
+ * from within a handler/tool description without threading a new parameter
+ * through every call site again. This unit does not yet wire its result into
+ * any tool output.
+ *
  * Zod input schemas are passed as a raw shape (the SDK expects a ZodRawShape).
  * We declare them inline with zod to keep the binding-free handler functions
  * above pure; the SDK validates inputs before calling our handler.
  */
-export function registerTools(server: McpServerLike, store: CommentStore): void {
+export function registerTools(
+  server: McpServerLike,
+  store: CommentStore,
+  discovery: RepoDiscoverySeam,
+): void {
+  // Not yet consumed (U8/U9 wire this into tool output); referencing it here
+  // keeps the parameter intentional rather than accidentally-unused.
+  void discovery;
   // Lazy import zod only here so the pure handlers carry no Zod dependency.
 
   server.registerTool(

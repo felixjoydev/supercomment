@@ -8,6 +8,7 @@ import type {
   TrustLevel,
 } from "@supercomment/shared";
 import { InMemoryCommentStore, type ProjectSummary } from "./store.js";
+import { DEGRADED_RESULT, type RepoDiscoverySeam } from "./repo-discovery.js";
 import {
   applyTrustGuard,
   handleDismissComment,
@@ -27,6 +28,13 @@ import {
 // ---------------------------------------------------------------------------
 
 const PREVIEW_ID = "00000000-0000-0000-0000-0000000000aa";
+
+/**
+ * No-op discovery seam (U12): `registerTools` requires one, but this file
+ * exercises the tool handlers, not discovery — always degraded is the correct
+ * fake here (repo-discovery.test.ts covers the seam itself).
+ */
+const fakeDiscovery: RepoDiscoverySeam = { discover: () => DEGRADED_RESULT };
 
 function uuid(n: number): string {
   return `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -280,7 +288,7 @@ describe("registerTools", () => {
       },
     };
 
-    registerTools(fakeServer, store);
+    registerTools(fakeServer, store, fakeDiscovery);
 
     expect([...registered.keys()].sort()).toEqual([...TOOL_NAMES].sort());
 
@@ -336,7 +344,7 @@ describe("R23 prompt-injection labeled handoff", () => {
         registered.set(name, handler);
       },
     };
-    registerTools(fakeServer, store);
+    registerTools(fakeServer, store, fakeDiscovery);
     return registered;
   }
 
