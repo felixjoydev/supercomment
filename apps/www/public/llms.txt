@@ -1,0 +1,16 @@
+# SuperComment
+
+> SuperComment is a comment layer for deployed websites. Reviewers click any
+> element and comment, no accounts needed, and your AI coding agent gets
+> everything it needs to ship the fix, over MCP.
+
+## Docs
+- [Quickstart](https://supercomment.dev/docs/quickstart): embed the script tag, register a deploy URL, share a review link
+- [MCP setup](https://supercomment.dev/docs/mcp): connect Claude Code, Cursor, or any MCP client
+- [What gets captured](https://supercomment.dev/docs/capture): the twelve signals and redaction behavior
+- [Security model](https://supercomment.dev/security): dormancy, tokens, permissions
+
+## Optional
+- [Pricing](https://supercomment.dev/pricing)
+- [Compare](https://supercomment.dev/compare)
+- [Changelog](https://supercomment.dev/changelog)
