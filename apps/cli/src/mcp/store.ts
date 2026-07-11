@@ -452,12 +452,12 @@ export class SupabaseCommentStore implements CommentStore {
     if (error) throw asError(error, `Failed to get comment #${number}`);
     if (!data) return null;
     const row = data as CommentRow;
-    // Same batch-fetch machinery as the list path (just one comment's worth
-    // of use) rather than a second query shape — one code path to keep
-    // correct, and this read is inherently a single comment already.
+    // Same fetch methods as the list path, narrowed to just this one comment
+    // (code review fix, performance) — a preview-wide scan here was wasted
+    // work for a preview with many active prompts/confirmations.
     const [prompts, confirmations] = await Promise.all([
-      this.fetchPrompts(),
-      this.fetchReferenceConfirmations(),
+      this.fetchPrompts(row.id),
+      this.fetchReferenceConfirmations(row.id),
     ]);
     let comment = rowToMcpComment(
       row,
@@ -548,13 +548,31 @@ export class SupabaseCommentStore implements CommentStore {
    * `set_agent_prompt` already DELETES a cleared row so this is a defensive
    * belt, not the primary mechanism.
    */
-  private async fetchPrompts(): Promise<Map<string, McpPrivatePrompt>> {
+  /**
+   * `commentId` narrows to a single row (used by `getComment`'s focus read,
+   * which only ever needs one comment's prompt — a preview-wide scan there
+   * was wasted work for a preview with many active prompts, code review
+   * finding). Omitted, this scans the whole preview (the list path).
+   */
+  private async fetchPrompts(
+    commentId?: string,
+  ): Promise<Map<string, McpPrivatePrompt>> {
     const map = new Map<string, McpPrivatePrompt>();
-    const { data, error } = await this.client
+    const base = this.client
       .from("agent_prompts")
       .select("comment_id, body, author_display_name")
-      .eq("preview_id", this.previewId)
-      .order("comment_id", { ascending: true });
+      .eq("preview_id", this.previewId);
+    let data: unknown[] | null;
+    let error: unknown;
+    if (commentId) {
+      const single = await base.eq("comment_id", commentId).maybeSingle();
+      data = single.data ? [single.data] : [];
+      error = single.error;
+    } else {
+      const list = await base.order("comment_id", { ascending: true });
+      data = list.data;
+      error = list.error;
+    }
     if (error || !data) return map;
     for (const r of data as {
       comment_id: string;
@@ -582,14 +600,30 @@ export class SupabaseCommentStore implements CommentStore {
    * yields an EMPTY set, i.e. no comment's guest raster resolves — the safe
    * default under R11 (never treat a failed marker lookup as an implicit
    * confirm).
+   *
+   * `commentId` narrows to a single row, same rationale as `fetchPrompts`
+   * (code review finding, performance) — `getComment`'s focus read only
+   * ever needs one comment's marker, not the whole preview's.
    */
-  private async fetchReferenceConfirmations(): Promise<Set<string>> {
+  private async fetchReferenceConfirmations(
+    commentId?: string,
+  ): Promise<Set<string>> {
     const set = new Set<string>();
-    const { data, error } = await this.client
+    const base = this.client
       .from("agent_reference_confirmations")
       .select("comment_id")
-      .eq("preview_id", this.previewId)
-      .order("comment_id", { ascending: true });
+      .eq("preview_id", this.previewId);
+    let data: unknown[] | null;
+    let error: unknown;
+    if (commentId) {
+      const single = await base.eq("comment_id", commentId).maybeSingle();
+      data = single.data ? [single.data] : [];
+      error = single.error;
+    } else {
+      const list = await base.order("comment_id", { ascending: true });
+      data = list.data;
+      error = list.error;
+    }
     if (error || !data) return set;
     for (const r of data as { comment_id: string }[]) {
       set.add(r.comment_id);

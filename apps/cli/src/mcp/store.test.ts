@@ -116,14 +116,22 @@ function fakeClient(opts: {
           return {
             eq(_c1: string, _v1: unknown) {
               return {
-                eq(_c2: string, v2: unknown) {
+                eq(c2: string, v2: unknown) {
                   return {
                     order: async () => ({
                       data: source.filter((r) => r.status === "open"),
                       error: null,
                     }),
                     maybeSingle: async () => ({
-                      data: source.find((r) => r.number === v2) ?? null,
+                      // "comments" (.eq(preview_id).eq(number, N)) matches by
+                      // number; agent_prompts/agent_reference_confirmations
+                      // (.eq(preview_id).eq(comment_id, id), U7's getComment
+                      // narrowing) match by comment_id — keyed on the actual
+                      // column name the caller filtered on, not the table.
+                      data:
+                        source.find((r) =>
+                          c2 === "comment_id" ? r.comment_id === v2 : r.number === v2,
+                        ) ?? null,
                       error: null,
                     }),
                   };
