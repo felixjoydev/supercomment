@@ -15,8 +15,8 @@ signed-in member access token (password grant) — the paths the in-memory unit
 tests cannot cover: RLS, the signed-URL round trip, and the live send/prompt
 RPCs.
 
-Driver script: `scripts/verify-agent-handoff-live.mts` (kept untracked/
-uncommitted per the harness convention; not required to reproduce this
+Driver script: `scripts/verify-agent-handoff-live.mts` (committed, matching
+the other real-env harnesses under `scripts/`; not required to reproduce this
 result, but left in place for re-runs). Run from the repo root:
 
 ```

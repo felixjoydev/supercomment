@@ -25,8 +25,15 @@
  * apps/web/.env.local like the other scratch harnesses.
  */
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, resolve } from "node:path";
 import { readAnonKeyFromEnvLocal } from "./lib/start-harness.mts";
+
+// Resolve relative to THIS file's own location (not a hardcoded absolute path
+// tied to one developer's machine — matches scripts/lib/start-harness.mts'
+// established convention), so this script works for any contributor/CI.
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT_RESOLVED = resolve(SCRIPT_DIR, "..");
 
 // `@supabase/supabase-js` is a dependency of apps/cli (not hoisted to the repo
 // root — see docs memory `sandbox-arch-and-browser`), and this script lives
@@ -37,7 +44,7 @@ import { readAnonKeyFromEnvLocal } from "./lib/start-harness.mts";
 // bare-specifier resolution entirely — this is the exact same package/build
 // the CLI itself uses at runtime, not a stand-in.
 const SUPABASE_JS_ENTRY = pathToFileURL(
-  "/Users/guestos/.superset/projects/supercomment/apps/cli/node_modules/@supabase/supabase-js/dist/index.mjs",
+  resolve(REPO_ROOT_RESOLVED, "apps/cli/node_modules/@supabase/supabase-js/dist/index.mjs"),
 ).href;
 const { createClient } = (await import(SUPABASE_JS_ENTRY)) as {
   createClient: typeof import("@supabase/supabase-js").createClient;
@@ -66,10 +73,9 @@ const GUEST_COMMENT_NUMBER = 37;
 const MEMBER_COMMENT_ID = "f90bbe87-bef7-4dd6-b047-c9687a58ab36"; // #38
 const MEMBER_COMMENT_NUMBER = 38;
 
-// Repo root for discovery — the actual supercomment monorepo root (this
-// script is invoked with cwd=apps/cli, so resolve explicitly rather than
-// trusting process.cwd()).
-const REPO_ROOT = "/Users/guestos/.superset/projects/supercomment";
+// Repo root for discovery — resolved from this script's own location (not
+// process.cwd(), which the caller may invoke from a different directory).
+const REPO_ROOT = REPO_ROOT_RESOLVED;
 
 let failures = 0;
 function check(label: string, pass: boolean, evidence: string): void {

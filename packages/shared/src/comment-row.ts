@@ -178,10 +178,13 @@ export interface CommentPrivateExtras {
 /**
  * Merge U2's member-only extras onto an already-normalized row. Pure and
  * additive: a missing/empty `extras` leaves the row exactly as
- * `normalizeCommentRow` produced it, so existing callers (`rowToMcpComment`,
- * the dashboard's `toCommentView`) are unaffected until U6/U7 start passing
- * extras. This is the one seam those later units attach at instead of each
- * hand-rolling the merge.
+ * `normalizeCommentRow` produced it. `apps/cli/src/mcp/store.ts`'s
+ * `rowToMcpComment` calls this after batch-fetching a comment's prompt/marker
+ * (U6/U7). The dashboard's `toCommentView` (apps/web/lib/comments/transform.ts)
+ * does NOT call this seam — it hand-rolls `privatePrompt: null` directly and
+ * relies on a separate later merge in `getCommentsForPreview`
+ * (apps/web/lib/data/comments.ts), since its extras arrive from a different
+ * batch-fetch shape (a `Map` keyed by comment id, not per-row).
  */
 export function withPrivateExtras(
   row: NormalizedCommentRow,
