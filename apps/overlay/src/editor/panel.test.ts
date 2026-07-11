@@ -48,6 +48,8 @@ function mount(opts?: {
   canSendToAgent?: boolean;
   isMember?: boolean;
   initialPromptText?: string;
+  fontEnv?: PanelCallbacks["fontEnv"];
+  fontRecents?: string[];
 }) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
@@ -88,6 +90,13 @@ function mount(opts?: {
           onPromptChange: (text: string) => {
             state.promptText = text;
           },
+        }
+      : {}),
+    ...(opts?.fontEnv !== undefined
+      ? {
+          fontEnv: opts.fontEnv,
+          fontRecents: () => opts.fontRecents ?? [],
+          onFontPicked: () => {},
         }
       : {}),
   };
@@ -228,6 +237,42 @@ describe("PropertiesPanel — Type settings (text)", () => {
     input.dispatch("input", {});
     expect(session.size).toBe(1);
     expect(session.list()[0]!.after).toBe("52px");
+  });
+
+  it("opens the font picker and records a font-family op with identity (U8)", async () => {
+    const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+    const { doc } = makeFakeDom();
+    const fontEnv: PanelCallbacks["fontEnv"] = {
+      loadCatalog: async () => ({
+        version: 1,
+        families: [{ name: "Inter", category: "sans-serif", weights: ["400", "700"] }],
+      }),
+      loadFamily: async (family, weights) => ({
+        ok: true,
+        family,
+        weights,
+        previewUnavailable: false,
+      }),
+      uploadCapable: false,
+    };
+    const { session, parent, q } = mount({ el: makeEl(doc, "h1", "Hero"), doc, fontEnv });
+
+    // The font control is a picker-opening button, not a five-option dropdown.
+    q(".sc-ep-fontbtn").dispatch("click", {});
+    await tick(); // catalog fetch + render
+
+    const row = parent
+      .querySelectorAll(".sc-ep-fontrow")
+      .find((r) => r.textContent.startsWith("Inter"))!;
+    row.dispatch("click", {});
+    await tick(); // Google face load
+
+    const op = session.list().find((o) => o.property === "font-family")!;
+    expect(op.after).toBe('"Inter", sans-serif');
+    expect(op.font).toMatchObject({ family: "Inter", source: "google" });
+    // Weight options adapted to Inter's real weights.
+    const weightSel = q(".sc-ep-ctl-font-weight");
+    expect(weightSel.querySelectorAll("option").map((o) => o.value)).toEqual(["400", "700"]);
   });
 });
 

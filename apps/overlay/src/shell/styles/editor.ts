@@ -622,6 +622,128 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   text-align: left;
 }
 
+/* U8: the font-family control is a picker-opening button, not a dropdown. */
+.sc-ep-fontbtn {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  border-radius: 8px;
+  min-width: 132px;
+  padding: 7px 26px 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ep-ink);
+  background: var(--ep-field);
+  background-image: linear-gradient(45deg, transparent 50%, var(--ep-ink-3) 50%),
+    linear-gradient(135deg, var(--ep-ink-3) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 12px, calc(100% - 10px) 12px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: box-shadow 160ms ease, background-color 160ms ease;
+}
+
+/* U8: the picker popover — a searchable, grouped, keyboard-navigable list. */
+.sc-ep-fontpop {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 340px;
+  padding: 10px;
+  background: var(--ep-field);
+  border: 1px solid var(--ep-line-2);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 3;
+}
+.sc-ep-fontsearch {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ep-ink);
+  background: var(--ep-field-2);
+}
+.sc-ep-fontsearch:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--ep-accent); }
+.sc-ep-fontlist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sc-ep-fontgroup {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ep-ink-3);
+  padding: 8px 8px 4px;
+}
+.sc-ep-fontempty {
+  font-size: 12px;
+  color: var(--ep-ink-3);
+  padding: 4px 8px 8px;
+}
+.sc-ep-fontrow {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ep-ink);
+  border-radius: 7px;
+  padding: 7px 8px;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sc-ep-fontrow.is-active,
+.sc-ep-fontrow[aria-selected="true"] { background: var(--ep-field-2); }
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-fontrow:hover { background: var(--ep-field-2); }
+}
+.sc-ep-fontbadge {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ep-warn, #e0a33a);
+  flex: 0 0 auto;
+}
+.sc-ep-fontweight {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 2px;
+}
+.sc-ep-fontweight-sel {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  border-radius: 8px;
+  padding: 7px 26px 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ep-ink);
+  background: var(--ep-field);
+  min-width: 140px;
+  cursor: pointer;
+}
+.sc-ep-fontweight-sel option { background: var(--ep-field); color: var(--ep-ink); }
+
 .sc-edit-panel :focus-visible {
   outline: 2px solid var(--ep-accent);
   outline-offset: 1px;

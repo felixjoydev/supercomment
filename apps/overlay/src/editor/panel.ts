@@ -51,6 +51,14 @@ import { buildEditTarget } from "./edit-target.js";
 import { getPropertyMeta, type PropCtx } from "./property-meta.js";
 import { layoutContextFor } from "./layout-context.js";
 import type { EditDom, EditListRow } from "./history.js";
+import type { EscapeLayer } from "./escape-stack.js";
+import { detectPageFonts, firstFamilyToken, normalizeFamilyName } from "./fonts/detect.js";
+import {
+  FontPicker,
+  weightLabel,
+  type FontPickerEnv,
+  type FontSelection,
+} from "./fonts/picker.js";
 import {
   createCanvasProbe,
   isTransparent,
@@ -120,6 +128,22 @@ export interface PanelCallbacks {
   onSwapImageFile?(dataUrl: string): void;
   /** U6: an element was hidden — its pre-hide rect, so the controller can ghost the slot (U4). */
   onElementHidden?(rect: { x: number; y: number; width: number; height: number }): void;
+  /**
+   * U8: the font-picker catalog + loader environment (catalog fetch from our
+   * origin + Google font loading). Null / absent → the picker runs offline,
+   * offering only the page's fonts and the CSS generics.
+   */
+  fontEnv?: FontPickerEnv | null;
+  /**
+   * U8: register the font picker's Escape layer with the controller's Escape
+   * stack, so Escape closes the OPEN picker only and leaves the panel. Returns an
+   * unregister thunk. Absent (tests) → the picker handles Escape locally.
+   */
+  registerEscapeLayer?(layer: EscapeLayer): () => void;
+  /** U8: the session's recently-picked font families (most-recent first). */
+  fontRecents?(): string[];
+  /** U8: a family was picked; the controller records it into its recents. */
+  onFontPicked?(family: string): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -214,6 +238,9 @@ export class PropertiesPanel {
   /** The session-review edits list (R17); created lazily when first opened. */
   private editsListEl: HTMLElement | null = null;
   private editsListOpen = false;
+  /** U8: the font-picker button + the currently-open picker (one at a time). */
+  private fontBtn: HTMLButtonElement | null = null;
+  private activePicker: FontPicker | null = null;
 
   constructor(
     private readonly doc: Document,
@@ -250,6 +277,8 @@ export class PropertiesPanel {
 
   /** Remove the panel + every listener it registered (plans/008). */
   destroy(): void {
+    this.activePicker?.close(); // U8: tear down an open picker + its Escape layer
+    this.activePicker = null;
     for (const dispose of this.disposers.splice(0)) {
       try {
         dispose();
@@ -298,15 +327,9 @@ export class PropertiesPanel {
 
   private buildTypeSection(): void {
     const body = this.section("Type settings");
-    body.appendChild(
-      this.selectRow("Style", "font-family", [
-        { label: "Sans", value: "sans-serif" },
-        { label: "Serif", value: "serif" },
-        { label: "Mono", value: "monospace" },
-        { label: "System", value: "system-ui" },
-        { label: "Inherit", value: "inherit" },
-      ]),
-    );
+    // U8: the font-family control is now a searchable picker (page fonts + Google
+    // catalog + generics), not a five-option dropdown.
+    body.appendChild(this.fontRow());
     body.appendChild(
       this.selectRow("Weight", "font-weight", [
         { label: "Light", value: "300" },
@@ -986,6 +1009,120 @@ export class PropertiesPanel {
       row.removeAttribute?.("data-sc-degraded");
       (row.querySelector?.(".sc-ep-degraded") as HTMLElement | null)?.remove?.();
     }
+  }
+
+  // --- Font family (U8) ----------------------------------------------------
+
+  /** The "Font" row: a button showing the current family that opens the picker. */
+  private fontRow(): HTMLElement {
+    const row = this.create("div", "sc-ep-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = "Font";
+    const btn = this.create("button", "sc-ep-fontbtn sc-ep-ctl-font-family") as HTMLButtonElement;
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "listbox");
+    this.fontBtn = btn;
+    this.on(btn, "click", () => this.openFontPicker());
+    row.append(lab, btn);
+    this.initializers.push(() => {
+      btn.textContent = this.currentFontLabel();
+    });
+    return row;
+  }
+
+  /** The element's current primary font family, normalized for display. */
+  private currentFontLabel(): string {
+    const raw = firstFamilyToken(readComputedValue(this.el, "font-family"));
+    return raw ? normalizeFamilyName(raw) : "Default";
+  }
+
+  /** Open the font picker anchored to the panel (one instance at a time). */
+  private openFontPicker(): void {
+    if (this.activePicker) {
+      this.activePicker.close();
+      return;
+    }
+    const picker = new FontPicker({
+      doc: this.doc,
+      container: this.root,
+      create: (tag, cls) => this.create(tag, cls),
+      pageFonts: detectPageFonts(this.doc),
+      env: this.cb.fontEnv ?? null,
+      recents: this.cb.fontRecents?.() ?? [],
+      currentFamily: this.currentFontLabel(),
+      onSelect: (sel) => this.applyFontSelection(sel),
+      onClose: () => {
+        this.activePicker = null;
+        this.fontBtn?.focus?.();
+      },
+      registerEscape: this.cb.registerEscapeLayer,
+    });
+    this.activePicker = picker;
+    void picker.open();
+  }
+
+  /** Record a picked font, refresh the button label, and adapt the weight options. */
+  private applyFontSelection(sel: FontSelection): void {
+    this.recordFontFamily(sel);
+    if (this.fontBtn) this.fontBtn.textContent = sel.family;
+    this.adaptWeightOptions(sel.weights);
+    this.cb.onFontPicked?.(sel.family);
+  }
+
+  /**
+   * Record a `font-family` op carrying the U7 font identity (family + provenance +
+   * weights). Mirrors {@link recordStyle}'s verified-apply + exact-revert, adding
+   * the identity for a concrete family (a generic keyword records no identity).
+   */
+  private recordFontFamily(sel: FontSelection): void {
+    const property = "font-family";
+    const before = this.beforeFor(property);
+    const revertToBuild = this.revertFor(property);
+    const prevSnap = readInlineSnapshot(this.el, property);
+    const { previewUnavailable } = applyStyleVerified(this.el, property, sel.css, {
+      probe: this.colorProbe,
+      direction: this.dirCtx().direction,
+    });
+    const nextSnap = readInlineSnapshot(this.el, property);
+    const dom: EditDom = {
+      apply: () => restoreInlineSnapshot(this.el, property, nextSnap),
+      invert: () => restoreInlineSnapshot(this.el, property, prevSnap),
+      revertToBuild,
+    };
+    // The preview is unavailable if the write itself lost OR the Google face never
+    // loaded — either way the agent trusts the recorded family over the raster.
+    const pu = previewUnavailable || sel.loadResult?.previewUnavailable === true;
+    const font =
+      sel.source === "generic"
+        ? undefined
+        : {
+            family: sel.family,
+            source: sel.source,
+            ...(sel.weights.length ? { weights: sel.weights } : {}),
+            ...(sel.rawStack ? { rawStack: sel.rawStack } : {}),
+          };
+    this.cb.record(
+      buildStyleOp({ target: this.target, property, before, after: sel.css, previewUnavailable: pu, font }),
+      dom,
+    );
+    this.markDegraded(property, pu);
+    this.refreshCount();
+  }
+
+  /** Repopulate the Weight control with a family's real weights, keeping the value. */
+  private adaptWeightOptions(weights: string[]): void {
+    if (weights.length === 0) return;
+    const select = this.root.querySelector?.(".sc-ep-ctl-font-weight") as HTMLSelectElement | null;
+    if (!select) return;
+    const current = select.value;
+    select.replaceChildren?.();
+    for (const w of weights) {
+      const o = this.create("option") as HTMLOptionElement;
+      o.value = w;
+      o.textContent = weightLabel(w);
+      select.appendChild(o);
+    }
+    select.value = weights.includes(current) ? current : (weights[0] ?? "400");
   }
 
   /** The developer-build computed value for a property (the op `before`), captured once. */

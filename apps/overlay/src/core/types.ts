@@ -340,6 +340,13 @@ export interface OverlayConfig {
    * regardless; when absent (tunnel / stub / tests) Exit just closes the overlay.
    */
   onExit?: () => void;
+  /**
+   * U8: the SuperComment backend origin (same value used for the embedded token
+   * exchange), so the font picker can fetch the curated catalog from our own
+   * `/sc/fonts-catalog.json`. Absent (tunnel / stub / tests) → the picker runs
+   * offline with the page's fonts + generics only.
+   */
+  backendOrigin?: string;
 }
 
 /** Minimal storage surface so the guest store is testable without a browser. */

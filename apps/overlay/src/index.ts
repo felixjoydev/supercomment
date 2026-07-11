@@ -351,6 +351,10 @@ async function activateSession(
     // localStorage is origin-scoped; namespace the cosmetic guest-name store
     // by host like the tunnel path does.
     previewKey: typeof location !== "undefined" ? location.host : "preview",
+    // U8: our backend origin, so the font picker fetches the catalog from
+    // `${backendOrigin}/sc/fonts-catalog.json` on our own origin (cross-origin
+    // from the host page). Absent → the picker runs offline (page + generics).
+    ...(session.backendOrigin ? { backendOrigin: session.backendOrigin } : {}),
     submitter,
     uploader,
     // Phase 2: carry the member's send-to-agent grant into the editor footer.

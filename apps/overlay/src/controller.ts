@@ -59,6 +59,8 @@ import { beginInlineTextEdit, type InlineTextHandle } from "./editor/inline-text
 import { EscapeStack, ESCAPE_PRIORITY } from "./editor/escape-stack.js";
 import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { createCanvasProbe } from "./editor/color/normalize.js";
+import { createFontEnv, reorderRecents, type FontPickerEnv } from "./editor/fonts/picker.js";
+import { FontRegistry } from "./editor/fonts/registry.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
 import { filterBySurface, countBySurface } from "./device/surface-filter.js";
@@ -153,6 +155,12 @@ export class OverlayController {
   private editPanel: PropertiesPanel | null = null;
   /** Layered Escape handling — cancels only the innermost active layer (U2). */
   private readonly escapeStack = new EscapeStack();
+  /** U8: session FontFace registry (drained to baseline on reset-to-build). */
+  private readonly fontRegistry = new FontRegistry();
+  /** U8: recently-picked font families (most-recent first), across panel opens. */
+  private fontRecents: string[] = [];
+  /** U8: memoized picker environment (undefined = not yet built, null = offline). */
+  private builtFontEnv: FontPickerEnv | null | undefined;
   /** Active inline text edit (the innermost Escape layer); null when not editing text. */
   private inlineEdit: InlineTextHandle | null = null;
   /**
@@ -1294,9 +1302,44 @@ export class OverlayController {
       },
       // U6: ghost the vacated slot when an element is hidden (U4 chrome).
       onElementHidden: (rect) => this.inspector.setGhost(rect),
+      // U8: the font picker — catalog + loader env, Escape layer, session recents.
+      fontEnv: this.getFontEnv(),
+      registerEscapeLayer: (layer) => this.escapeStack.register(layer),
+      fontRecents: () => this.fontRecents,
+      onFontPicked: (family) => {
+        this.fontRecents = reorderRecents(this.fontRecents, family);
+      },
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
+  }
+
+  /**
+   * U8: the font-picker environment, built once per session. Requires the backend
+   * origin (for the catalog fetch) plus the document's `fetch` + `FontFace`; when
+   * any is missing (tunnel / stub / tests) the picker runs offline (page +
+   * generic fonts only). Font uploads are U9 (the designated cut), so
+   * `uploadCapable` is false this round and the Uploaded group stays hidden.
+   */
+  private getFontEnv(): FontPickerEnv | null {
+    if (this.builtFontEnv !== undefined) return this.builtFontEnv;
+    const origin = this.config.backendOrigin;
+    const view = this.doc.defaultView as
+      | { fetch?: typeof fetch; FontFace?: unknown }
+      | null;
+    if (!origin || !view?.fetch || !view.FontFace) {
+      this.builtFontEnv = null;
+      return null;
+    }
+    this.builtFontEnv = createFontEnv({
+      doc: this.doc as unknown as Parameters<typeof createFontEnv>[0]["doc"],
+      fetch: view.fetch.bind(view) as unknown as Parameters<typeof createFontEnv>[0]["fetch"],
+      FontFace: view.FontFace as Parameters<typeof createFontEnv>[0]["FontFace"],
+      catalogUrl: `${origin.replace(/\/$/, "")}/sc/fonts-catalog.json`,
+      registry: this.fontRegistry,
+      uploadCapable: false,
+    });
+    return this.builtFontEnv;
   }
 
   /**
@@ -1338,6 +1381,9 @@ export class OverlayController {
     this.history.resetToBuild();
     this.pendingSwapImages = [];
     this.inspector.setGhost(null);
+    // U8: remove every FontFace the session added so document.fonts returns to
+    // its developer-build baseline (device-mode child docs included).
+    this.fontRegistry.drain();
   }
 
   /**
