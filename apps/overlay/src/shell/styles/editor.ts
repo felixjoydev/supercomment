@@ -168,6 +168,28 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   white-space: nowrap;
 }
 
+/* U18: per-corner radius inputs collapse until expanded. */
+.sc-ep-corners[data-open="0"] { display: none; }
+.sc-ep-corners[data-open="1"] {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sc-ep-corners-toggle {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  color: var(--ep-ink-2);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.sc-ep-corners-toggle[aria-pressed="true"] { color: var(--ep-ink); background: var(--ep-field); }
+
 /* U6: replace-image file input + URL row. */
 .sc-ep-file {
   font: inherit;

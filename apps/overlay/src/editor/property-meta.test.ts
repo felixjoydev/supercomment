@@ -89,4 +89,14 @@ describe("numeric + fallback registry entries", () => {
     expect(m.toCss("10")).toBe("10");
     expect(m.canonical("Auto")).toBe("auto");
   });
+
+  it("R13 effect properties route through the registry (U18)", () => {
+    expect(getPropertyMeta("border-radius").toCss("12")).toBe("12px");
+    expect(getPropertyMeta("border-top-left-radius").toCss("8")).toBe("8px");
+    expect(getPropertyMeta("border-width").toCss("2")).toBe("2px");
+    expect(getPropertyMeta("box-shadow").kind).toBe("raw");
+    expect(getPropertyMeta("box-shadow").toCss("none")).toBe("none");
+    expect(getPropertyMeta("font-style").kind).toBe("keyword");
+    expect(getPropertyMeta("border-color").kind).toBe("color");
+  });
 });

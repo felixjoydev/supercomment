@@ -196,6 +196,19 @@ const REGISTRY: Record<string, PropertyMeta> = Object.fromEntries(
     // Size
     defineProp("width", "length"),
     defineProp("height", "length"),
+    // Effects (U18 — the remaining R13 controls)
+    defineProp("border-radius", "length"),
+    defineProp("border-top-left-radius", "length"),
+    defineProp("border-top-right-radius", "length"),
+    defineProp("border-bottom-right-radius", "length"),
+    defineProp("border-bottom-left-radius", "length"),
+    defineProp("border-width", "length"),
+    defineProp("border-style", "keyword"),
+    defineProp("border-color", "color"),
+    defineProp("box-shadow", "raw"),
+    defineProp("text-transform", "keyword"),
+    defineProp("text-decoration-line", "keyword"),
+    defineProp("font-style", "keyword"),
     // Colour
     defineProp("color", "color"),
     defineProp("background-color", "color"),

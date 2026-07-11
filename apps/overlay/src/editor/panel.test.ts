@@ -340,6 +340,58 @@ describe("PropertiesPanel — Position (place-self cross)", () => {
   });
 });
 
+describe("PropertiesPanel — remaining R13 controls (U18)", () => {
+  it("records font-style italic via the segmented control", () => {
+    const { doc } = makeFakeDom();
+    const { session, segByText } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    segByText(".sc-ep-ctl-font-style", "Italic").dispatch("click", {});
+    const op = session.list().find((o) => o.property === "font-style")!;
+    expect(op.after).toBe("italic");
+  });
+
+  it("records text-transform and text-decoration-line", () => {
+    const { doc } = makeFakeDom();
+    const { session, segByText } = mount({ el: makeEl(doc, "p", "Copy"), doc });
+    segByText(".sc-ep-ctl-text-transform", "AG").dispatch("click", {});
+    expect(session.list().find((o) => o.property === "text-transform")!.after).toBe("uppercase");
+    segByText(".sc-ep-ctl-text-decoration-line", "Underline").dispatch("click", {});
+    expect(
+      session.list().find((o) => o.property === "text-decoration-line")!.after,
+    ).toBe("underline");
+  });
+
+  it("records border-radius in px and a box-shadow preset string", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const radius = q(".sc-ep-ctl-border-radius");
+    radius.value = "12";
+    radius.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "border-radius")!.after).toBe("12px");
+
+    const shadow = q(".sc-ep-ctl-box-shadow");
+    shadow.value = "0 4px 12px rgba(0, 0, 0, 0.15)";
+    shadow.dispatch("change", {});
+    expect(session.list().find((o) => o.property === "box-shadow")!.after).toBe(
+      "0 4px 12px rgba(0, 0, 0, 0.15)",
+    );
+  });
+
+  it("records a border colour and toggles the per-corner radius inputs", () => {
+    const { doc } = makeFakeDom();
+    const { session, q, parent } = mount({ el: makeEl(doc, "div", "box"), doc });
+    const hex = q(".sc-ep-ctl-border-color-hex");
+    hex.value = "#334455";
+    hex.dispatch("input", {});
+    expect(session.list().find((o) => o.property === "border-color")!.after).toBe("#334455");
+
+    const corners = parent.querySelector(".sc-ep-corners")!;
+    expect(corners.getAttribute("data-open")).toBe("0");
+    parent.querySelectorAll(".sc-ep-corners-toggle")[0]!.dispatch("click", {});
+    expect(corners.getAttribute("data-open")).toBe("1");
+    expect(parent.querySelector(".sc-ep-ctl-border-top-left-radius")).not.toBeNull();
+  });
+});
+
 describe("PropertiesPanel — Image replace + Hide (U6)", () => {
   it("records a swapMedia op from a valid https URL, previewing the new src", () => {
     const { doc } = makeFakeDom();

@@ -238,6 +238,7 @@ export class PropertiesPanel {
     if (m.size) this.buildSizeSection();
     if (m.position) this.buildPositionSection();
     if (m.colour) this.buildColourSection(m.colour);
+    this.buildEffectsSection(); // radius / border / shadow — applies to any box (R13)
     this.buildArrangeSection();
     this.buildVisibilitySection();
     this.buildFooter();
@@ -328,6 +329,28 @@ export class PropertiesPanel {
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
         { label: "Justify", value: "justify" },
+      ]),
+    );
+    // U18 (R13): italic, transform, decoration — all through the registry.
+    body.appendChild(
+      this.segmentedRow("Italic", "font-style", [
+        { label: "Normal", value: "normal" },
+        { label: "Italic", value: "italic" },
+      ]),
+    );
+    body.appendChild(
+      this.segmentedRow("Transform", "text-transform", [
+        { label: "None", value: "none" },
+        { label: "AG", value: "uppercase" },
+        { label: "ag", value: "lowercase" },
+        { label: "Ag", value: "capitalize" },
+      ]),
+    );
+    body.appendChild(
+      this.segmentedRow("Decoration", "text-decoration-line", [
+        { label: "None", value: "none" },
+        { label: "Underline", value: "underline" },
+        { label: "Strike", value: "line-through" },
       ]),
     );
   }
@@ -596,6 +619,89 @@ export class PropertiesPanel {
     });
   }
 
+  // --- Effects (radius / border / shadow) — R13/U18 ------------------------
+
+  private buildEffectsSection(): void {
+    const body = this.section("Effects");
+
+    // Border radius: uniform, plus an expand-to-per-corner mode.
+    body.appendChild(this.numberRow("Radius", "border-radius", { unit: "px" }));
+    const corners = this.create("div", "sc-ep-corners");
+    corners.setAttribute("data-open", "0");
+    for (const [label, prop] of [
+      ["Top left", "border-top-left-radius"],
+      ["Top right", "border-top-right-radius"],
+      ["Bottom right", "border-bottom-right-radius"],
+      ["Bottom left", "border-bottom-left-radius"],
+    ] as const) {
+      corners.appendChild(this.numberRow(label, prop, { unit: "px" }));
+    }
+    const toggle = this.button("sc-ep-corners-toggle", "Per corner", () => {
+      const open = corners.getAttribute("data-open") === "1";
+      corners.setAttribute("data-open", open ? "0" : "1");
+      toggle.setAttribute("aria-pressed", String(!open));
+    });
+    toggle.setAttribute("aria-pressed", "false");
+    body.append(toggle, corners);
+
+    // Border: width + style + colour (the picker arrives in U10).
+    body.appendChild(this.numberRow("Border width", "border-width", { unit: "px" }));
+    body.appendChild(
+      this.selectRow("Border style", "border-style", [
+        { label: "None", value: "none" },
+        { label: "Solid", value: "solid" },
+        { label: "Dashed", value: "dashed" },
+        { label: "Dotted", value: "dotted" },
+      ]),
+    );
+    body.appendChild(this.colorRow("Border colour", "border-color"));
+
+    // Box shadow presets (custom offset/blur/spread + colour lands with U10).
+    body.appendChild(
+      this.selectRow("Shadow", "box-shadow", [
+        { label: "None", value: "none" },
+        { label: "Small", value: "0 1px 2px rgba(0, 0, 0, 0.12)" },
+        { label: "Medium", value: "0 4px 12px rgba(0, 0, 0, 0.15)" },
+        { label: "Large", value: "0 12px 32px rgba(0, 0, 0, 0.22)" },
+        { label: "Inset", value: "inset 0 2px 6px rgba(0, 0, 0, 0.18)" },
+      ]),
+    );
+  }
+
+  /** A compact swatch + hex control writing a single colour-valued property (U18). */
+  private colorRow(label: string, property: string): HTMLElement {
+    const row = this.create("div", "sc-ep-row sc-ep-colour-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = label;
+    const swatch = this.create("input", `sc-ep-swatch sc-ep-ctl-${property}`) as HTMLInputElement;
+    swatch.type = "color";
+    swatch.setAttribute("aria-label", label);
+    const hex = this.create("input", `sc-ep-hex sc-ep-ctl-${property}-hex`) as HTMLInputElement;
+    hex.type = "text";
+    hex.placeholder = "#000000";
+    hex.setAttribute("aria-label", `${label} hex`);
+    this.on(swatch, "input", () => {
+      hex.value = swatch.value;
+      this.recordStyle(property, swatch.value);
+    });
+    this.on(hex, "input", () => {
+      const v = normalizeHex(hex.value);
+      if (!v) return;
+      swatch.value = v;
+      this.recordStyle(property, v);
+    });
+    row.append(lab, swatch, hex);
+    this.initializers.push(() => {
+      const c = readComputedColor(this.el, property, this.colorProbe);
+      if (c && !isTransparent(c)) {
+        const h = rgbaToHex6(c);
+        swatch.value = h;
+        hex.value = h;
+      }
+    });
+    return row;
+  }
+
   // --- Image (replace / fit / radius) — R6 ---------------------------------
 
   private buildImageSection(): void {
@@ -634,7 +740,7 @@ export class PropertiesPanel {
         { label: "Scale down", value: "scale-down" },
       ]),
     );
-    body.appendChild(this.numberRow("Radius", "border-radius", { unit: "px" }));
+    // (Border radius lives in the shared Effects section — R13/U18.)
   }
 
   private recordSwapUrl(raw: string): void {
