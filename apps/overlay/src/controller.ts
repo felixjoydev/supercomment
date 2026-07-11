@@ -161,6 +161,8 @@ export class OverlayController {
   private readonly fontRegistry = new FontRegistry();
   /** U8: recently-picked font families (most-recent first), across panel opens. */
   private fontRecents: string[] = [];
+  /** U10: recently-used colors (hex8, most-recent first), across panel opens. */
+  private colorRecents: string[] = [];
   /** U8: memoized picker environment (undefined = not yet built, null = offline). */
   private builtFontEnv: FontPickerEnv | null | undefined;
   /** U9: uploaded-font bytes keyed by the op's id, uploaded at SAVE (never on discard). */
@@ -1378,6 +1380,11 @@ export class OverlayController {
         this.pendingFontUploads.set(opId, file);
       },
       fontUploadCount: () => this.pendingFontUploads.size,
+      // U10: session color recents shared across panel opens.
+      colorRecents: () => this.colorRecents,
+      onColorPicked: (hex8) => {
+        this.colorRecents = reorderRecents(this.colorRecents, hex8);
+      },
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);

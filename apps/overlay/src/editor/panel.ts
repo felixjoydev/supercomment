@@ -63,8 +63,12 @@ import {
   createCanvasProbe,
   isTransparent,
   rgbaToHex6,
+  rgbaToHex8,
+  rgbaToCss,
   type ColorProbe,
 } from "./color/normalize.js";
+import { ColorPicker } from "./color/picker.js";
+import { extractPalette } from "./color/palette.js";
 
 /** How the controller records edits into (and drives) its history engine (U3). */
 export interface PanelCallbacks {
@@ -155,6 +159,10 @@ export interface PanelCallbacks {
   ): void;
   /** U9: how many fonts are already uploaded this change-set (drives the cap). */
   fontUploadCount?(): number;
+  /** U10: the session's recently-used colors (hex8, most-recent first). */
+  colorRecents?(): string[];
+  /** U10: a color was committed; the controller records it into its recents. */
+  onColorPicked?(hex8: string): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -252,6 +260,9 @@ export class PropertiesPanel {
   /** U8: the font-picker button + the currently-open picker (one at a time). */
   private fontBtn: HTMLButtonElement | null = null;
   private activePicker: FontPicker | null = null;
+  /** U10: the color-picker button(s) by property + the currently-open picker. */
+  private readonly colorBtns = new Map<string, HTMLButtonElement>();
+  private activeColorPicker: ColorPicker | null = null;
 
   constructor(
     private readonly doc: Document,
@@ -290,6 +301,8 @@ export class PropertiesPanel {
   destroy(): void {
     this.activePicker?.close(); // U8: tear down an open picker + its Escape layer
     this.activePicker = null;
+    this.activeColorPicker?.close(); // U10: tear down an open color picker too
+    this.activeColorPicker = null;
     for (const dispose of this.disposers.splice(0)) {
       try {
         dispose();
@@ -590,17 +603,91 @@ export class PropertiesPanel {
 
   private buildColourSection(property: "color" | "background-color"): void {
     const body = this.section("Colour");
+    body.appendChild(this.colorButtonRow(property === "color" ? "Text" : "Fill", property));
+  }
+
+  /**
+   * A labeled color control (U10): a picker-opening button showing the current
+   * color as a swatch + hex. Shared by the Colour section and the Effects border
+   * color (which U18 left for this picker). Alpha-capable, palette + recents.
+   */
+  private colorButtonRow(label: string, property: string): HTMLElement {
     const row = this.create("div", "sc-ep-row sc-ep-colour-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = label;
+    const btn = this.create("button", `sc-ep-colorbtn sc-ep-ctl-${property}`) as HTMLButtonElement;
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "dialog");
+    btn.setAttribute("aria-label", label);
+    const sw = this.create("span", "sc-ep-colorbtn-sw");
+    const txt = this.create("span", "sc-ep-colorbtn-txt");
+    btn.append(sw, txt);
+    this.colorBtns.set(property, btn);
+    this.on(btn, "click", () => this.openColorPicker(property));
+    row.append(lab, btn);
+    this.initializers.push(() => this.refreshColorButton(property));
+    return row;
+  }
 
-    const swatch = this.create("input", `sc-ep-swatch sc-ep-ctl-${property}`) as HTMLInputElement;
-    swatch.type = "color";
-    swatch.setAttribute("aria-label", property === "color" ? "Text colour" : "Background colour");
+  /** The element's current computed value for a color property, as a CSS string. */
+  private currentColorCss(property: string): string {
+    const c = readComputedColor(this.el, property, this.colorProbe);
+    if (c) return rgbaToCss(c);
+    return readComputedValue(this.el, property) ?? "#000000";
+  }
 
-    const hex = this.create("input", "sc-ep-hex sc-ep-ctl-hex") as HTMLInputElement;
-    hex.type = "text";
-    hex.setAttribute("aria-label", "Hex colour");
-    hex.placeholder = "#000000";
+  /** Reflect the element's current color onto its picker button (swatch + label). */
+  private refreshColorButton(property: string): void {
+    const btn = this.colorBtns.get(property);
+    if (!btn) return;
+    const sw = btn.querySelector?.(".sc-ep-colorbtn-sw") as HTMLElement | null;
+    const txt = btn.querySelector?.(".sc-ep-colorbtn-txt") as HTMLElement | null;
+    const c = readComputedColor(this.el, property, this.colorProbe);
+    if (c && isTransparent(c)) {
+      if (sw) sw.style.background = "transparent";
+      if (txt) txt.textContent = "Transparent";
+    } else if (c) {
+      if (sw) sw.style.background = rgbaToCss(c);
+      if (txt) txt.textContent = c.a >= 1 ? rgbaToHex6(c) : rgbaToHex8(c);
+    } else if (txt) {
+      txt.textContent = "Default";
+    }
+  }
 
+  /** Open the alpha-capable color picker for a color property (U10). */
+  private openColorPicker(property: string): void {
+    if (this.activeColorPicker) {
+      this.activeColorPicker.close();
+      return;
+    }
+    const picker = new ColorPicker({
+      doc: this.doc,
+      container: this.root,
+      create: (tag, cls) => this.create(tag, cls),
+      probe: this.colorProbe,
+      initial: this.currentColorCss(property),
+      palette: extractPalette(this.doc, { probe: this.colorProbe }),
+      recents: this.cb.colorRecents?.() ?? [],
+      onChange: (css) => {
+        this.recordStyle(property, css);
+        this.refreshColorButton(property);
+      },
+      onClose: () => {
+        this.activeColorPicker = null;
+        this.colorBtns.get(property)?.focus?.();
+      },
+      onPicked: (hex8) => this.cb.onColorPicked?.(hex8),
+      registerEscape: this.cb.registerEscapeLayer,
+    });
+    this.activeColorPicker = picker;
+    picker.open();
+  }
+
+  /** The standalone element-opacity control (U10: moved out of the Colour section). */
+  private opacityRow(): HTMLElement {
+    const row = this.create("div", "sc-ep-row");
+    const lab = this.create("label", "sc-ep-label");
+    lab.textContent = "Opacity";
     const opacity = this.create("input", "sc-ep-number sc-ep-opacity sc-ep-ctl-opacity") as HTMLInputElement;
     opacity.type = "number";
     opacity.setAttribute("aria-label", "Opacity (%)");
@@ -608,55 +695,29 @@ export class PropertiesPanel {
     const pct = this.create("span", "sc-ep-opacity-pct");
     pct.textContent = "%";
     opacityWrap.append(opacity, pct);
-
-    this.on(swatch, "input", () => {
-      hex.value = swatch.value;
-      this.recordStyle(property, swatch.value);
-    });
-    this.on(hex, "input", () => {
-      const v = normalizeHex(hex.value);
-      if (!v) return;
-      swatch.value = v;
-      this.recordStyle(property, v);
-    });
     this.on(opacity, "input", () => {
       const raw = opacity.value.trim();
       if (raw === "") return;
       const pctNum = Math.max(0, Math.min(100, Number(raw)));
       this.recordStyle("opacity", String(pctNum / 100));
     });
-
-    row.append(swatch, hex, opacityWrap);
-    body.appendChild(row);
-
+    row.append(lab, opacityWrap);
     this.initializers.push(() => {
-      // Alpha-correct read through the shared pipeline (oklch/lab resolve; a
-      // transparent value reads as transparent, not #000000).
-      const c = readComputedColor(this.el, property, this.colorProbe);
-      if (c && isTransparent(c)) {
-        hex.value = "";
-        hex.placeholder = "transparent";
-      } else if (c) {
-        const asHex = rgbaToHex6(c);
-        swatch.value = asHex;
-        hex.value = asHex;
-      } else {
-        const asHex = rgbToHex(readComputedValue(this.el, property));
-        if (asHex) {
-          swatch.value = asHex;
-          hex.value = asHex;
-        }
-      }
       const op = readComputedValue(this.el, "opacity");
       const opNum = op == null ? 1 : parseFloat(op);
       opacity.value = Number.isFinite(opNum) ? String(Math.round(opNum * 100)) : "100";
     });
+    return row;
   }
 
   // --- Effects (radius / border / shadow) — R13/U18 ------------------------
 
   private buildEffectsSection(): void {
     const body = this.section("Effects");
+
+    // U10: element opacity is its OWN control (distinct from a color's alpha),
+    // and applies to any element, so it lives here rather than in Colour.
+    body.appendChild(this.opacityRow());
 
     // Border radius: uniform, plus an expand-to-per-corner mode.
     body.appendChild(this.numberRow("Radius", "border-radius", { unit: "px" }));
@@ -702,38 +763,9 @@ export class PropertiesPanel {
     );
   }
 
-  /** A compact swatch + hex control writing a single colour-valued property (U18). */
+  /** Border color (U18) — now the U10 alpha-capable picker, like the Colour section. */
   private colorRow(label: string, property: string): HTMLElement {
-    const row = this.create("div", "sc-ep-row sc-ep-colour-row");
-    const lab = this.create("label", "sc-ep-label");
-    lab.textContent = label;
-    const swatch = this.create("input", `sc-ep-swatch sc-ep-ctl-${property}`) as HTMLInputElement;
-    swatch.type = "color";
-    swatch.setAttribute("aria-label", label);
-    const hex = this.create("input", `sc-ep-hex sc-ep-ctl-${property}-hex`) as HTMLInputElement;
-    hex.type = "text";
-    hex.placeholder = "#000000";
-    hex.setAttribute("aria-label", `${label} hex`);
-    this.on(swatch, "input", () => {
-      hex.value = swatch.value;
-      this.recordStyle(property, swatch.value);
-    });
-    this.on(hex, "input", () => {
-      const v = normalizeHex(hex.value);
-      if (!v) return;
-      swatch.value = v;
-      this.recordStyle(property, v);
-    });
-    row.append(lab, swatch, hex);
-    this.initializers.push(() => {
-      const c = readComputedColor(this.el, property, this.colorProbe);
-      if (c && !isTransparent(c)) {
-        const h = rgbaToHex6(c);
-        swatch.value = h;
-        hex.value = h;
-      }
-    });
-    return row;
+    return this.colorButtonRow(label, property);
   }
 
   // --- Image (replace / fit / radius) — R6 ---------------------------------

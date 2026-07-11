@@ -646,8 +646,8 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
     controller.handleEditClick(el as unknown as Element);
     q(".sc-ep-ctl-font-size")!.value = "40";
     q(".sc-ep-ctl-font-size")!.dispatch("input", {});
-    q(".sc-ep-ctl-color")!.value = "#111111";
-    q(".sc-ep-ctl-color")!.dispatch("input", {});
+    q(".sc-ep-ctl-line-height")!.value = "26";
+    q(".sc-ep-ctl-line-height")!.dispatch("input", {});
     expect(controller.editSession.size).toBe(2);
     q(".sc-ep-undo")!.dispatch("click", {});
     expect(controller.editSession.size).toBe(1);
@@ -694,8 +694,8 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
     controller.handleEditClick(el as unknown as Element);
     q(".sc-ep-ctl-font-size")!.value = "40";
     q(".sc-ep-ctl-font-size")!.dispatch("input", {});
-    q(".sc-ep-ctl-color")!.value = "#112233";
-    q(".sc-ep-ctl-color")!.dispatch("input", {});
+    q(".sc-ep-ctl-line-height")!.value = "26";
+    q(".sc-ep-ctl-line-height")!.dispatch("input", {});
 
     expect(controller.editSession.size).toBe(2);
     expect(submitter.payloads.length).toBe(0); // nothing left the browser

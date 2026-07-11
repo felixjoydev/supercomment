@@ -778,6 +778,148 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   color: var(--ep-danger, #e5484d);
 }
 
+/* U10: the color control is a picker-opening button (swatch + hex), not a
+   native <input type=color> (which cannot express alpha). */
+.sc-ep-colorbtn {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  border-radius: 8px;
+  min-width: 132px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ep-ink);
+  background: var(--ep-field);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sc-ep-colorbtn-sw {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  flex: 0 0 auto;
+  /* a checkerboard shows through a translucent swatch */
+  background-image: linear-gradient(45deg, #808080 25%, transparent 25%),
+    linear-gradient(-45deg, #808080 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #808080 75%),
+    linear-gradient(-45deg, transparent 75%, #808080 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+.sc-ep-colorbtn-txt {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+/* U10: the color picker popover. */
+.sc-ep-colorpop {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--ep-field);
+  border: 1px solid var(--ep-line-2);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 3;
+}
+.sc-ep-sv {
+  position: relative;
+  height: 132px;
+  border-radius: 8px;
+  cursor: crosshair;
+  /* saturation (x) over value (y); a real hue background is set inline at runtime */
+  background:
+    linear-gradient(to top, #000, transparent),
+    linear-gradient(to right, #fff, transparent),
+    #f00;
+}
+.sc-ep-sv-thumb {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.sc-ep-hue,
+.sc-ep-alpha {
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+.sc-ep-hue {
+  appearance: none;
+  border-radius: 7px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+.sc-ep-colorhex-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sc-ep-colorhex {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ep-ink);
+  background: var(--ep-field-2);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+.sc-ep-eyedropper {
+  appearance: none;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  background: transparent;
+  color: var(--ep-ink-2);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.sc-ep-swatch-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ep-ink-3);
+}
+.sc-ep-swatch-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-ep-swatch-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  padding: 0;
+}
+
 .sc-edit-panel :focus-visible {
   outline: 2px solid var(--ep-accent);
   outline-offset: 1px;

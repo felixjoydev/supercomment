@@ -277,14 +277,31 @@ describe("PropertiesPanel — Type settings (text)", () => {
 });
 
 describe("PropertiesPanel — Colour + opacity", () => {
-  it("records the colour from the hex field and mirrors it to the swatch", () => {
+  it("opens the color picker and records the chosen color as rgb/rgba (U10)", () => {
     const { doc } = makeFakeDom();
-    const { session, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
-    const hex = q(".sc-ep-ctl-hex");
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    q(".sc-ep-ctl-color").dispatch("click", {}); // open the picker
+    const hex = parent.querySelector(".sc-ep-colorhex")!;
     hex.value = "#123456";
-    hex.dispatch("input", {});
+    hex.dispatch("change", {});
     const op = session.list().find((o) => o.property === "color")!;
-    expect(op.after).toBe("#123456");
+    expect(op.after).toBe("rgb(18, 52, 86)");
+  });
+
+  it("the alpha slider records the color's own alpha (not element opacity) (U10)", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    q(".sc-ep-ctl-color").dispatch("click", {});
+    const hex = parent.querySelector(".sc-ep-colorhex")!;
+    hex.value = "#ff0000";
+    hex.dispatch("change", {});
+    const alpha = parent.querySelector(".sc-ep-alpha")!;
+    alpha.value = "40";
+    alpha.dispatch("input", {});
+    const op = session.list().find((o) => o.property === "color")!;
+    expect(op.after).toBe("rgba(255, 0, 0, 0.4)");
+    // opacity is a SEPARATE control, untouched here
+    expect(session.list().some((o) => o.property === "opacity")).toBe(false);
   });
 
   it("records opacity as a 0–1 fraction from the percent field", () => {
@@ -424,10 +441,11 @@ describe("PropertiesPanel — remaining R13 controls (U18)", () => {
   it("records a border colour and toggles the per-corner radius inputs", () => {
     const { doc } = makeFakeDom();
     const { session, q, parent } = mount({ el: makeEl(doc, "div", "box"), doc });
-    const hex = q(".sc-ep-ctl-border-color-hex");
+    q(".sc-ep-ctl-border-color").dispatch("click", {}); // open the picker (U10)
+    const hex = parent.querySelector(".sc-ep-colorhex")!;
     hex.value = "#334455";
-    hex.dispatch("input", {});
-    expect(session.list().find((o) => o.property === "border-color")!.after).toBe("#334455");
+    hex.dispatch("change", {});
+    expect(session.list().find((o) => o.property === "border-color")!.after).toBe("rgb(51, 68, 85)");
 
     const corners = parent.querySelector(".sc-ep-corners")!;
     expect(corners.getAttribute("data-open")).toBe("0");
@@ -563,8 +581,8 @@ describe("PropertiesPanel — footer (N edits · Undo · Save comment)", () => {
     const { session, q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
     q(".sc-ep-ctl-font-size").value = "40";
     q(".sc-ep-ctl-font-size").dispatch("input", {});
-    q(".sc-ep-ctl-color").value = "#111111";
-    q(".sc-ep-ctl-color").dispatch("input", {});
+    q(".sc-ep-ctl-line-height").value = "26";
+    q(".sc-ep-ctl-line-height").dispatch("input", {});
     expect(session.size).toBe(2);
     q(".sc-ep-undo").dispatch("click", {});
     expect(session.size).toBe(1);
