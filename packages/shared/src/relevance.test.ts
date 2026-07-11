@@ -359,6 +359,66 @@ describe("summarizeChangeSet (U16, R14)", () => {
     expect(prose).toContain("(use token --brand-500)");
   });
 
+  it("renders one correct prose line per op for a full change-set (U15)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1", anchors: [] },
+            property: "font-family",
+            before: "system-ui",
+            after: "Grifter, sans-serif",
+            font: { family: "Grifter", source: "upload", weights: ["400"] },
+            responsive: "mobile",
+          },
+          {
+            opId: "o2",
+            type: "setStyle",
+            target: { selector: "a", anchors: [] },
+            property: "color",
+            before: "rgb(0,0,0)",
+            after: "rgb(51,102,204)",
+            valueToken: "--brand",
+          },
+          {
+            opId: "o3",
+            type: "setAttr",
+            target: { selector: "img", anchors: [] },
+            property: "src",
+            before: "/a.png",
+            after: "https://cdn.example/b.png",
+          },
+          { opId: "o4", type: "setVisibility", target: { selector: ".ad", anchors: [] }, after: "hidden" },
+          {
+            opId: "o5",
+            type: "moveNode",
+            target: { selector: ".card", anchors: [] },
+            insertion: { position: "after", reference: { selector: ".hero", anchors: [] } },
+            order: { from: 3, to: 0 },
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context)!;
+    // font: identity + upload provenance + breakpoint
+    expect(prose).toContain("[font Grifter, upload, weights 400] (uploaded file, unverified");
+    expect(prose).toContain("@mobile");
+    // token
+    expect(prose).toContain("(use token --brand)");
+    // swap URL provenance
+    expect(prose).toContain("reviewer-entered URL, unverified");
+    // visibility + move
+    expect(prose).toContain("hide .ad");
+    expect(prose).toContain("move .card after .hero");
+    expect(prose.split("; ")).toHaveLength(5); // one line per op
+  });
+
   it("returns null when there is no change-set", () => {
     expect(
       summarizeChangeSet({

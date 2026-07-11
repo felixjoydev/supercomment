@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { CapturedContext, VisualChangeSet } from "./schema.js";
+import { summarizeChangeSet } from "./relevance.js";
 import {
   redactSecrets,
   redactChangeSet,
@@ -166,6 +167,45 @@ describe("redactChangeSet (U8)", () => {
     expect(out.authoredCommit).toBe("deadbeef");
     // Pure: the input is not mutated.
     expect(cs.ops[0]!.after).toBe(`Contact ${SECRET}`);
+  });
+
+  it("ordering invariant (U15): prose built from redacted ops carries no secrets", () => {
+    const SECRET = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "o1",
+          type: "setStyle",
+          target: { selector: "h1", anchors: [] },
+          property: "font-family",
+          before: "sans-serif",
+          after: `${SECRET}, sans-serif`,
+          font: { family: `${SECRET}`, source: "upload" },
+        },
+        {
+          opId: "o2",
+          type: "setAttr",
+          target: { selector: "img", anchors: [] },
+          property: "src",
+          before: "/a.png",
+          after: `https://cdn.example/b.png?token=${SECRET}`,
+        },
+      ],
+    };
+    // The MCP redacts BEFORE it summarizes; the prose must inherit that redaction.
+    const redacted = redactChangeSet(cs);
+    const prose = summarizeChangeSet({
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: redacted,
+    } as unknown as CapturedContext)!;
+    expect(prose).not.toContain(SECRET);
+    expect(prose).toContain("[redacted]");
+    // The structural provenance labels still render (they carry no secret).
+    expect(prose).toContain("uploaded file, unverified");
+    expect(prose).toContain("reviewer-entered URL, unverified");
   });
 
   it("scrubs the font-identity family + raw stack, keeping source/weights (U7)", () => {
