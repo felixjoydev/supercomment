@@ -21,8 +21,25 @@
  * no document-coordinate math. The margin read uses `getComputedStyle` (real-env
  * only; absent it simply draws no pills). Never throws.
  */
-import { readComputedValue } from "./style-edits.js";
+import {
+  readComputedValue,
+  readInlineSnapshot,
+  restoreInlineSnapshot,
+  applyStylePreview,
+  type InlineSnapshot,
+} from "./style-edits.js";
 import { toRect } from "../core/rect.js";
+import { Gesture, type Point } from "./interact/gesture.js";
+import {
+  computeResize,
+  resizeApplicable,
+  HANDLES,
+  type Handle,
+  type ResizeStart,
+  type BoxMetrics,
+  type ResizeResult,
+  type ResizeModifiers,
+} from "./interact/resize.js";
 
 /** A viewport-space rectangle (CSS px), straight from getBoundingClientRect. */
 interface ViewRect {
@@ -142,9 +159,31 @@ export class InspectorLayer {
   private hovered: Element | null = null;
   private ghostRect: ViewRect | null = null;
 
+  // U12 — resize handles + the live drag state.
+  private readonly handles = new Map<Handle, HTMLElement>();
+  private readonly onResizeCommit?: (dims: ResizeResult) => void;
+  private readonly readMetrics: (el: Element) => BoxMetrics;
+  private resizable = false;
+  private lastDims: ResizeResult | null = null;
+  private resize: {
+    el: Element;
+    handle: Handle;
+    start: ResizeStart;
+    inlineW: InlineSnapshot;
+    inlineH: InlineSnapshot;
+    mods: ResizeModifiers;
+    gesture: Gesture;
+  } | null = null;
+
   constructor(
     private readonly doc: Document,
     parent: HTMLElement,
+    opts: {
+      /** Record the committed size (one gesture step); the controller wires it. */
+      onResizeCommit?: (dims: ResizeResult) => void;
+      /** Read box metrics for handle applicability + scale (default: live DOM). */
+      readMetrics?: (el: Element) => BoxMetrics;
+    } = {},
   ) {
     this.container = doc.createElement("div");
     this.container.className = "sc-inspect-container";
@@ -154,6 +193,15 @@ export class InspectorLayer {
     this.dims = this.node("div", "sc-inspect-dims");
     this.ghost = this.node("div", "sc-inspect-ghost");
     this.hideNode(this.ghost);
+    this.onResizeCommit = opts.onResizeCommit;
+    this.readMetrics = opts.readMetrics ?? ((el) => liveMetrics(el));
+    for (const h of HANDLES) {
+      const node = this.node("div", `sc-inspect-handle sc-inspect-handle-${h}`);
+      node.setAttribute("data-handle", h);
+      this.wireHandle(h, node);
+      this.handles.set(h, node);
+    }
+    this.wireDragListeners();
   }
 
   /** Whether the inspector is currently showing an element. */
@@ -161,9 +209,14 @@ export class InspectorLayer {
     return this.current !== null;
   }
 
-  /** Show the inspector for `el` (re-measures + repaints). */
-  show(el: Element): void {
+  /**
+   * Show the inspector for `el` (re-measures + repaints). `resizable` renders the
+   * interactive 8-point resize handles — only in Edit mode (a panel is open to
+   * record into), never in passive Browse (the chrome stays pointer-transparent).
+   */
+  show(el: Element, opts: { resizable?: boolean } = {}): void {
     this.current = el;
+    this.resizable = opts.resizable === true;
     this.clearHover();
     this.attach();
     this.render();
@@ -171,9 +224,21 @@ export class InspectorLayer {
 
   /** Hide the inspector (nothing hovered / selected). */
   hide(): void {
+    this.abortResize();
     this.current = null;
+    this.resizable = false;
     this.clearHover();
     this.detach();
+  }
+
+  /** Is a resize drag currently live? (drives the gesture Escape layer). */
+  isResizing(): boolean {
+    return this.resize != null;
+  }
+
+  /** Cancel a live resize drag, restoring the pre-gesture size (no record). */
+  abortResize(): void {
+    this.resize?.gesture.cancel();
   }
 
   /**
@@ -230,6 +295,7 @@ export class InspectorLayer {
       this.hideNode(this.box);
       this.hideNode(this.badge);
       this.hideNode(this.dims);
+      this.hideHandles();
     } else {
       this.place(this.box, rect.x, rect.y);
       this.box.style.width = `${rect.width}px`;
@@ -240,9 +306,15 @@ export class InspectorLayer {
       this.place(this.badge, rect.x, rect.y);
       this.showNode(this.badge);
 
-      this.dims.textContent = dimsLabel(el, rect);
+      // While resizing, the dims badge shows the LIVE target size (R4).
+      this.dims.textContent =
+        this.resize && this.lastDims
+          ? `${this.lastDims.width} × ${this.lastDims.height}`
+          : dimsLabel(el, rect);
       this.place(this.dims, rect.x + rect.width / 2, rect.y + rect.height);
       this.showNode(this.dims);
+
+      this.renderHandles(el, rect);
     }
 
     // Spacing pills (real-env; empty without getComputedStyle).
@@ -276,7 +348,7 @@ export class InspectorLayer {
 
   private attach(): void {
     if (this.attached) return;
-    this.container.append(this.badge, this.box, this.dims, this.ghost);
+    this.container.append(this.badge, this.box, this.dims, this.ghost, ...this.handles.values());
     this.attached = true;
   }
 
@@ -331,6 +403,156 @@ export class InspectorLayer {
     el.className = className;
     return el;
   }
+
+  // --- Resize handles (U12) -------------------------------------------------
+
+  /** Position the 8 handles on the box; show them only when resize applies. */
+  private renderHandles(el: Element, rect: ViewRect): void {
+    const applicable =
+      this.resizable && (this.resize != null || resizeApplicable(this.readMetrics(el)));
+    if (!applicable) {
+      this.hideHandles();
+      return;
+    }
+    const pos = handlePositions(rect);
+    for (const h of HANDLES) {
+      const node = this.handles.get(h)!;
+      const [x, y] = pos[h];
+      this.place(node, x, y);
+      this.showNode(node);
+    }
+  }
+
+  private hideHandles(): void {
+    for (const node of this.handles.values()) this.hideNode(node);
+  }
+
+  /** A handle receives the press: arm the resize gesture for it. */
+  private wireHandle(handle: Handle, node: HTMLElement): void {
+    node.addEventListener("pointerdown", (e) => this.beginResize(handle, e as PointerEvent));
+  }
+
+  /** Document-level pointer + abort listeners that drive a live resize. */
+  private wireDragListeners(): void {
+    const doc = this.doc as unknown as {
+      addEventListener?: (t: string, cb: (e: unknown) => void) => void;
+    };
+    doc.addEventListener?.("pointermove", (e) => {
+      const r = this.resize;
+      if (!r) return;
+      const ev = e as { shiftKey?: boolean; altKey?: boolean };
+      r.mods = { aspect: !!ev.shiftKey, center: !!ev.altKey };
+      r.gesture.move(pointOf(e));
+    });
+    doc.addEventListener?.("pointerup", (e) => this.resize?.gesture.up(pointOf(e)));
+    doc.addEventListener?.("pointercancel", () => this.resize?.gesture.cancel());
+    const view = this.doc.defaultView as { addEventListener?: (t: string, cb: () => void) => void } | null;
+    view?.addEventListener?.("blur", () => this.resize?.gesture.cancel());
+  }
+
+  private beginResize(handle: Handle, e: PointerEvent): void {
+    const el = this.current;
+    if (!el || this.resize || !this.resizable) return;
+    const rect = readRect(el);
+    const m = this.readMetrics(el);
+    if (!rect || !resizeApplicable(m)) return;
+    (e as { preventDefault?: () => void }).preventDefault?.();
+    (e as { stopPropagation?: () => void }).stopPropagation?.();
+    const start: ResizeStart = {
+      width: m.offsetWidth,
+      height: m.offsetHeight,
+      rectWidth: rect.width,
+      rectHeight: rect.height,
+    };
+    const gesture = new Gesture(
+      {
+        onMove: (_p, delta) => this.onResizeMove(delta),
+        onCommit: () => this.finishResize(true),
+        onAbort: () => this.finishResize(false),
+      },
+      { activationDistance: 4 },
+    );
+    this.resize = {
+      el,
+      handle,
+      start,
+      inlineW: readInlineSnapshot(el, "width"),
+      inlineH: readInlineSnapshot(el, "height"),
+      mods: {},
+      gesture,
+    };
+    (e.target as { setPointerCapture?: (id: number) => void } | null)?.setPointerCapture?.(
+      (e as { pointerId?: number }).pointerId ?? 0,
+    );
+    gesture.down(pointOf(e));
+  }
+
+  private onResizeMove(delta: Point): void {
+    const r = this.resize;
+    if (!r) return;
+    const dims = computeResize(r.handle, r.start, delta, r.mods);
+    this.lastDims = dims;
+    // Ephemeral preview (real-env); the authoritative record happens on commit.
+    applyStylePreview(r.el, "width", `${dims.width}px`);
+    applyStylePreview(r.el, "height", `${dims.height}px`);
+    this.scheduleRender();
+  }
+
+  /** End the drag: restore the pre-gesture inline, then (on commit) record once. */
+  private finishResize(commit: boolean): void {
+    const r = this.resize;
+    if (!r) return;
+    const dims = this.lastDims;
+    // Restore the pre-gesture inline so the record re-applies from the dev build.
+    restoreInlineSnapshot(r.el, "width", r.inlineW);
+    restoreInlineSnapshot(r.el, "height", r.inlineH);
+    this.resize = null;
+    this.lastDims = null;
+    if (commit && dims) this.onResizeCommit?.(dims);
+    this.scheduleRender();
+  }
+}
+
+/** The eight handle positions (viewport coords) for a box rect. */
+function handlePositions(rect: ViewRect): Record<Handle, [number, number]> {
+  const { x, y, width: w, height: h } = rect;
+  return {
+    nw: [x, y],
+    n: [x + w / 2, y],
+    ne: [x + w, y],
+    e: [x + w, y + h / 2],
+    se: [x + w, y + h],
+    s: [x + w / 2, y + h],
+    sw: [x, y + h],
+    w: [x, y + h / 2],
+  };
+}
+
+/** Read live box metrics for resize applicability + scale. Never throws. */
+function liveMetrics(el: Element): BoxMetrics {
+  const e = el as {
+    offsetWidth?: number;
+    offsetHeight?: number;
+    getClientRects?: () => { length: number };
+  };
+  let clientRectCount = 0;
+  try {
+    clientRectCount = e.getClientRects?.()?.length ?? 0;
+  } catch {
+    clientRectCount = 0;
+  }
+  return {
+    offsetWidth: typeof e.offsetWidth === "number" ? e.offsetWidth : 0,
+    offsetHeight: typeof e.offsetHeight === "number" ? e.offsetHeight : 0,
+    clientRectCount,
+    display: readComputedValue(el, "display") ?? "block",
+  };
+}
+
+/** A pointer event → the gesture's Point (viewport coords). */
+function pointOf(e: unknown): Point {
+  const ev = e as { clientX?: number; clientY?: number };
+  return { x: ev.clientX ?? 0, y: ev.clientY ?? 0 };
 }
 
 /** The element's viewport rect, or null when it can't be measured. Never throws. */

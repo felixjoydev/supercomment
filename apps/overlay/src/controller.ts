@@ -232,7 +232,11 @@ export class OverlayController {
       config.currentUser,
       config.uploader,
     );
-    this.inspector = new InspectorLayer(this.doc, this.shell.layer);
+    this.inspector = new InspectorLayer(this.doc, this.shell.layer, {
+      // U12: a committed drag-resize records width+height into the OPEN edit
+      // panel as one history step (the handles only show while editing).
+      onResizeCommit: (dims) => this.editPanel?.applyResize(dims.width, dims.height),
+    });
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
     this.guestEmailStore = new GuestEmailStore(config.previewKey, config.storage);
 
@@ -1368,6 +1372,9 @@ export class OverlayController {
       // U8: the font picker — catalog + loader env, Escape layer, session recents.
       fontEnv: this.getFontEnv(),
       registerEscapeLayer: (layer) => this.escapeStack.register(layer),
+      // U12: coalesce a drag-resize's width+height records into one undo step.
+      beginGesture: () => this.history.beginGesture(),
+      commitGesture: () => this.history.commitGesture(),
       fontRecents: () => this.fontRecents,
       onFontPicked: (family) => {
         this.fontRecents = reorderRecents(this.fontRecents, family);
@@ -1386,8 +1393,9 @@ export class OverlayController {
         this.colorRecents = reorderRecents(this.colorRecents, hex8);
       },
     });
-    // The in-page inspector locks onto the selected element while editing.
-    this.inspector.show(el);
+    // The in-page inspector locks onto the selected element while editing, with
+    // the interactive resize handles enabled (U12).
+    this.inspector.show(el, { resizable: true });
   }
 
   /**
@@ -1549,6 +1557,13 @@ export class OverlayController {
         this.inlineEdit?.cancel();
         this.inlineEdit = null;
       },
+    });
+    // U12: a live drag-resize cancels on Escape (gesture layer only) — the panel
+    // and its buffer stay intact.
+    this.escapeStack.register({
+      priority: ESCAPE_PRIORITY.gesture,
+      isActive: () => this.inspector.isResizing(),
+      close: () => this.inspector.abortResize(),
     });
     this.escapeStack.register({
       priority: ESCAPE_PRIORITY.selection,

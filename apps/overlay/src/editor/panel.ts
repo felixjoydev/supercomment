@@ -165,6 +165,10 @@ export interface PanelCallbacks {
   colorRecents?(): string[];
   /** U10: a color was committed; the controller records it into its recents. */
   onColorPicked?(hex8: string): void;
+  /** U12: open a history gesture so a resize drag's records coalesce to one step. */
+  beginGesture?(): void;
+  /** U12: commit the history gesture opened by {@link beginGesture}. */
+  commitGesture?(): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -1437,6 +1441,20 @@ export class PropertiesPanel {
   resync(): void {
     this.syncControls();
     this.refreshCount();
+  }
+
+  /**
+   * U12: record a committed drag-resize (explicit px width + height) as ONE undo
+   * step. The inspector owns the live gesture + preview and restores the
+   * pre-gesture inline before calling this, so recordStyle re-applies from the
+   * developer build; the gesture wrapper coalesces both records into one step.
+   */
+  applyResize(width: number, height: number): void {
+    this.cb.beginGesture?.();
+    this.recordStyle("width", `${width}px`);
+    this.recordStyle("height", `${height}px`);
+    this.cb.commitGesture?.();
+    this.syncControls();
   }
 
   /**

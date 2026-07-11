@@ -92,4 +92,29 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
   border-radius: 2px;
   z-index: 1;
 }
+
+/* U12: the 8-point resize handles. Unlike the rest of the inspector chrome these
+   ARE interactive (pointer-events: auto) so they can be grabbed; they render only
+   while editing (a panel is open) and for a single-fragment resizable box. */
+.sc-inspect-handle {
+  position: fixed;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid var(--ep-accent, #8b6dff);
+  border-radius: 2px;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 3;
+}
+.sc-inspect-handle-n,
+.sc-inspect-handle-s { cursor: ns-resize; }
+.sc-inspect-handle-e,
+.sc-inspect-handle-w { cursor: ew-resize; }
+.sc-inspect-handle-nw,
+.sc-inspect-handle-se { cursor: nwse-resize; }
+.sc-inspect-handle-ne,
+.sc-inspect-handle-sw { cursor: nesw-resize; }
 `;

@@ -176,3 +176,58 @@ describe("InspectorLayer", () => {
     expect(queue.length).toBe(2); // a new frame can be scheduled after the flush
   });
 });
+
+describe("InspectorLayer resize handles (U12)", () => {
+  function mount(metrics = { offsetWidth: 200, offsetHeight: 100, clientRectCount: 1, display: "block" }) {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const committed: { width: number; height: number }[] = [];
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement, {
+      onResizeCommit: (d) => committed.push(d),
+      readMetrics: () => metrics,
+    });
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, committed, q };
+  }
+
+  it("records a handle drag as width+height, correcting for ancestor scale", () => {
+    // rect 100x50 but layout 200x100 → scale 0.5. Drag +50 viewport px east → +100 css.
+    setRectProvider(() => makeRect(0, 0, 100, 50));
+    const { doc, inspector, committed, q } = mount();
+    const el = doc.createElement("div");
+    inspector.show(el as unknown as Element, { resizable: true });
+    const eHandle = q(".sc-inspect-handle-e")!;
+    eHandle.dispatch("pointerdown", {
+      clientX: 100, clientY: 25, pointerId: 1, target: eHandle,
+      preventDefault() {}, stopPropagation() {},
+    });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 150, clientY: 25 });
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 150, clientY: 25 });
+    expect(committed).toEqual([{ width: 300, height: 100 }]);
+  });
+
+  it("pointercancel mid-drag records nothing (restores the pre-gesture size)", () => {
+    setRectProvider(() => makeRect(0, 0, 200, 100));
+    const { doc, inspector, committed, q } = mount();
+    const el = doc.createElement("div");
+    inspector.show(el as unknown as Element, { resizable: true });
+    const se = q(".sc-inspect-handle-se")!;
+    se.dispatch("pointerdown", { clientX: 200, clientY: 100, pointerId: 1, target: se, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 250, clientY: 130 });
+    expect(inspector.isResizing()).toBe(true);
+    (doc as unknown as FakeElement).dispatch("pointercancel", {});
+    expect(inspector.isResizing()).toBe(false);
+    expect(committed).toEqual([]);
+  });
+
+  it("hides the handles in passive (non-resizable) mode and for inapplicable boxes", () => {
+    setRectProvider(() => makeRect(0, 0, 200, 100));
+    const passive = mount();
+    passive.inspector.show(passive.doc.createElement("div") as unknown as Element); // no resizable
+    expect(passive.q(".sc-inspect-handle-e")!.style.display).toBe("none");
+
+    const inline = mount({ offsetWidth: 200, offsetHeight: 20, clientRectCount: 2, display: "inline" });
+    inline.inspector.show(inline.doc.createElement("span") as unknown as Element, { resizable: true });
+    expect(inline.q(".sc-inspect-handle-e")!.style.display).toBe("none");
+  });
+});
