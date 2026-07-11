@@ -71,6 +71,16 @@ import {
 import { ColorPicker } from "./color/picker.js";
 import { extractPalette } from "./color/palette.js";
 import { buildTokenIndex, matchToken, type TokenDecl } from "./tokens.js";
+import { Gesture, type Point } from "./interact/gesture.js";
+
+/** Pointer px moved per value-step while scrubbing a numeric label (U16). */
+const SCRUB_PX_PER_STEP = 4;
+
+/** A pointer event → a gesture Point (viewport coords). */
+function pointOf(e: unknown): Point {
+  const ev = e as { clientX?: number; clientY?: number };
+  return { x: ev.clientX ?? 0, y: ev.clientY ?? 0 };
+}
 
 /** How the controller records edits into (and drives) its history engine (U3). */
 export interface PanelCallbacks {
@@ -1305,6 +1315,9 @@ export class PropertiesPanel {
     );
     wrap.append(input, stepper);
     row.append(lab, wrap);
+    // U16: the label is a horizontal scrub handle (drag to adjust, Shift = coarse),
+    // committing one history entry per scrub via the U12 gesture core.
+    this.enableScrub(lab, input, step, allowNegative, commit);
 
     this.initializers.push(() => {
       input.value = meta.displayFrom(readComputedValue(this.el, property), this.dirCtx());
@@ -1419,6 +1432,78 @@ export class PropertiesPanel {
     const rounded = Math.round(next * 1000) / 1000;
     input.value = String(rounded);
     commit(input.value);
+  }
+
+  /** Make a numeric row's LABEL a drag-to-scrub handle (U16). */
+  private enableScrub(
+    label: HTMLElement,
+    input: HTMLInputElement,
+    step: number,
+    allowNegative: boolean,
+    commit: (raw: string) => void,
+  ): void {
+    label.classList?.add?.("sc-ep-scrub");
+    this.on(label, "pointerdown", (e) =>
+      this.beginScrub(e as PointerEvent, input, step, allowNegative, commit),
+    );
+  }
+
+  /**
+   * Drive a value scrub from a label press: each pointer-px past the activation
+   * distance nudges the value by `step` (Shift = 10x), all coalesced into ONE
+   * history entry (begin/commitGesture). Document listeners are attached per scrub
+   * and removed on release, so nothing leaks.
+   */
+  private beginScrub(
+    e: PointerEvent,
+    input: HTMLInputElement,
+    step: number,
+    allowNegative: boolean,
+    commit: (raw: string) => void,
+  ): void {
+    const startVal = parseFloat(input.value) || 0;
+    const doc = this.doc as unknown as {
+      addEventListener?: (t: string, cb: (e: unknown) => void) => void;
+      removeEventListener?: (t: string, cb: (e: unknown) => void) => void;
+    };
+    let shift = false;
+    let onMove: ((ev: unknown) => void) | null = null;
+    let onUp: ((ev: unknown) => void) | null = null;
+    const detach = (): void => {
+      if (onMove) doc.removeEventListener?.("pointermove", onMove);
+      if (onUp) doc.removeEventListener?.("pointerup", onUp);
+    };
+    const gesture = new Gesture(
+      {
+        onStart: () => this.cb.beginGesture?.(),
+        onMove: (_p, delta) => {
+          const per = shift ? step * 10 : step;
+          const steps = Math.round(delta.x / SCRUB_PX_PER_STEP);
+          let next = startVal + steps * per;
+          if (!allowNegative && next < 0) next = 0;
+          next = Math.round(next * 1000) / 1000;
+          input.value = String(next);
+          commit(input.value);
+        },
+        onCommit: () => this.cb.commitGesture?.(),
+      },
+      { activationDistance: 3 },
+    );
+    (e as { preventDefault?: () => void }).preventDefault?.();
+    onMove = (ev) => {
+      shift = !!(ev as { shiftKey?: boolean }).shiftKey;
+      gesture.move(pointOf(ev));
+    };
+    onUp = (ev) => {
+      gesture.up(pointOf(ev));
+      detach();
+    };
+    doc.addEventListener?.("pointermove", onMove);
+    doc.addEventListener?.("pointerup", onUp);
+    (e.target as { setPointerCapture?: (id: number) => void } | null)?.setPointerCapture?.(
+      (e as { pointerId?: number }).pointerId ?? 0,
+    );
+    gesture.down(pointOf(e));
   }
 
   /**

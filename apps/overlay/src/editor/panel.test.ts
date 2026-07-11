@@ -245,6 +245,22 @@ describe("PropertiesPanel — Type settings (text)", () => {
     expect(session.list()[0]!.after).toBe("52px");
   });
 
+  it("scrubbing a numeric label commits exactly one edit with the final value (U16)", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    const label = parent
+      .querySelectorAll(".sc-ep-scrub")
+      .find((l) => l.textContent === "Size")!;
+    label.dispatch("pointerdown", {
+      clientX: 100, clientY: 10, pointerId: 1, target: label, preventDefault() {},
+    });
+    // +20px past the 3px activation → 20/4 = 5 steps × step 1 = +5 (from 0).
+    doc.dispatch("pointermove", { clientX: 120, clientY: 10 });
+    doc.dispatch("pointerup", { clientX: 120, clientY: 10 });
+    expect(session.size).toBe(1);
+    expect(session.list().find((o) => o.property === "font-size")!.after).toBe("5px");
+  });
+
   it("opens the font picker and records a font-family op with identity (U8)", async () => {
     const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
     const { doc } = makeFakeDom();

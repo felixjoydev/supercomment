@@ -143,5 +143,12 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
   pointer-events: none;
   z-index: 4;
+  /* U16: the line glides between discrete drop slots (interruptible transition,
+     specific properties only — never the box, which must track the pointer 1:1). */
+  transition: left 90ms cubic-bezier(0.2, 0, 0, 1), top 90ms cubic-bezier(0.2, 0, 0, 1),
+    width 90ms cubic-bezier(0.2, 0, 0, 1), height 90ms cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-inspect-insertion { transition: none; }
 }
 `;

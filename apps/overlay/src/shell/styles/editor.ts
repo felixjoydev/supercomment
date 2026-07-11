@@ -482,7 +482,7 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
 @media (hover: hover) and (pointer: fine) {
   .sc-ep-btn:hover { background: var(--ep-field-2); }
 }
-.sc-ep-btn:active { transform: scale(0.97); }
+.sc-ep-btn:active { transform: scale(0.96); }
 
 /* Footer — N edits · Undo · Save comment. */
 .sc-ep-footer {
@@ -549,7 +549,7 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
 @media (hover: hover) and (pointer: fine) {
   .sc-ep-save:hover:not(:disabled) { background: var(--ep-accent-2); }
 }
-.sc-ep-save:active:not(:disabled) { transform: scale(0.97); }
+.sc-ep-save:active:not(:disabled) { transform: scale(0.96); }
 .sc-ep-save:disabled { background: var(--ep-field-2); color: var(--ep-ink-3); cursor: not-allowed; }
 
 /* U3: the session review list (R17), anchored above the footer counter. */
@@ -948,8 +948,45 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   outline: 2px solid var(--ep-accent);
   outline-offset: 1px;
 }
+
+/* U16 polish: motion + tactile detail (frontend-design / interface-craft /
+   make-interfaces-feel-better). Interruptible transitions for interactive state;
+   popovers get a soft fade+rise enter; presses scale to 0.96; scrub labels read
+   as draggable. Specific transition properties only, never transition:all. */
+.sc-ep-fontpop,
+.sc-ep-colorpop {
+  animation: sc-pop-in 190ms cubic-bezier(0.2, 0, 0, 1) both;
+  transform-origin: top center;
+}
+@keyframes sc-pop-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.sc-ep-fontbtn,
+.sc-ep-colorbtn,
+.sc-ep-swatch-btn,
+.sc-ep-eyedropper,
+.sc-ep-fontupload {
+  transition-property: box-shadow, background-color, transform;
+  transition-duration: 140ms;
+  transition-timing-function: var(--ease-out);
+}
+.sc-ep-fontbtn:active,
+.sc-ep-colorbtn:active,
+.sc-ep-swatch-btn:active,
+.sc-ep-eyedropper:active,
+.sc-ep-fontupload:active { transform: scale(0.96); }
+/* U16: the scrub label reads as a horizontal drag handle. */
+.sc-ep-scrub {
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .sc-edit-panel { animation: none; }
+  .sc-edit-panel,
+  .sc-ep-fontpop,
+  .sc-ep-colorpop { animation: none; }
 }
 
 `;
