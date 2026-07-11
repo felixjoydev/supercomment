@@ -95,6 +95,9 @@ function makeController(opts?: {
   agentPromptWriter?: AgentPromptWriter;
   currentUser?: { displayName: string; role: string };
   threadClient?: unknown;
+  deviceChild?: boolean;
+  surface?: OverlayConfig["surface"];
+  onChildActivity?: () => void;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -103,6 +106,9 @@ function makeController(opts?: {
     previewKey: "preview-a",
     capturer: opts?.capturer ?? new StubCapturer(),
     submitter,
+    ...(opts?.deviceChild ? { deviceChild: true } : {}),
+    ...(opts?.surface ? { surface: opts.surface } : {}),
+    ...(opts?.onChildActivity ? { onChildActivity: opts.onChildActivity } : {}),
     ...(opts?.uploader ? { uploader: opts.uploader } : {}),
     ...(opts?.readFile ? { readFile: opts.readFile } : {}),
     ...(opts?.onExit ? { onExit: opts.onExit } : {}),
@@ -819,6 +825,31 @@ describe("OverlayController — template submit (U13)", () => {
     expect(shot).not.toBe("data:image/png;base64,AAAA");
     // ...but the before-artifact is NOT lost — it falls back to the DOM snapshot.
     expect(shot?.startsWith("data:application/json")).toBe(true);
+  });
+});
+
+describe("OverlayController — device-mode surface (U14)", () => {
+  it("a device-mode child forwards its activity to the parent keepalive", () => {
+    let activity = 0;
+    const { q } = makeController({
+      deviceChild: true,
+      surface: "mobile",
+      onChildActivity: () => {
+        activity += 1;
+      },
+    });
+    q(".sc-layer")!.dispatch("pointerdown", {});
+    expect(activity).toBe(1);
+  });
+
+  it("tags a child-surface edit as responsive:mobile through the panel", () => {
+    const { controller, doc, q } = makeController({ deviceChild: true, surface: "mobile" });
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "48";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    expect(controller.editSession.list()[0]!.responsive).toBe("mobile");
   });
 });
 

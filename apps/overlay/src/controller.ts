@@ -264,6 +264,15 @@ export class OverlayController {
     // only; the device-mode child renders the parent's already-loaded set.
     if (!config.deviceChild) this.startCommentSync();
 
+    // U14: a device-mode CHILD forwards its own activity to the parent's session
+    // lifecycle (it runs no keepalive itself), so editing inside the iframe keeps
+    // the review session alive. Tracked in the listener bag for teardown.
+    if (config.deviceChild && config.onChildActivity) {
+      const forward = (): void => config.onChildActivity?.();
+      this.on(this.shell.layer, "pointerdown", forward);
+      this.on(this.shell.layer, "keydown", forward);
+    }
+
     // Responsive device-mode toolbar — top-level controllers only. The child
     // controller mounted inside the device iframe must not nest its own.
     if (!config.deviceChild) {
@@ -276,8 +285,14 @@ export class OverlayController {
             doc: childDoc,
             deviceChild: true,
             surface: preset.surface,
+            // U14: label the child's edit-panel chip + tag its ops to this surface.
+            surfaceLabel: `${preset.label} · ${preset.width}px`,
             // Route the child's submits back so the parent's toggle counts stay live.
             onCommentSubmitted: (s) => this.bumpSurfaceCount(s),
+            // U14: forward the child's activity to the PARENT session lifecycle
+            // (the child runs no keepalive of its own), so editing in the iframe
+            // keeps the review session alive.
+            onChildActivity: () => this.onOverlayActivity(),
           });
           // Hand the child the full comment set; it renders only its own surface.
           child.loadExistingComments(this.existingComments);
@@ -1383,6 +1398,9 @@ export class OverlayController {
       // U12: coalesce a drag-resize's width+height records into one undo step.
       beginGesture: () => this.history.beginGesture(),
       commitGesture: () => this.history.commitGesture(),
+      // U14: tag every edit to the current device surface + show the chip.
+      surface: this.surface,
+      ...(this.config.surfaceLabel ? { surfaceLabel: this.config.surfaceLabel } : {}),
       fontRecents: () => this.fontRecents,
       onFontPicked: (family) => {
         this.fontRecents = reorderRecents(this.fontRecents, family);

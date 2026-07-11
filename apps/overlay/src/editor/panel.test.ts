@@ -15,6 +15,7 @@ import {
 } from "./panel.js";
 import { EditSession } from "./edit-session.js";
 import { buildEditTarget } from "./edit-target.js";
+import { opKey } from "./op-key.js";
 
 // The panel is exercised against its REAL collaborator — a live EditSession — so
 // these are integration tests over the exact wiring the controller uses. The fake
@@ -50,6 +51,8 @@ function mount(opts?: {
   initialPromptText?: string;
   fontEnv?: PanelCallbacks["fontEnv"];
   fontRecents?: string[];
+  surface?: PanelCallbacks["surface"];
+  surfaceLabel?: string;
 }) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
@@ -98,6 +101,9 @@ function mount(opts?: {
           fontRecents: () => opts.fontRecents ?? [],
           onFontPicked: () => {},
         }
+      : {}),
+    ...(opts?.surface
+      ? { surface: opts.surface, ...(opts.surfaceLabel ? { surfaceLabel: opts.surfaceLabel } : {}) }
       : {}),
   };
   const target = buildEditTarget(el as unknown as Element, doc as unknown as Document);
@@ -338,6 +344,45 @@ describe("PropertiesPanel — Colour + opacity", () => {
     op.dispatch("input", {});
     const recorded = session.list().find((o) => o.property === "opacity")!;
     expect(recorded.after).toBe("0.5");
+  });
+});
+
+describe("PropertiesPanel — device-mode surface (U14)", () => {
+  it("tags edits with the current surface and renders the chip (mobile)", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent, q } = mount({
+      el: makeEl(doc, "h2", "Hi"),
+      doc,
+      surface: "mobile",
+      surfaceLabel: "Mobile · 375px",
+    });
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    expect(session.list()[0]!.responsive).toBe("mobile");
+    expect(parent.querySelector(".sc-ep-surface-chip")!.textContent).toContain("Mobile · 375px");
+  });
+
+  it("leaves base (web) edits untagged and shows no chip", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc, surface: "web" });
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    expect(session.list()[0]!.responsive).toBeUndefined();
+    expect(parent.querySelector(".sc-ep-surface-chip")).toBeNull();
+  });
+
+  it("the same property edited at base vs mobile yields two distinct ops", () => {
+    const { doc } = makeFakeDom();
+    // Base edit.
+    const base = mount({ el: makeEl(doc, "h2", "A"), doc });
+    base.q(".sc-ep-ctl-font-size").value = "40";
+    base.q(".sc-ep-ctl-font-size").dispatch("input", {});
+    // Mobile edit of the SAME property on a fresh panel + session (distinct opKey).
+    const mobile = mount({ el: makeEl(doc, "h2", "A"), doc, surface: "mobile" });
+    mobile.q(".sc-ep-ctl-font-size").value = "40";
+    mobile.q(".sc-ep-ctl-font-size").dispatch("input", {});
+    // opKey namespaces by breakpoint, so these never coalesce.
+    expect(opKey(base.session.list()[0]!)).not.toBe(opKey(mobile.session.list()[0]!));
   });
 });
 

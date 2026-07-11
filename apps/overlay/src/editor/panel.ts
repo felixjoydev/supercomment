@@ -25,7 +25,7 @@
  * ("Add element") control is intentionally gone (requirement G). Original,
  * clean-room design; every listener is tracked and removed in {@link destroy}.
  */
-import type { ChangeOp, EditTarget, InsertionPoint } from "@supercomment/shared";
+import type { ChangeOp, DeviceSurface, EditTarget, InsertionPoint } from "@supercomment/shared";
 
 import {
   applyStyleVerified,
@@ -169,6 +169,15 @@ export interface PanelCallbacks {
   beginGesture?(): void;
   /** U12: commit the history gesture opened by {@link beginGesture}. */
   commitGesture?(): void;
+  /**
+   * U14: the device surface these edits are tagged to. Non-"web" surfaces stamp
+   * every recorded op's `responsive` field (opKey namespaces by breakpoint, so an
+   * edit made at mobile is a distinct op from the same edit at base) and render a
+   * surface chip. Absent / "web" → base edits, no tag, no chip.
+   */
+  surface?: DeviceSurface;
+  /** U14: the surface chip label (e.g. "Mobile · 375px"); shown when non-base. */
+  surfaceLabel?: string;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -349,6 +358,14 @@ export class PropertiesPanel {
 
     const left = this.create("div", "sc-ep-header-left");
     left.append(handle, tag);
+    // U14: a device-surface chip so the reviewer always knows their edits are
+    // tagged to this breakpoint (only shown off the base "web" surface).
+    if (this.surfaceTag()) {
+      const chip = this.create("div", "sc-ep-surface-chip");
+      chip.textContent = `Editing ${this.cb.surfaceLabel ?? this.surfaceTag()}`;
+      chip.setAttribute("aria-label", `Editing on ${this.surfaceTag()}`);
+      left.append(chip);
+    }
     header.append(left, close);
     this.root.appendChild(header);
   }
@@ -1011,6 +1028,12 @@ export class PropertiesPanel {
 
   // --- Recording -----------------------------------------------------------
 
+  /** U14: the responsive tag for the current surface, or undefined at base ("web"). */
+  private surfaceTag(): DeviceSurface | undefined {
+    const s = this.cb.surface;
+    return s && s !== "web" ? s : undefined;
+  }
+
   private recordStyle(property: string, after: string, opts: { valueToken?: string } = {}): void {
     const before = this.beforeFor(property);
     const revertToBuild = this.revertFor(property); // first-write-wins build snapshot
@@ -1036,6 +1059,7 @@ export class PropertiesPanel {
         after,
         previewUnavailable,
         ...(opts.valueToken ? { valueToken: opts.valueToken } : {}),
+        ...(this.surfaceTag() ? { responsive: this.surfaceTag() } : {}),
       }),
       dom,
     );
@@ -1200,6 +1224,7 @@ export class PropertiesPanel {
       after: sel.css,
       previewUnavailable: pu,
       font,
+      ...(this.surfaceTag() ? { responsive: this.surfaceTag() } : {}),
     });
     this.cb.record(op, dom);
     this.markDegraded(property, pu);

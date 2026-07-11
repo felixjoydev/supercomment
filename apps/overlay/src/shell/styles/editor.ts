@@ -920,6 +920,18 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   padding: 0;
 }
 
+/* U14: the device-surface chip in the panel header (off the base "web" surface). */
+.sc-ep-surface-chip {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--ep-accent, #8b6dff);
+  background: rgba(139, 109, 255, 0.16);
+  border-radius: 5px;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
 /* U11: a chip shown when a color pick matches a page design token. */
 .sc-ep-token-chip {
   align-self: flex-start;
