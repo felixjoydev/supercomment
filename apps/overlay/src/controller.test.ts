@@ -21,6 +21,7 @@ import type {
   AgentEnqueuer,
   AgentPromptWriter,
   ExistingCommentMarker,
+  OverlayConfig,
 } from "./core/types.js";
 import type { ReviewComment } from "./read/load-comments.js";
 
@@ -93,6 +94,7 @@ function makeController(opts?: {
   enqueuer?: AgentEnqueuer;
   agentPromptWriter?: AgentPromptWriter;
   currentUser?: { displayName: string; role: string };
+  threadClient?: unknown;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -108,6 +110,9 @@ function makeController(opts?: {
     ...(opts?.enqueuer ? { enqueuer: opts.enqueuer } : {}),
     ...(opts?.agentPromptWriter ? { agentPromptWriter: opts.agentPromptWriter } : {}),
     ...(opts?.currentUser ? { currentUser: opts.currentUser } : {}),
+    ...(opts?.threadClient
+      ? { threadClient: opts.threadClient as OverlayConfig["threadClient"] }
+      : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
@@ -1008,6 +1013,52 @@ describe("OverlayController — composer reference images (U17/R19)", () => {
     expect(submitter.payloads[0]!.context.referenceImages).toEqual([
       "preview/ref-1.png",
     ]);
+  });
+
+  it("shows the reference image in the FRESH marker's popover instantly (no reload needed)", async () => {
+    const submitter = new StubSubmitter();
+    const uploader: ScreenshotUploader = {
+      uploadDataUrl: async () => "preview/ref-1.png",
+    };
+    const readFile: FileReaderFn = async () => "data:image/png;base64,AAAA";
+    // A thread client is needed so the popover can SIGN the reference path.
+    const threadClient = {
+      listReplies: async () => [],
+      createReply: async () => null,
+      resolve: async () => true,
+      deleteReply: async () => true,
+      deleteThread: async () => true,
+      markRead: async () => true,
+      markUnread: async () => true,
+      signCapture: async (p: string) => `https://signed.example/${p}`,
+    };
+    const { controller, doc, q } = makeController({
+      submitter,
+      uploader,
+      readFile,
+      threadClient,
+      currentUser: { displayName: "Alex", role: "member" },
+    });
+    const el = hostEl(doc, "button", "Buy");
+
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    attachReference(q);
+    await flush();
+    q("textarea")!.value = "See the attached mock";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // Open the just-created pin's popover WITHOUT any reload.
+    q(".sc-marker-container")!.dispatch("click", { target: q(".sc-marker") });
+    // The gallery caption is synchronous; the thumbnail fills once it signs.
+    expect(q(".sc-ref-gallery")).not.toBeNull();
+    await flush();
+    const shot = q(".sc-ref-gallery .sc-shot");
+    expect(shot).not.toBeNull();
+    expect((shot!.children[0] as unknown as { src: string }).src).toBe(
+      "https://signed.example/preview/ref-1.png",
+    );
   });
 
   it("is non-blocking: a failed upload leaves referenceImages unset and the comment still posts", async () => {

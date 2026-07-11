@@ -90,7 +90,29 @@ function shallowEqualComment(a: CommentView, b: CommentView): boolean {
     // re-fetches its replies (comment-thread keys its reply load on latestReplyAt).
     a.latestReplyAt === b.latestReplyAt &&
     a.statusChangedAt === b.statusChangedAt &&
+    // sendStatus and privatePrompt are set by OPTIMISTIC local updates (the send
+    // button, the agent-prompt editor), never by a broadcast (reconcileUnread
+    // carries them forward), so they MUST be compared here — otherwise a
+    // prompt/send change looks "unchanged", mergeComment returns the same array,
+    // and the board never re-renders it until a full reload.
+    a.sendStatus === b.sendStatus &&
+    samePrivatePrompt(a.privatePrompt, b.privatePrompt) &&
     a.createdAt === b.createdAt
+  );
+}
+
+/** Deep-ish equality for the private prompt (body + author + image refs). */
+function samePrivatePrompt(
+  a: CommentView["privatePrompt"],
+  b: CommentView["privatePrompt"],
+): boolean {
+  if (a === b) return true; // both null, or the same reference
+  if (!a || !b) return false; // exactly one is null
+  return (
+    a.body === b.body &&
+    a.authorDisplayName === b.authorDisplayName &&
+    a.imageRefs.length === b.imageRefs.length &&
+    a.imageRefs.every((ref, i) => ref === b.imageRefs[i])
   );
 }
 

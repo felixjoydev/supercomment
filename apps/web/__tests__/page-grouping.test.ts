@@ -4,6 +4,7 @@ import {
   reconcileUnread,
   filterUnread,
   countUnread,
+  mergeComment,
 } from "../lib/comments/view";
 import type { CommentView } from "../lib/comments/types";
 
@@ -129,6 +130,47 @@ describe("reconcileUnread", () => {
       authorDisplayName: "Bob",
       imageRefs: [],
     });
+  });
+});
+
+describe("mergeComment — optimistic prompt/send updates re-render", () => {
+  it("yields a NEW array when only privatePrompt changes (else the board never re-renders)", () => {
+    const current = [mk({ id: "a", privatePrompt: null })];
+    const updated = mk({
+      id: "a",
+      privatePrompt: { body: "do this", authorDisplayName: "Ada", imageRefs: [] },
+    });
+    const next = mergeComment(current, updated);
+    expect(next).not.toBe(current); // reference changed → React re-renders
+    expect(next[0]!.privatePrompt?.body).toBe("do this");
+  });
+
+  it("yields a NEW array when a prompt's image_refs change (image attached)", () => {
+    const current = [
+      mk({ id: "a", privatePrompt: { body: "x", authorDisplayName: "Ada", imageRefs: [] } }),
+    ];
+    const updated = mk({
+      id: "a",
+      privatePrompt: { body: "x", authorDisplayName: "Ada", imageRefs: ["prev/p.png"] },
+    });
+    expect(mergeComment(current, updated)).not.toBe(current);
+  });
+
+  it("yields a NEW array when only sendStatus changes", () => {
+    const current = [mk({ id: "a", sendStatus: null })];
+    const updated = mk({ id: "a", sendStatus: "pending" });
+    expect(mergeComment(current, updated)).not.toBe(current);
+  });
+
+  it("still returns the SAME array for a genuine no-op (idempotent re-delivery)", () => {
+    const current = [
+      mk({ id: "a", privatePrompt: { body: "x", authorDisplayName: "Ada", imageRefs: ["r"] } }),
+    ];
+    const same = mk({
+      id: "a",
+      privatePrompt: { body: "x", authorDisplayName: "Ada", imageRefs: ["r"] },
+    });
+    expect(mergeComment(current, same)).toBe(current);
   });
 });
 
