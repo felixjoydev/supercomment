@@ -19,6 +19,10 @@ import {
 } from '@/lib/comments/view';
 import { laneLabel } from '@/lib/comments/labels';
 import { PageGroupSection } from './page-group';
+import { CommentBoardKanban } from './comment-board-kanban';
+
+type ViewMode = 'list' | 'board';
+const VIEW_STORAGE_KEY = 'sc-comments-view';
 
 const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
@@ -62,9 +66,26 @@ export function CommentBoard({
   const [comments, setComments] = useState<CommentView[]>(initialComments);
   const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [connection, setConnection] = useState<'connecting' | 'live' | 'error'>(
     'connecting',
   );
+
+  // Restore the persisted List/Board choice after mount (kept out of the initial
+  // state so server and first client render agree — no hydration mismatch).
+  useEffect(() => {
+    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    if (saved === 'board' || saved === 'list') setViewMode(saved);
+  }, []);
+
+  function changeView(mode: ViewMode) {
+    setViewMode(mode);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, mode);
+    } catch {
+      // ignore storage failures (private mode, etc.); the choice is non-critical
+    }
+  }
 
   useEffect(() => {
     const supabase = createClient();
@@ -117,11 +138,23 @@ export function CommentBoard({
     setComments((current) => current.filter((c) => c.id !== id));
   }
 
+  const boardComments = useMemo(
+    () => filterUnread(comments, unreadOnly),
+    [comments, unreadOnly],
+  );
+
   return (
     <section>
       <div className="comments-head">
-        <LaneTabs filter={laneFilter} onChange={setLaneFilter} counts={counts} />
-        <ConnectionIndicator state={connection} />
+        {viewMode === 'list' ? (
+          <LaneTabs filter={laneFilter} onChange={setLaneFilter} counts={counts} />
+        ) : (
+          <span className="comments-head-spacer" aria-hidden="true" />
+        )}
+        <div className="comments-head-right">
+          <ViewToggle mode={viewMode} onChange={changeView} />
+          <ConnectionIndicator state={connection} />
+        </div>
       </div>
 
       <div className="comments-subhead">
@@ -130,7 +163,7 @@ export function CommentBoard({
           count={unreadTotal}
           onToggle={() => setUnreadOnly((v) => !v)}
         />
-        {(counts.dismissed > 0 || laneFilter === 'dismissed') && (
+        {viewMode === 'list' && (counts.dismissed > 0 || laneFilter === 'dismissed') && (
           <DismissedToggle
             active={laneFilter === 'dismissed'}
             count={counts.dismissed}
@@ -141,7 +174,14 @@ export function CommentBoard({
         )}
       </div>
 
-      {groups.length === 0 ? (
+      {viewMode === 'board' ? (
+        <CommentBoardKanban
+          comments={boardComments}
+          canMutate={canMutate}
+          canSendToAgent={canSendToAgent}
+          onLocalUpdate={handleLocalUpdate}
+        />
+      ) : groups.length === 0 ? (
         <EmptyState laneFilter={laneFilter} unreadOnly={unreadOnly} />
       ) : (
         <ul className="page-group-list">
@@ -159,6 +199,38 @@ export function CommentBoard({
         </ul>
       )}
     </section>
+  );
+}
+
+function ViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: ViewMode;
+  onChange: (mode: ViewMode) => void;
+}) {
+  return (
+    <div className="seg view-toggle" role="tablist" aria-label="View mode">
+      {(['list', 'board'] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          role="tab"
+          aria-selected={mode === m}
+          className="seg-btn"
+          onClick={() => onChange(m)}
+        >
+          {mode === m ? (
+            <motion.span
+              layoutId="view-toggle-pill"
+              className="seg-pill"
+              transition={spring}
+            />
+          ) : null}
+          <span className="seg-label">{m === 'list' ? 'List' : 'Board'}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
