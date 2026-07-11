@@ -480,6 +480,99 @@ describe("OverlayController — agent prompt (U5, AE5)", () => {
     await flush();
     expect(calls).toBe(0);
   });
+
+  it("code review fix: re-targeting to a DIFFERENT element clears the pending prompt; reopening the SAME element preserves it", () => {
+    const { controller, doc, q } = makeController({
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    const hero = hostEl(doc, "h1", "Hero");
+    const para = hostEl(doc, "p", "Paragraph");
+    controller.changeMode("edit");
+
+    controller.handleEditClick(hero as unknown as Element);
+    q(".sc-ep-prompt")!.value = "For the hero";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+
+    // Esc closes the panel UI but preserves the buffer (G13/R7) — reopening
+    // the SAME element must still show the typed text.
+    controller.cancelSelection();
+    controller.handleEditClick(hero as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe("For the hero");
+
+    // Re-targeting to a DIFFERENT element must NOT silently carry the prior
+    // element's prompt along — it should read empty for the new target.
+    controller.handleEditClick(para as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe("");
+  });
+
+  it("code review fix: a slow first save's async gap does not let a second element's prompt leak onto (or get clobbered by) it", async () => {
+    // A submitter whose completion this test controls, to interleave a second
+    // edit-and-save session while the first one's submit() is still pending.
+    let resolveFirst!: (r: SubmitResult) => void;
+    let submitCount = 0;
+    const written: Array<{ id: string; text: string }> = [];
+    class DeferredSubmitter implements CommentSubmitter {
+      submit(): Promise<SubmitResult> {
+        submitCount++;
+        if (submitCount === 1) {
+          return new Promise((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve({ ok: true, number: submitCount, id: `cmt-${submitCount}` });
+      }
+    }
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async (id, text) => {
+        written.push({ id, text });
+        return true;
+      },
+    };
+    const { controller, doc, q } = makeController({
+      submitter: new DeferredSubmitter(),
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    const hero = hostEl(doc, "h1", "Hero");
+    const para = hostEl(doc, "p", "Paragraph");
+    controller.changeMode("edit");
+
+    // Session 1: type a prompt for the hero and start saving (submit() hangs).
+    controller.handleEditClick(hero as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    q(".sc-ep-prompt")!.value = "For the hero";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-save")!.dispatch("click", {});
+    q("textarea")!.value = "note 1";
+    const firstSubmit = q(".sc-btn-primary")!.dispatch("click", {});
+
+    // While session 1 is still awaiting, re-target to the paragraph and start
+    // a second, independent save with its OWN prompt text.
+    await flush();
+    controller.handleEditClick(para as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe(""); // session 1's text must not leak here
+    q(".sc-ep-ctl-font-size")!.value = "20";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    q(".sc-ep-prompt")!.value = "For the paragraph";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-save")!.dispatch("click", {});
+    q("textarea")!.value = "note 2";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // Now let session 1's submit resolve.
+    resolveFirst({ ok: true, number: 1, id: "cmt-1" });
+    await firstSubmit;
+    await flush();
+
+    // Each save's prompt must be attributed to its OWN comment id — neither
+    // dropped nor cross-attributed to the other.
+    expect(written.sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: "cmt-1", text: "For the hero" },
+      { id: "cmt-2", text: "For the paragraph" },
+    ]);
+  });
 });
 
 describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {

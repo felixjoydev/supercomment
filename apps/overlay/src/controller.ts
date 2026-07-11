@@ -140,6 +140,15 @@ export class OverlayController {
    * actually created in `completeSubmit` — there is no id to bind to earlier.
    */
   private pendingPromptText = "";
+  /**
+   * The element `pendingPromptText` was typed against (code review fix,
+   * julik-frontend-races): re-targeting `openEditPanel` to a DIFFERENT
+   * element clears the buffer, since a prompt is a per-send instruction
+   * about "what I'm about to save", not a cross-element accumulator like
+   * `editSession` — closing the panel and reopening the SAME element still
+   * preserves it. `null` when no element has been targeted yet.
+   */
+  private editPanelElement: Element | null = null;
   /** A selection + draft waiting on a guest name before submission. */
 
   /** Responsive device-mode (top-level controllers only; null in the iframe child). */
@@ -578,6 +587,26 @@ export class OverlayController {
     const name = this.guestStore.get();
     if (!name) return; // still no name -> stay blocked
 
+    // U13: fold the visual change-set into a `template` comment. ONLY a submit
+    // that came from the editor's "Save as comment" carries the buffer — an
+    // ordinary comment made while edits happen to be buffered must not absorb
+    // them. Computed HERE, synchronously and before any await (moved up from
+    // after captureContext — toChangeSet() does no I/O), so the change-set
+    // read and the prompt-buffer snapshot below both happen atomically before
+    // a concurrently-dispatched second edit-and-save can mutate either one
+    // out from under this call (code review fix, julik-frontend-races).
+    const changeSet = asTemplate ? this.editSession.toChangeSet() : null;
+
+    // U5 (R1-R3/R6): snapshot the private prompt into a LOCAL variable now,
+    // synchronously, rather than reading `this.pendingPromptText` after the
+    // async work below resolves — a second edit-and-save session started
+    // while this one is in flight (openEditPanel re-targets, or the user
+    // types a new prompt) mutates the SAME shared field, so reading it late
+    // could pick up the wrong session's text or read it after it was already
+    // cleared. Gated on `changeSet` (a TEMPLATE save), same as the write below.
+    const capturedPromptText = changeSet ? this.pendingPromptText.trim() : "";
+    if (changeSet) this.pendingPromptText = "";
+
     const context = await this.captureContext(target);
 
     // U9 (R15): guarantee a per-comment, ELEMENT-scoped "before" artifact is
@@ -589,13 +618,6 @@ export class OverlayController {
     const element = primaryElementOf(target);
     await attachBeforeArtifact(context, element);
 
-    // U13: fold the visual change-set into a `template` comment. ONLY a submit
-    // that came from the editor's "Save as comment" carries the buffer — an
-    // ordinary comment made while edits happen to be buffered must not absorb
-    // them. captureContext already rastered the MODIFIED DOM (previews are still
-    // applied at submit, before any framework revert — G6), so the screenshot is
-    // the modified state (R17).
-    const changeSet = asTemplate ? this.editSession.toChangeSet() : null;
     if (changeSet) {
       context.changeSet = changeSet;
     }
@@ -624,6 +646,13 @@ export class OverlayController {
       // U13/G5: SURFACE the rejection instead of swallowing it, and PRESERVE the
       // draft + edit buffer so the reviewer can trim/retry (rate_limited /
       // payload_too_large) or reload (no_review_session). Never cancel here.
+      // The prompt snapshot captured above is restored the same way, UNLESS a
+      // second edit-and-save session has already typed something new into the
+      // buffer in the meantime — never clobber a newer, still-in-progress
+      // prompt with this failed attempt's stale one.
+      if (capturedPromptText && this.pendingPromptText === "") {
+        this.pendingPromptText = capturedPromptText;
+      }
       this.showSubmitError(result.message);
       return;
     }
@@ -663,13 +692,19 @@ export class OverlayController {
     // taken by send_comment_to_agent (0044) already sees the live prompt.
     // Deliberately independent of `enqueueToAgent`: a plain "Save comment"
     // alone still persists a typed prompt, so it can be sent later from the
-    // dashboard by anyone with the grant.
+    // dashboard by anyone with the grant. Uses the SNAPSHOT captured at the
+    // top of this call, not a fresh read of `this.pendingPromptText` (which a
+    // concurrently-dispatched second session may have already overwritten or
+    // cleared — code review fix, julik-frontend-races).
     if (changeSet && result.id) {
-      const promptText = this.pendingPromptText.trim();
+      const promptText = capturedPromptText;
       if (promptText && this.config.agentPromptWriter) {
         await this.config.agentPromptWriter.write(result.id, promptText);
       }
-      this.pendingPromptText = "";
+      // No clear here: `this.pendingPromptText` was already reset at capture
+      // time (top of this call). Clearing it again here would wrongly wipe
+      // out a SECOND session's in-progress typing if one started while this
+      // save was still in flight.
     }
 
     // Phase 2 (now U3): the editor's "Send to agent" action also enqueues the
@@ -1138,6 +1173,14 @@ export class OverlayController {
     // UI-only teardown of any prior panel — previews for already-edited elements
     // persist (cumulative visual) since the reviewer is still in the session.
     this.dismissEditPanel();
+    // Code review fix (julik-frontend-races): re-targeting to a genuinely
+    // DIFFERENT element clears any typed-but-unsaved prompt text — it should
+    // not silently carry over and attach itself to whatever gets saved next.
+    // Reopening the SAME element (e.g. after an Esc) preserves it.
+    if (this.editPanelElement !== null && this.editPanelElement !== el) {
+      this.pendingPromptText = "";
+    }
+    this.editPanelElement = el;
     const target = buildEditTarget(el, this.doc);
     this.editPanel = new PropertiesPanel(this.doc, this.shell.layer, el, target, {
       record: (op, revert) => this.recordEdit(op, revert),
