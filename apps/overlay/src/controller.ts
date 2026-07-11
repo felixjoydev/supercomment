@@ -792,8 +792,9 @@ export class OverlayController {
         severity: draft.severity,
         status: "new",
         createdAt: new Date().toISOString(),
-        // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly.
-        ...(changeSet ? { kind: "template" as const } : {}),
+        // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly
+        // and carry the change-set so selecting the pin can re-apply it live.
+        ...(changeSet ? { kind: "template" as const, changeSet } : {}),
         // R19: carry the just-uploaded reference-image refs onto the fresh marker
         // so its popover shows them INSTANTLY, without waiting for a reload to
         // repopulate content from the server (matches the reply-image path).

@@ -19,7 +19,7 @@
  * customer origin) cannot run in this sandbox — only arg/row mapping is tested.
  */
 import { pagePathOf, isThreadUnread } from "@supercomment/shared";
-import type { DeviceSurface, ElementAnchor } from "@supercomment/shared";
+import type { DeviceSurface, ElementAnchor, VisualChangeSet } from "@supercomment/shared";
 
 import type { ExistingCommentMarker, Rect } from "../core/types.js";
 
@@ -202,6 +202,14 @@ export function toExistingMarkers(
       status: c.status,
       createdAt: c.createdAt,
       referenceImages: readReferenceImages(c.context),
+      // A comment IS a visual-edit `template` exactly when it carries a change-set.
+      // list_review_comments doesn't return the `kind` column, so we DERIVE it from
+      // the (returned) context.changeSet — otherwise a reloaded template loses its
+      // pin treatment and reads as an ordinary comment. Carry the change-set too so
+      // selecting the pin can re-apply the edits live.
+      ...(readChangeSet(c.context)
+        ? { kind: "template" as const, changeSet: readChangeSet(c.context)! }
+        : {}),
       // Only carry the gate signals when truthy so older comments / tests that
       // omit them keep an unchanged content shape (the gate reads them as false).
       ...(c.isOwn ? { isOwn: true } : {}),
@@ -209,6 +217,21 @@ export function toExistingMarkers(
       ...(c.latestReplyAt !== null ? { hasReplies: true } : {}),
     },
   }));
+}
+
+/**
+ * Defensively read a visual-edit change-set out of a comment's context. Returns
+ * it only when it has at least one op — the presence of ops is what makes a
+ * comment a `template`. Used to re-derive `kind` on read (the list RPC drops the
+ * `kind` column) and to carry the ops for the live modified-view preview.
+ */
+function readChangeSet(context: unknown): VisualChangeSet | undefined {
+  if (!context || typeof context !== "object") return undefined;
+  const cs = (context as { changeSet?: unknown }).changeSet;
+  if (!cs || typeof cs !== "object") return undefined;
+  const ops = (cs as { ops?: unknown }).ops;
+  if (!Array.isArray(ops) || ops.length === 0) return undefined;
+  return cs as VisualChangeSet;
 }
 
 /** Defensively read reviewer reference-image refs (R19) out of a comment's context. */

@@ -13,6 +13,7 @@ import type {
   CommentKind,
   ElementAnchor,
   DeviceSurface,
+  VisualChangeSet,
 } from "@supercomment/shared";
 import type { ThreadClient } from "../submit/thread.js";
 import type { ReviewComment } from "../read/load-comments.js";
@@ -69,6 +70,12 @@ export interface MarkerComment {
   createdAt?: string;
   /** `template` = a visual-edit comment; drives the distinct marker treatment (R11). */
   kind?: CommentKind;
+  /**
+   * The recorded visual change-set for a `template` comment, carried so selecting
+   * the pin can RE-APPLY the edits live on the page (the modified-view preview).
+   * Present iff `kind === "template"`.
+   */
+  changeSet?: VisualChangeSet;
   /**
    * Reviewer-uploaded reference images ("what I want", R19) — `captures` bucket
    * object PATHS, signed on demand for the popover (U12 read). Carried from
