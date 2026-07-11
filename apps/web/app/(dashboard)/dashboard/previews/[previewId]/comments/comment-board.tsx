@@ -8,13 +8,16 @@ import type { CommentView } from '@/lib/comments/types';
 import { applyBroadcast, type BroadcastOp } from '@/lib/comments/realtime';
 import {
   mergeComment,
-  selectView,
-  countByStatus,
+  sortForReview,
+  filterByLane,
+  countByLane,
   countUnread,
   filterUnread,
   groupByPage,
-  type DashboardFilter,
+  type LaneFilter,
+  type LaneCounts,
 } from '@/lib/comments/view';
+import { laneLabel } from '@/lib/comments/labels';
 import { PageGroupSection } from './page-group';
 
 const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
@@ -28,9 +31,15 @@ const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
  * channel is authorized by the realtime.messages RLS policy from migration 0004
  * — only the preview's workspace members + participants receive its topic.
  *
+ * U7: the primary filter is now the workflow LANE (Backlog → Ready for agent →
+ * In review → Done), not open/history/all. Dismissed is a secondary affordance
+ * ("won't do" is not a pipeline stage). The dashboard is a member (team)
+ * surface, so labels use the member vocabulary.
+ *
  * VERIFY IN REAL ENV: the live websocket round-trip (subscribe, receive a
  * broadcast, status SUBSCRIBED) cannot be exercised in this sandbox; the merge
- * logic it feeds is unit-tested in __tests__/dashboard-realtime.test.ts.
+ * logic it feeds is unit-tested in __tests__/dashboard-realtime.test.ts and the
+ * lane filter/projection in __tests__/comment-lanes.test.ts.
  */
 export function CommentBoard({
   previewId,
@@ -51,7 +60,7 @@ export function CommentBoard({
   canSendToAgent: boolean;
 }) {
   const [comments, setComments] = useState<CommentView[]>(initialComments);
-  const [filter, setFilter] = useState<DashboardFilter>('open');
+  const [laneFilter, setLaneFilter] = useState<LaneFilter>('all');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [connection, setConnection] = useState<'connecting' | 'live' | 'error'>(
     'connecting',
@@ -85,14 +94,14 @@ export function CommentBoard({
   }, [previewId]);
 
   const visible = useMemo(
-    () => filterUnread(selectView(comments, filter), unreadOnly),
-    [comments, filter, unreadOnly],
+    () => filterUnread(sortForReview(filterByLane(comments, laneFilter)), unreadOnly),
+    [comments, laneFilter, unreadOnly],
   );
   const groups = useMemo(() => groupByPage(visible), [visible]);
-  const counts = useMemo(() => countByStatus(comments), [comments]);
+  const counts = useMemo(() => countByLane(comments), [comments]);
   const unreadTotal = useMemo(
-    () => countUnread(selectView(comments, filter)),
-    [comments, filter],
+    () => countUnread(filterByLane(comments, laneFilter)),
+    [comments, laneFilter],
   );
 
   function openPageUrlFor(key: string): string | null {
@@ -111,7 +120,7 @@ export function CommentBoard({
   return (
     <section>
       <div className="comments-head">
-        <FilterTabs filter={filter} onChange={setFilter} counts={counts} />
+        <LaneTabs filter={laneFilter} onChange={setLaneFilter} counts={counts} />
         <ConnectionIndicator state={connection} />
       </div>
 
@@ -121,10 +130,19 @@ export function CommentBoard({
           count={unreadTotal}
           onToggle={() => setUnreadOnly((v) => !v)}
         />
+        {(counts.dismissed > 0 || laneFilter === 'dismissed') && (
+          <DismissedToggle
+            active={laneFilter === 'dismissed'}
+            count={counts.dismissed}
+            onToggle={() =>
+              setLaneFilter((f) => (f === 'dismissed' ? 'all' : 'dismissed'))
+            }
+          />
+        )}
       </div>
 
       {groups.length === 0 ? (
-        <EmptyState filter={filter} unreadOnly={unreadOnly} />
+        <EmptyState laneFilter={laneFilter} unreadOnly={unreadOnly} />
       ) : (
         <ul className="page-group-list">
           {groups.map((group) => (
@@ -166,24 +184,59 @@ function UnreadToggle({
   );
 }
 
-function FilterTabs({
+/**
+ * Secondary "Dismissed" affordance — the won't-do pile is reachable but is NOT
+ * a pipeline lane, so it lives outside the primary segmented control (§11).
+ * Toggling it swaps the lane filter to `dismissed` and back to `all`.
+ */
+function DismissedToggle({
+  active,
+  count,
+  onToggle,
+}: {
+  active: boolean;
+  count: number;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={active ? 'closed-toggle is-active' : 'closed-toggle'}
+      onClick={onToggle}
+      aria-pressed={active}
+    >
+      {laneLabel('dismissed')}
+      {count > 0 ? <span className="seg-count">{count}</span> : null}
+    </button>
+  );
+}
+
+// The primary lane segmented control. `dismissed` is deliberately absent here —
+// it is the secondary DismissedToggle above, per §7/§11.
+const LANE_TABS: { key: Exclude<LaneFilter, 'dismissed'>; countKey: keyof LaneCounts }[] = [
+  { key: 'all', countKey: 'all' },
+  { key: 'backlog', countKey: 'backlog' },
+  { key: 'ready_for_agent', countKey: 'ready_for_agent' },
+  { key: 'in_review', countKey: 'in_review' },
+  { key: 'done', countKey: 'done' },
+];
+
+function tabLabel(key: Exclude<LaneFilter, 'dismissed'>): string {
+  return key === 'all' ? 'All' : laneLabel(key);
+}
+
+function LaneTabs({
   filter,
   onChange,
   counts,
 }: {
-  filter: DashboardFilter;
-  onChange: (f: DashboardFilter) => void;
-  counts: { open: number; resolved: number; dismissed: number; total: number };
+  filter: LaneFilter;
+  onChange: (f: LaneFilter) => void;
+  counts: LaneCounts;
 }) {
-  const tabs: { key: DashboardFilter; label: string; count: number }[] = [
-    { key: 'open', label: 'Open', count: counts.open },
-    { key: 'history', label: 'History', count: counts.resolved + counts.dismissed },
-    { key: 'all', label: 'All', count: counts.total },
-  ];
-
   return (
-    <div className="seg" role="tablist" aria-label="Comment filter">
-      {tabs.map((tab) => (
+    <div className="seg" role="tablist" aria-label="Comment lane filter">
+      {LANE_TABS.map((tab) => (
         <button
           key={tab.key}
           type="button"
@@ -200,7 +253,8 @@ function FilterTabs({
             />
           ) : null}
           <span className="seg-label">
-            {tab.label} <span className="seg-count">{tab.count}</span>
+            {tabLabel(tab.key)}{' '}
+            <span className="seg-count">{counts[tab.countKey]}</span>
           </span>
         </button>
       ))}
@@ -225,10 +279,10 @@ function ConnectionIndicator({ state }: { state: 'connecting' | 'live' | 'error'
 }
 
 function EmptyState({
-  filter,
+  laneFilter,
   unreadOnly,
 }: {
-  filter: DashboardFilter;
+  laneFilter: LaneFilter;
   unreadOnly: boolean;
 }) {
   if (unreadOnly) {
@@ -238,7 +292,7 @@ function EmptyState({
       </div>
     );
   }
-  if (filter === 'open') {
+  if (laneFilter === 'all') {
     return (
       <div className="empty-state">
         <p className="empty-title">All clear</p>
@@ -248,9 +302,18 @@ function EmptyState({
       </div>
     );
   }
+  if (laneFilter === 'dismissed') {
+    return (
+      <div className="empty-state">
+        <p className="empty-sub">Nothing dismissed.</p>
+      </div>
+    );
+  }
   return (
     <div className="empty-state">
-      <p className="empty-sub">Nothing here yet.</p>
+      <p className="empty-sub">
+        No comments in <strong>{laneLabel(laneFilter)}</strong>.
+      </p>
     </div>
   );
 }
