@@ -189,6 +189,10 @@ export function summarizeChangeSet(
 }
 
 function describeOp(op: ChangeOp): string {
+  return `${describeOpBody(op)}${previewCaveat(op)}`;
+}
+
+function describeOpBody(op: ChangeOp): string {
   const where = targetLabel(op.target);
   switch (op.type) {
     case "setStyle":
@@ -216,6 +220,15 @@ function describeOp(op: ChangeOp): string {
     default:
       return `edit ${where}`;
   }
+}
+
+/**
+ * A trailing caveat when the reviewer's page could not confirm the preview, so
+ * the agent trusts the recorded intent over the screenshot (U2). Kept out of the
+ * op body so it composes with every op type as new fields land.
+ */
+function previewCaveat(op: ChangeOp): string {
+  return op.previewUnavailable ? " (preview unavailable on the reviewer's page; trust this value over the screenshot)" : "";
 }
 
 /** A short label for a target: exact source location, else selector, else anchor. */

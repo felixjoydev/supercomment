@@ -93,10 +93,15 @@ export function beginInlineTextEdit(
     (e) => {
       const ke = e as KeyboardEvent;
       if (ke.key === "Enter" && !ke.shiftKey) {
+        // Claim the innermost Escape/commit layer (U2): stop the key from bubbling
+        // to the controller's document handler, so committing/cancelling an inline
+        // text edit never also closes the whole editor.
         ke.preventDefault?.();
+        ke.stopPropagation?.();
         finish(true);
       } else if (ke.key === "Escape") {
         ke.preventDefault?.();
+        ke.stopPropagation?.();
         finish(false);
       }
     },

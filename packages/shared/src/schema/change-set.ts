@@ -115,6 +115,15 @@ export const changeOpSchema = z.object({
   after: z.string().nullable().optional(),
   /** Nearest design token for the `after` value, when detectable (theme-robust). */
   valueToken: z.string().optional(),
+  /**
+   * Set when the live preview could not be verified on the reviewer's page (site
+   * CSS won even after an `!important` escalation, a font never loaded, or a media
+   * swap failed to load). The `after` value is still the reviewer's clean intent;
+   * this only tells the agent the screenshot may not reflect it, so it should
+   * trust the change-set over the raster. Additive + optional (older comments omit
+   * it); never affects how the op is applied.
+   */
+  previewUnavailable: z.boolean().optional(),
   /** Breakpoint this edit applies at (default = base / current viewport). */
   responsive: deviceSurfaceSchema.optional(),
   /** Pseudo-state this edit applies to. */

@@ -279,6 +279,22 @@ describe("OverlayController — inline text edit (requirement E)", () => {
     el.dispatch("blur", {});
     expect(controller.editSession.isEmpty()).toBe(true);
   });
+
+  it("a document Escape while inline-editing cancels only the inline edit (Escape stack, U2)", () => {
+    const { controller, doc } = makeController();
+    const el = hostEl(doc, "h1", "Old heading");
+    controller.changeMode("edit");
+    doc.dispatch("dblclick", { target: el, preventDefault: () => {} });
+    el.textContent = "Half-typed new heading";
+    // The innermost Escape layer (inline text edit) claims the Escape.
+    doc.dispatch("keydown", { key: "Escape", preventDefault: () => {} });
+    // The inline edit was cancelled (original text restored) and nothing recorded.
+    expect(el.textContent).toBe("Old heading");
+    expect(controller.editSession.isEmpty()).toBe(true);
+    // A later blur must not resurrect a commit (the edit already finished).
+    el.dispatch("blur", {});
+    expect(controller.editSession.isEmpty()).toBe(true);
+  });
 });
 
 describe("OverlayController — send to agent (Phase 2)", () => {

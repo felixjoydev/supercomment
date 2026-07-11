@@ -417,6 +417,31 @@ describe("visual change-set + comment kind", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts the additive previewUnavailable marker (and older ops without it)", () => {
+    const withMarker = changeOpSchema.safeParse({
+      opId: "op-pu",
+      type: "setStyle",
+      target: { selector: "a.link", anchors: [{ type: "id", value: "link" }] },
+      property: "color",
+      before: "rgb(0, 0, 0)",
+      after: "rgb(10, 132, 255)",
+      previewUnavailable: true,
+    });
+    expect(withMarker.success).toBe(true);
+    if (withMarker.success) expect(withMarker.data.previewUnavailable).toBe(true);
+
+    const withoutMarker = changeOpSchema.safeParse({
+      opId: "op-nopu",
+      type: "setStyle",
+      target: { selector: "a.link", anchors: [] },
+      property: "color",
+      before: "black",
+      after: "red",
+    });
+    expect(withoutMarker.success).toBe(true);
+    if (withoutMarker.success) expect(withoutMarker.data.previewUnavailable).toBeUndefined();
+  });
+
   it("carries a concrete insertion point + node for insertNode", () => {
     // Covers AE5: an add-element edit hands the agent a concrete insertion point.
     const result = changeOpSchema.safeParse(styleChangeSet.ops[1]);

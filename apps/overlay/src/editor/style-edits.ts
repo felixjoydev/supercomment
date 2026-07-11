@@ -16,6 +16,7 @@
 import type { ChangeOp, DeviceSurface, EditTarget } from "@supercomment/shared";
 
 import type { ColorProbe, Rgba } from "./color/normalize.js";
+import { getPropertyMeta, type PropCtx } from "./property-meta.js";
 
 let opCounter = 0;
 /** A stable-ish op id: crypto.randomUUID in the browser, counter fallback. */
@@ -43,6 +44,8 @@ export interface StyleEditInput {
   responsive?: DeviceSurface;
   /** Pseudo-state this edit applies to. */
   state?: "default" | "hover" | "focus";
+  /** The live preview could not be verified on the reviewer's page (U2). */
+  previewUnavailable?: boolean;
 }
 
 /** Build a `setStyle` op from a style edit. */
@@ -57,7 +60,23 @@ export function buildStyleOp(input: StyleEditInput): ChangeOp {
     ...(input.valueToken ? { valueToken: input.valueToken } : {}),
     ...(input.responsive ? { responsive: input.responsive } : {}),
     ...(input.state ? { state: input.state } : {}),
+    ...(input.previewUnavailable ? { previewUnavailable: true } : {}),
   };
+}
+
+/**
+ * A layout edit (align/justify/gap/direction) implies a flex container — but ONLY
+ * when the element is not already flex OR grid. Converting a grid to flex would
+ * break the grid (R2), so a grid returns false; an unknown display defaults to
+ * needing flex (the historical behavior).
+ */
+export function layoutEditImpliesFlex(displayComputed: string | null): boolean {
+  return !(
+    displayComputed === "flex" ||
+    displayComputed === "inline-flex" ||
+    displayComputed === "grid" ||
+    displayComputed === "inline-grid"
+  );
 }
 
 /** Build a `setText` op from an inline text edit (normalized before→after). */
@@ -125,6 +144,127 @@ export function applyStylePreview(
   } catch {
     /* preview is best-effort; a failure must not break editing */
   }
+}
+
+/** Minimal CSSOM surface the verified apply touches (real elements have it). */
+interface StyleSurface {
+  setProperty(property: string, value: string, priority?: string): void;
+  getPropertyValue(property: string): string;
+  getPropertyPriority(property: string): string;
+  removeProperty(property: string): void;
+}
+
+/** Snapshot of a property's inline declaration (value + priority) for exact restore. */
+export interface InlineSnapshot {
+  value: string;
+  priority: string;
+}
+
+function styleSurface(el: Element): StyleSurface | null {
+  const s = (el as HTMLElement).style as unknown as Partial<StyleSurface> | undefined;
+  return s?.setProperty && s.getPropertyValue && s.getPropertyPriority && s.removeProperty
+    ? (s as StyleSurface)
+    : null;
+}
+
+/** Read a property's current inline value + priority (empty strings when unset). */
+export function readInlineSnapshot(el: Element, property: string): InlineSnapshot {
+  const s = styleSurface(el);
+  return {
+    value: s?.getPropertyValue(property) ?? "",
+    priority: s?.getPropertyPriority(property) ?? "",
+  };
+}
+
+/**
+ * Restore a property's inline declaration to a prior snapshot BYTE-IDENTICAL,
+ * including its `!important` priority (an empty snapshot removes the declaration).
+ * This is the exact-undo primitive the plan's R3 restore depends on. Never throws.
+ */
+export function restoreInlineSnapshot(
+  el: Element,
+  property: string,
+  snap: InlineSnapshot,
+): void {
+  const s = styleSurface(el);
+  if (!s) return;
+  try {
+    if (snap.value) s.setProperty(property, snap.value, snap.priority || "");
+    else s.removeProperty(property);
+  } catch {
+    /* revert is best-effort; never throw into the host page */
+  }
+}
+
+export interface VerifiedApply {
+  /** True when even an `!important` escalation could not make the value take. */
+  previewUnavailable: boolean;
+}
+
+/**
+ * Apply a style value and VERIFY it took (U2). Writes inline, reads back the
+ * computed value through the U1 normalization pipeline, and escalates that one
+ * declaration to `!important` only when site CSS won; if even that loses, flags
+ * `previewUnavailable` (the op still records the clean value — the escalation is
+ * never part of the recorded intent).
+ *
+ * During BOTH the baseline read and the verify readback, the element's own
+ * `transition` is neutralized (and restored byte-identical afterwards) so an
+ * in-flight CSS transition cannot make the readback observe an intermediate frame
+ * and trigger a false escalation / false preview-unavailable. Never throws.
+ */
+export function applyStyleVerified(
+  el: Element,
+  property: string,
+  value: string,
+  opts: { probe: ColorProbe; direction?: "ltr" | "rtl" },
+): VerifiedApply {
+  const s = styleSurface(el);
+  if (!s) {
+    // No CSSOM (e.g. the node doubles) — best-effort write, no verification.
+    applyStylePreview(el, property, value);
+    return { previewUnavailable: false };
+  }
+  const meta = getPropertyMeta(property);
+  const ctx: PropCtx = { probe: opts.probe, direction: opts.direction };
+  const prevTransition = readInlineSnapshot(el, "transition");
+  try {
+    s.setProperty("transition", "none", "important");
+    const before = readComputedValue(el, property);
+    s.setProperty(property, value);
+    let after = readComputedValue(el, property);
+    if (tookEffect(meta.canonical(value, ctx), meta.canonical(before, ctx), meta.canonical(after, ctx), before, after)) {
+      return { previewUnavailable: false };
+    }
+    // Site CSS beat a plain inline write — escalate this one declaration.
+    s.setProperty(property, value, "important");
+    after = readComputedValue(el, property);
+    const took = tookEffect(meta.canonical(value, ctx), meta.canonical(before, ctx), meta.canonical(after, ctx), before, after);
+    return { previewUnavailable: !took };
+  } catch {
+    return { previewUnavailable: false };
+  } finally {
+    restoreInlineSnapshot(el, "transition", prevTransition);
+  }
+}
+
+/**
+ * The verified-apply predicate: did the target value take? Compares the NORMALIZED
+ * computed-after against the normalized target (never authored-vs-computed raw
+ * strings). Falls back to a raw-change check only when normalization is null.
+ */
+function tookEffect(
+  targetCanon: string | null,
+  beforeCanon: string | null,
+  afterCanon: string | null,
+  beforeRaw: string | null,
+  afterRaw: string | null,
+): boolean {
+  if (targetCanon != null && afterCanon != null) return afterCanon === targetCanon;
+  // Normalization unavailable: treat "the computed value moved" as success, and a
+  // no-op write (target already equals before) as success too.
+  if (afterRaw !== beforeRaw) return true;
+  return targetCanon != null && beforeCanon != null && targetCanon === beforeCanon;
 }
 
 /** Apply an ephemeral plaintext preview to the live DOM. Never throws. */

@@ -27,10 +27,14 @@
 import type { ChangeOp, EditTarget, InsertionPoint } from "@supercomment/shared";
 
 import {
-  applyStylePreview,
+  applyStyleVerified,
   buildStyleOp,
+  layoutEditImpliesFlex,
   readComputedColor,
   readComputedValue,
+  readInlineSnapshot,
+  restoreInlineSnapshot,
+  type InlineSnapshot,
 } from "./style-edits.js";
 import {
   buildMoveOp,
@@ -608,9 +612,44 @@ export class PropertiesPanel {
   private recordStyle(property: string, after: string): void {
     const before = this.beforeFor(property);
     const revert = this.revertFor(property);
-    applyStylePreview(this.el, property, after);
-    this.cb.record(buildStyleOp({ target: this.target, property, before, after }), revert);
+    // Verified apply (U2): write, read back through the U1 pipeline, escalate to
+    // !important only if site CSS wins; the op records the clean value and flags
+    // previewUnavailable when even the escalation loses.
+    const { previewUnavailable } = applyStyleVerified(this.el, property, after, {
+      probe: this.colorProbe,
+      direction: this.dirCtx().direction,
+    });
+    this.cb.record(
+      buildStyleOp({ target: this.target, property, before, after, previewUnavailable }),
+      revert,
+    );
+    this.markDegraded(property, previewUnavailable);
     this.refreshCount();
+  }
+
+  /**
+   * Toggle an in-control degradation badge when a preview could not be verified
+   * (U2) — a first-class UI signal, not agent-only. Reused by U8's font picker.
+   */
+  private markDegraded(property: string, unavailable: boolean): void {
+    const ctl = this.root.querySelector?.(`.sc-ep-ctl-${property}`) as HTMLElement | null;
+    if (!ctl) return;
+    const row = (ctl.closest?.(".sc-ep-row") as HTMLElement | null) ?? ctl;
+    if (unavailable) {
+      row.setAttribute?.("data-sc-degraded", "1");
+      if (!row.querySelector?.(".sc-ep-degraded")) {
+        const badge = this.create("span", "sc-ep-degraded");
+        badge.setAttribute("role", "img");
+        badge.setAttribute("aria-label", "Preview unavailable on this page");
+        badge.title =
+          "Preview unavailable on this page; the value is still recorded for the agent.";
+        badge.textContent = "⚠";
+        row.appendChild(badge);
+      }
+    } else {
+      row.removeAttribute?.("data-sc-degraded");
+      (row.querySelector?.(".sc-ep-degraded") as HTMLElement | null)?.remove?.();
+    }
   }
 
   /** The developer-build computed value for a property (the op `before`), captured once. */
@@ -622,21 +661,16 @@ export class PropertiesPanel {
   }
 
   /**
-   * A revert closure that restores the property's ORIGINAL inline value — captured
-   * ONCE, before any preview, so a repeated nudge still reverts all the way to the
-   * developer's build (mirrors apply-change-set.ts's bindOp revert).
+   * A revert closure that restores the property's ORIGINAL inline declaration —
+   * value AND `!important` priority — captured ONCE, before any preview, so a
+   * repeated nudge still reverts all the way to the developer's build byte-
+   * identical (U2/R3: undo must not silently strip a pre-existing !important).
    */
   private revertFor(property: string): () => void {
     let revert = this.styleReverts.get(property);
     if (!revert) {
-      const style = (this.el as HTMLElement).style as
-        | { getPropertyValue?: (p: string) => string; removeProperty?: (p: string) => void }
-        | undefined;
-      const prevInline = style?.getPropertyValue?.(property) ?? "";
-      revert = () => {
-        if (prevInline) applyStylePreview(this.el, property, prevInline);
-        else style?.removeProperty?.(property);
-      };
+      const snap: InlineSnapshot = readInlineSnapshot(this.el, property);
+      revert = () => restoreInlineSnapshot(this.el, property, snap);
       this.styleReverts.set(property, revert);
     }
     return revert;
@@ -797,8 +831,9 @@ export class PropertiesPanel {
    * element is already flex this coalesces to a net no-op and leaves no trace.
    */
   private ensureDisplayFlex(): void {
-    const display = readComputedValue(this.el, "display");
-    if (display === "flex" || display === "inline-flex" || display === "grid") return;
+    // Never convert a grid container to flex (R2) — align/justify are valid on a
+    // grid as-is; only a non-flex, non-grid element needs display:flex recorded.
+    if (!layoutEditImpliesFlex(readComputedValue(this.el, "display"))) return;
     this.recordStyle("display", "flex");
   }
 

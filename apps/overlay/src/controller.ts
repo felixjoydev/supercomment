@@ -55,7 +55,8 @@ import { buildEditTarget } from "./editor/edit-target.js";
 import { PropertiesPanel } from "./editor/panel.js";
 import { PreviewLog } from "./editor/preview-log.js";
 import { InspectorLayer } from "./editor/inspector.js";
-import { beginInlineTextEdit } from "./editor/inline-text.js";
+import { beginInlineTextEdit, type InlineTextHandle } from "./editor/inline-text.js";
+import { EscapeStack, ESCAPE_PRIORITY } from "./editor/escape-stack.js";
 import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
@@ -131,6 +132,10 @@ export class OverlayController {
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
   private editPanel: PropertiesPanel | null = null;
+  /** Layered Escape handling — cancels only the innermost active layer (U2). */
+  private readonly escapeStack = new EscapeStack();
+  /** Active inline text edit (the innermost Escape layer); null when not editing text. */
+  private inlineEdit: InlineTextHandle | null = null;
   /**
    * U5: the properties-panel footer's in-progress "prompt for agent" text
    * (member sessions only — the panel never renders the field for a guest, so
@@ -260,8 +265,8 @@ export class OverlayController {
     this.listeners.dispose();
     this.dismissEditPanel();
     // Ephemeral visual edits must not outlive the overlay — restore the host
-    // page's inline styles before we detach.
-    this.previewLog.revertAll();
+    // page's inline styles byte-identical before we detach.
+    this.restoreToBuild();
     this.inspector.hide();
     this.dismissConfirm();
     // The pages popover registers a document keydown listener; unbind it before
@@ -685,9 +690,13 @@ export class OverlayController {
     // top-level) and notify the parent (if this is the device-iframe child).
     this.bumpSurfaceCount(this.surface);
     this.config.onCommentSubmitted?.(this.surface);
-    // The edits are now saved as a comment (R7): clear the buffer so they don't
-    // ride a subsequent unrelated comment.
-    if (changeSet) this.editSession.discard();
+    // The edits are now saved as a comment (R7): clear the buffer AND revert the
+    // ephemeral previews to the developer build (U2 — the modified state is now
+    // captured in the comment's screenshot + change-set, so the live DOM resets).
+    if (changeSet) {
+      this.editSession.discard();
+      this.restoreToBuild();
+    }
 
     // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
     // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really
@@ -1240,23 +1249,35 @@ export class OverlayController {
     if (op) this.previewLog.revertKey(opKey(op));
   }
 
-  /** Discard the whole buffer AND revert every ephemeral preview. */
+  /** Discard the whole buffer AND revert every ephemeral preview (R3). */
   private discardEdits(): void {
     this.editSession.discard();
-    this.previewLog.revertAll();
+    this.restoreToBuild();
     // U5: an explicit discard throws away the whole in-progress buffer,
     // including any typed-but-unsaved prompt text (R7).
     this.pendingPromptText = "";
   }
 
   /**
-   * Close the editor: tear down the panel UI, revert EVERY ephemeral preview
-   * applied this session (the DOM resets — previews are ephemeral), and hide the
-   * inspector. The edit buffer is PRESERVED (G13/R7); only the visual is undone.
+   * Restore the host page to its developer build by reverting every ephemeral
+   * preview (U2). The SINGLE seam for a non-undoable reset — called on discard,
+   * successful save, and teardown; U3 swaps its implementation to the history
+   * baseline without touching these call sites. NOT called on lapse (which
+   * freezes with edits visible) or Escape/close (which keep the previews so the
+   * page and the buffer never disagree — R3).
+   */
+  private restoreToBuild(): void {
+    this.previewLog.revertAll();
+  }
+
+  /**
+   * Close the editor UI: tear down the panel and hide the inspector, but KEEP the
+   * ephemeral previews (U2/R3 — the page stays equal to the buffer, so Escape,
+   * mode-switch, and session-lapse never desync visuals from recorded edits).
+   * The edit buffer is preserved too; only discard/save/exit reset to build.
    */
   private closeEditor(): void {
     this.dismissEditPanel();
-    this.previewLog.revertAll();
     this.inspector.hide();
   }
 
@@ -1267,13 +1288,19 @@ export class OverlayController {
    */
   private beginInlineEdit(el: Element): void {
     const target = buildEditTarget(el, this.doc);
-    beginInlineTextEdit(el, this.doc, {
+    // Track the handle so the Escape stack can cancel THIS inline edit as its
+    // innermost layer without tearing down the whole editor (U2).
+    this.inlineEdit = beginInlineTextEdit(el, this.doc, {
       onCommit: (before, after) => {
+        this.inlineEdit = null;
         const next = after.replace(/\s+/g, " ").trim();
         if (next === before) return; // unchanged → record nothing
         this.recordEdit(buildTextOp(target, before, next), () =>
           applyTextPreview(el, before),
         );
+      },
+      onCancel: () => {
+        this.inlineEdit = null;
       },
     });
   }
@@ -1310,9 +1337,25 @@ export class OverlayController {
     // shadow host, so a naive "am I typing?" guard cannot see the textarea and
     // letters typed into the note field would switch modes and destroy the
     // draft. Modes are mouse-driven from the toolbar.
+    //
+    // Escape now runs through the layer stack (U2), cancelling only the innermost
+    // active layer; later units register gesture/picker layers above these two.
+    this.escapeStack.register({
+      priority: ESCAPE_PRIORITY.inlineText,
+      isActive: () => this.inlineEdit !== null,
+      close: () => {
+        this.inlineEdit?.cancel();
+        this.inlineEdit = null;
+      },
+    });
+    this.escapeStack.register({
+      priority: ESCAPE_PRIORITY.selection,
+      isActive: () => true, // the always-present fallback: drop the selection/UI
+      close: () => this.cancelSelection(),
+    });
     this.on(this.doc, "keydown", (e) => {
       const ke = e as KeyboardEvent;
-      if (ke.key === "Escape") this.cancelSelection();
+      if (ke.key === "Escape") this.escapeStack.handle();
     });
 
     // Clicks on the host page drive element/multi/edit selection. We listen in

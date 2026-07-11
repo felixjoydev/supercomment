@@ -232,6 +232,53 @@ describe("summarizeChangeSet (U16, R14)", () => {
     expect(prose).toContain("(position 2→0)");
   });
 
+  it("appends a preview-unavailable caveat so the agent trusts the value over the raster (U2)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1.hero", anchors: [] },
+            property: "color",
+            before: "black",
+            after: "red",
+            previewUnavailable: true,
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context)!;
+    expect(prose).toContain("color black→red on h1.hero");
+    expect(prose).toContain("preview unavailable");
+  });
+
+  it("omits the caveat for a normally-applied op", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1.hero", anchors: [] },
+            property: "color",
+            before: "black",
+            after: "red",
+          },
+        ],
+      },
+    };
+    expect(summarizeChangeSet(context)).not.toContain("preview unavailable");
+  });
+
   it("returns null when there is no change-set", () => {
     expect(
       summarizeChangeSet({

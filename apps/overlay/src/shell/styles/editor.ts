@@ -168,6 +168,20 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   white-space: nowrap;
 }
 
+/* U2: a control whose live preview could not be verified on the reviewer's page.
+   The value is still recorded for the agent; this is an honesty signal, not an
+   error. Reused by U8's font-picker degradation badge. */
+.sc-ep-degraded {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ep-warn, #e0a33a);
+  cursor: help;
+  flex: 0 0 auto;
+}
+.sc-ep-row[data-sc-degraded="1"] .sc-ep-label {
+  color: var(--ep-warn, #e0a33a);
+}
+
 /* Fields (number / select / text). */
 .sc-ep-number,
 .sc-ep-select,
