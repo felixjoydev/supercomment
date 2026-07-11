@@ -26,6 +26,13 @@ import {
   type FetchLike,
 } from "./load.js";
 import type { FontRegistry } from "./registry.js";
+import {
+  prepareFontUpload,
+  previewUploadedFont,
+  MAX_UPLOADED_FONTS_PER_CHANGESET,
+  type UploadFileLike,
+  type UploadFontFaceCtor,
+} from "./upload.js";
 
 /** One curated catalog family (names/categories/weights only — never URLs). */
 export interface FontCatalogFamily {
@@ -36,6 +43,19 @@ export interface FontCatalogFamily {
 export interface FontCatalog {
   version: number;
   families: FontCatalogFamily[];
+}
+
+/** The result of sniffing + previewing a picked font file (U9). */
+export interface UploadPickResult {
+  ok: boolean;
+  reason?: "not-a-font" | "too-large" | "parse-failed";
+  family?: string;
+  css?: string;
+  weights?: string[];
+  /** The bytes + sniffed type to upload at save (present on ok). */
+  upload?: { bytes: ArrayBuffer; contentType: string; ext: string };
+  /** True above the soft size threshold (warn, do not block). */
+  sizeWarning?: boolean;
 }
 
 /** The catalog + loader environment, supplied by the controller (null = offline). */
@@ -50,6 +70,8 @@ export interface FontPickerEnv {
   ): Promise<FontLoadResult>;
   /** True when this session may upload font files (U9); drives the Uploaded group. */
   uploadCapable: boolean;
+  /** Sniff + instant-preview a picked font file (U9); absent → uploads disabled. */
+  previewUpload?(file: UploadFileLike): Promise<UploadPickResult>;
 }
 
 /** Provenance of a picked family — mirrors the op's font-identity source, plus generic. */
@@ -70,6 +92,8 @@ export interface FontSelection {
   rawStack?: string;
   /** The load result for a Google pick (carries previewUnavailable). */
   loadResult?: FontLoadResult;
+  /** The bytes to upload at save, for an uploaded font (U9); fileRef fills on save. */
+  upload?: { bytes: ArrayBuffer; contentType: string; ext: string };
 }
 
 export interface FontPickerOptions {
@@ -92,6 +116,10 @@ export interface FontPickerOptions {
   onClose(): void;
   /** Register the picker's Escape layer with the controller's stack (U2). */
   registerEscape?: (layer: EscapeLayer) => () => void;
+  /** Open the OS file picker for a font (U9); default builds a real <input>. */
+  openFilePicker?: () => Promise<UploadFileLike | null>;
+  /** How many fonts are already uploaded this change-set (drives the cap message). */
+  uploadCount?: () => number;
 }
 
 /** The CSS generics offered as a fallback group. */
@@ -153,6 +181,8 @@ export class FontPicker {
   private highlight = -1;
   /** Families that failed to load this session (degradation badge). */
   private readonly failed = new Set<string>();
+  /** A transient message under the upload affordance (rejected file, cap hit). */
+  private uploadError: string | null = null;
 
   private catalog: FontCatalogFamily[] = [];
   private unregisterEscape: (() => void) | null = null;
@@ -265,12 +295,17 @@ export class FontPicker {
 
     for (const group of groups) {
       const matches = group.items.filter((c) => c.family.toLowerCase().includes(q));
-      const showEmpty = matches.length === 0 && group.alwaysShow === true && q === "";
+      const showEmpty =
+        matches.length === 0 && (group.alwaysShow === true || group.upload === true) && q === "";
       if (matches.length === 0 && !showEmpty) continue;
       const head = this.create("div", "sc-ep-fontgroup");
       head.setAttribute("role", "presentation");
       head.textContent = group.label;
       this.listEl.appendChild(head);
+      if (group.upload && q === "") {
+        this.renderUploadAffordance();
+        continue;
+      }
       if (showEmpty && group.emptyHint) {
         const hint = this.create("div", "sc-ep-fontempty");
         hint.textContent = group.emptyHint;
@@ -307,6 +342,7 @@ export class FontPicker {
     items: Candidate[];
     alwaysShow?: boolean;
     emptyHint?: string;
+    upload?: boolean;
   }> {
     const pageItems: Candidate[] = this.opts.pageFonts
       .filter((f) => !f.generic)
@@ -339,6 +375,7 @@ export class FontPicker {
       items: Candidate[];
       alwaysShow?: boolean;
       emptyHint?: string;
+      upload?: boolean;
     }> = [];
     if (recentItems.length) groups.push({ label: "Recent", items: recentItems });
     if (pageItems.length) groups.push({ label: "This page", items: pageItems });
@@ -346,14 +383,9 @@ export class FontPicker {
     const googleFiltered = googleItems.filter((c) => !pageNames.has(c.family.toLowerCase()));
     if (googleFiltered.length) groups.push({ label: "Google Fonts", items: googleFiltered });
     // Uploaded: only when the session can upload (U9); hidden otherwise so the
-    // group is never dead UI. When enabled but empty, an affordance explains it.
-    if (this.opts.env?.uploadCapable) {
-      groups.push({
-        label: "Uploaded",
-        items: [],
-        alwaysShow: true,
-        emptyHint: "Upload a font file to use it here.",
-      });
+    // group is never dead UI. When enabled it renders an upload affordance.
+    if (this.opts.env?.uploadCapable && this.opts.env.previewUpload) {
+      groups.push({ label: "Uploaded", items: [], alwaysShow: true, upload: true });
     }
     groups.push({
       label: "Generic",
@@ -462,6 +494,84 @@ export class FontPicker {
     this.close();
   }
 
+  // --- Uploaded fonts (U9) --------------------------------------------------
+
+  /** Render the Uploaded group's affordance: upload button, notice, cap message. */
+  private renderUploadAffordance(): void {
+    const wrap = this.create("div", "sc-ep-fontupload-wrap");
+    const atCap =
+      (this.opts.uploadCount?.() ?? 0) >= MAX_UPLOADED_FONTS_PER_CHANGESET;
+    if (atCap) {
+      const note = this.create("div", "sc-ep-fontempty");
+      note.textContent = `Upload limit reached (${MAX_UPLOADED_FONTS_PER_CHANGESET} per comment).`;
+      wrap.appendChild(note);
+    } else {
+      const btn = this.create("button", "sc-ep-fontupload") as HTMLButtonElement;
+      btn.type = "button";
+      btn.textContent = "Upload a font file";
+      this.on(btn, "click", () => void this.beginUpload());
+      const notice = this.create("div", "sc-ep-fontnotice");
+      notice.textContent =
+        "Only upload fonts you have the right to use. The file is shared with your team's agent.";
+      wrap.append(btn, notice);
+      if (this.uploadError) {
+        const err = this.create("div", "sc-ep-fonterror");
+        err.setAttribute("role", "alert");
+        err.textContent = this.uploadError;
+        wrap.appendChild(err);
+      }
+    }
+    this.listEl.appendChild(wrap);
+  }
+
+  /** Pick a font file, sniff + preview it, and finish the selection (U9). */
+  private async beginUpload(): Promise<void> {
+    const env = this.opts.env;
+    if (!env?.previewUpload) return;
+    if ((this.opts.uploadCount?.() ?? 0) >= MAX_UPLOADED_FONTS_PER_CHANGESET) return;
+    const pick = this.opts.openFilePicker ?? (() => this.defaultOpenFilePicker());
+    let file: UploadFileLike | null = null;
+    try {
+      file = await pick();
+    } catch {
+      file = null;
+    }
+    if (!file || this.closed) return;
+    let res: UploadPickResult;
+    try {
+      res = await env.previewUpload(file);
+    } catch {
+      res = { ok: false, reason: "parse-failed" };
+    }
+    if (this.closed) return;
+    if (!res.ok || !res.family) {
+      this.uploadError = uploadErrorText(res.reason);
+      this.render(this.searchEl.value ?? "");
+      return;
+    }
+    this.finish({
+      family: res.family,
+      css: res.css ?? familyCss(res.family, "sans-serif"),
+      source: "upload",
+      weights: res.weights ?? [],
+      upload: res.upload,
+    });
+  }
+
+  /** The real browser file picker: a transient <input type=file>. */
+  private defaultOpenFilePicker(): Promise<UploadFileLike | null> {
+    return new Promise((resolve) => {
+      const input = this.doc.createElement("input") as HTMLInputElement;
+      input.type = "file";
+      input.accept = ".woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf";
+      input.addEventListener("change", () => {
+        const f = input.files && input.files[0];
+        resolve(f ?? null);
+      });
+      input.click();
+    });
+  }
+
   private markFailed(family: string): void {
     this.failed.add(family.toLowerCase());
   }
@@ -541,7 +651,39 @@ export function createFontEnv(deps: {
         onLateResolve: onLate,
       });
     },
+    async previewUpload(file) {
+      const bytes = await file.arrayBuffer();
+      const prep = prepareFontUpload({ bytes, fileName: file.name, fileSize: file.size });
+      if (!prep.ok) return { ok: false, reason: prep.reason };
+      const face = await previewUploadedFont(
+        {
+          doc: deps.doc as unknown as { fonts: { add(f: never): unknown } },
+          FontFace: deps.FontFace as unknown as UploadFontFaceCtor,
+          registry: deps.registry,
+        },
+        prep.family,
+        bytes,
+      );
+      if (!face) return { ok: false, reason: "parse-failed" };
+      return {
+        ok: true,
+        family: prep.family,
+        css: familyCss(prep.family, "sans-serif"),
+        weights: [],
+        upload: { bytes, contentType: prep.contentType, ext: prep.ext },
+        sizeWarning: prep.sizeWarning,
+      };
+    },
   };
+}
+
+/** Human-readable copy for a rejected upload. */
+function uploadErrorText(reason?: string): string {
+  if (reason === "too-large") return "That file is too large (max 10 MB).";
+  if (reason === "not-a-font") {
+    return "That is not a supported font file (use woff2, woff, ttf, or otf).";
+  }
+  return "That font could not be read.";
 }
 
 /** A short human label for a numeric weight. */

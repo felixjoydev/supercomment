@@ -198,6 +198,12 @@ export interface SubmitResult {
  */
 export interface ScreenshotUploader {
   uploadDataUrl(dataUrl: string): Promise<string | null>;
+  /**
+   * U9: upload a FONT file to the private `fonts` bucket, returning its object
+   * ref (or null on failure). Optional so existing stubs/tests still satisfy the
+   * interface; the real CaptureUploader implements it.
+   */
+  uploadFont?(font: { bytes: Blob; contentType: string; ext: string }): Promise<string | null>;
 }
 
 /**

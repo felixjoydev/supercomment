@@ -19,8 +19,14 @@
 /** The private bucket created in migration 0027. */
 export const CAPTURES_BUCKET = "captures";
 
+/** The private font-upload bucket created in migration 0051 (U9). */
+export const FONTS_BUCKET = "fonts";
+
 /** Image extensions the `captures` bucket accepts (mirrors allowed_mime_types). */
 const ALLOWED_EXT = new Set(["png", "jpg", "webp"]);
+
+/** Font extensions the `fonts` bucket accepts (mirrors 0051 allowed_mime_types). */
+const ALLOWED_FONT_EXT = new Set(["woff2", "woff", "ttf", "otf"]);
 
 /** A binary capture ready to upload: a Blob + its MIME type + file extension. */
 export interface CaptureBlob {
@@ -92,6 +98,12 @@ function safeExt(ext: string): string {
   return ALLOWED_EXT.has(e) ? e : "png";
 }
 
+/** Coerce a font extension to the fonts bucket's allow-list; defaults to woff2. */
+function safeFontExt(ext: string): string {
+  const e = ext.toLowerCase();
+  return ALLOWED_FONT_EXT.has(e) ? e : "woff2";
+}
+
 /**
  * Uploads captures to the `captures` bucket, returning storage refs (object
  * paths). Constructed once per active session (index.ts wires the same
@@ -125,14 +137,33 @@ export class CaptureUploader {
    * `null` on any failure. Never throws — a failed upload must not block submit.
    */
   async upload(capture: CaptureBlob): Promise<string | null> {
+    return this.uploadTo(CAPTURES_BUCKET, capture.bytes, capture.contentType, safeExt(capture.ext));
+  }
+
+  /**
+   * Upload one FONT file (U9) to the `fonts` bucket, returning its storage ref
+   * or `null` on any failure. The content-type is the caller's magic-byte-sniffed
+   * type (never the browser's octet-stream), which the 0051 bucket re-checks.
+   */
+  async uploadFont(font: CaptureBlob): Promise<string | null> {
+    return this.uploadTo(FONTS_BUCKET, font.bytes, font.contentType, safeFontExt(font.ext));
+  }
+
+  /** Shared POST to a private bucket; returns the object path or null. Never throws. */
+  private async uploadTo(
+    bucket: string,
+    bytes: Blob,
+    contentType: string,
+    ext: string,
+  ): Promise<string | null> {
     try {
-      const path = `${this.previewId}/${this.makeId()}.${safeExt(capture.ext)}`;
-      const url = `${this.base}/storage/v1/object/${CAPTURES_BUCKET}/${path}`;
+      const path = `${this.previewId}/${this.makeId()}.${ext}`;
+      const url = `${this.base}/storage/v1/object/${bucket}/${path}`;
       const token = await this.getAccessToken();
-      const res = await this.put(url, capture.bytes, {
+      const res = await this.put(url, bytes, {
         apikey: this.anonKey,
         Authorization: `Bearer ${token}`,
-        "content-type": capture.contentType,
+        "content-type": contentType,
         "cache-control": "max-age=3600",
       });
       return res.ok ? path : null;

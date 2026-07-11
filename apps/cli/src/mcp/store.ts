@@ -28,6 +28,7 @@ import {
   withPrivateExtras,
   COMMENT_ROW_COLUMNS,
   resolveCaptureSrc,
+  resolveFontSrc,
   type CaptureSigner,
 } from "@supercomment/shared";
 import { asError } from "../lib/errors.js";
@@ -251,6 +252,16 @@ export const MAX_RESOLVED_REFERENCE_IMAGES = 2;
  * / over-cap images stay as raw paths, present but unresolved.
  */
 export const MAX_RESOLVED_THREAD_IMAGES = 3;
+
+/**
+ * R18 token budget for uploaded FONT files (U9): at most this many `font.fileRef`
+ * uploads across a change-set are ever signed into the agent payload. Matches the
+ * client-side per-change-set upload cap; the read side re-enforces it here so a
+ * malicious change-set carrying more upload ops than the client allows can never
+ * make the MCP mint more than this many signed URLs. Over-cap upload ops keep the
+ * font FAMILY (for the agent to install by name) but lose the file ref.
+ */
+export const MAX_RESOLVED_FONT_REFS = 2;
 
 /**
  * Single source of truth for "may this comment's captured raster(s) reach the
@@ -512,7 +523,10 @@ export class SupabaseCommentStore implements CommentStore {
     // stored here; `forAgent` (tools.ts) strips it using the SAME predicate,
     // so resolving it first would just be a wasted Storage round trip (R18).
     if (shouldResolveRaster(comment)) {
-      comment = { ...comment, context: await this.resolveRasters(comment.context) };
+      comment = {
+        ...comment,
+        context: await this.resolveRasters(comment.context, comment.previewId),
+      };
     }
     // Prompt images (R19) are member-authored and TRUSTED — resolve them to
     // signed URLs UNCONDITIONALLY on the focus read (no confirm gate, unlike a
@@ -566,6 +580,7 @@ export class SupabaseCommentStore implements CommentStore {
    */
   private async resolveRasters(
     context: CapturedContext,
+    previewId: string,
   ): Promise<CapturedContext> {
     const next = { ...context };
     // Screenshot and reference images are independent Storage round trips;
@@ -589,7 +604,45 @@ export class SupabaseCommentStore implements CommentStore {
     ]);
     if (resolvedScreenshot) next.screenshot = resolvedScreenshot;
     if (candidates.length > 0) next.referenceImages = resolvedRefs;
+    // U9: sign uploaded-font refs in the change-set (gated identically to the
+    // rasters — this whole method only runs when shouldResolveRaster passed).
+    if (next.changeSet?.ops?.length) {
+      next.changeSet = await this.resolveChangeSetFonts(next.changeSet, previewId);
+    }
     return next;
+  }
+
+  /**
+   * Sign each `setStyle` op's uploaded `font.fileRef` (U9) into a short-lived URL,
+   * PINNED to the comment's server-resolved `previewId` (never a value from the
+   * change-set), capped at {@link MAX_RESOLVED_FONT_REFS}. An over-cap, unpinned,
+   * or sign-failed ref is DROPPED (the op keeps the font family for install-by-
+   * name) rather than left as a raw path. The caller has already applied the
+   * member-or-confirmed-guest gate, so this only runs when signing is allowed.
+   */
+  private async resolveChangeSetFonts(
+    changeSet: NonNullable<CapturedContext["changeSet"]>,
+    previewId: string,
+  ): Promise<NonNullable<CapturedContext["changeSet"]>> {
+    // Choose the first N upload ops as sign-candidates; the rest lose their ref.
+    const signable = new Set<number>();
+    changeSet.ops.forEach((op, i) => {
+      if (op.font?.source === "upload" && op.font.fileRef && signable.size < MAX_RESOLVED_FONT_REFS) {
+        signable.add(i);
+      }
+    });
+    const ops = await Promise.all(
+      changeSet.ops.map(async (op, i) => {
+        if (op.font?.source !== "upload" || !op.font.fileRef) return op;
+        if (signable.has(i)) {
+          const url = await resolveFontSrc(op.font.fileRef, previewId, this.signer);
+          if (url) return { ...op, font: { ...op.font, fileRef: url } };
+        }
+        const { fileRef: _dropped, ...font } = op.font;
+        return { ...op, font };
+      }),
+    );
+    return { ...changeSet, ops };
   }
 
   /**

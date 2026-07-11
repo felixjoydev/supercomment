@@ -18,6 +18,54 @@
 /** The private bucket created in migration 0027 (mirrors the overlay upload). */
 export const CAPTURES_BUCKET = 'captures';
 
+/** The private font-upload bucket created in migration 0051 (U9). */
+export const FONTS_BUCKET = 'fonts';
+
+/** A uuid, for the `<previewId>/<uuid>.<ext>` object-path convention. */
+const UUID_RE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+
+/** Escape regex metacharacters so a value can be embedded in a `RegExp` literally. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Is `ref` a font object PATH that is PINNED to this comment's preview (U9)? True
+ * only for exactly `<previewId>/<uuid>.<ext>` where `previewId` is the caller's
+ * SERVER-RESOLVED preview id (never a value read from the guest-controlled
+ * change-set) and `<ext>` is an inert font format. This is the read-side gate that
+ * stops a malicious `font.fileRef` from pointing the agent's signer at another
+ * preview's folder (or an arbitrary storage path): a ref that does not match the
+ * pinned pattern is never signed.
+ */
+export function isPinnedFontRef(
+  ref: string | null | undefined,
+  previewId: string | null | undefined,
+): boolean {
+  if (!ref || !previewId) return false;
+  const re = new RegExp(`^${escapeRegExp(previewId)}/${UUID_RE}\\.(woff2|woff|ttf|otf)$`);
+  return re.test(ref);
+}
+
+/**
+ * Resolve an uploaded-font `font.fileRef` to a short-lived signed URL, or `null`
+ * when the ref is not pinned to `previewId` or signing failed. The caller passes
+ * the SERVER-RESOLVED preview id; the member-or-confirmed-guest trust gate is the
+ * caller's responsibility (this only does the pin check + signing). Never throws.
+ */
+export async function resolveFontSrc(
+  ref: string | null | undefined,
+  previewId: string | null | undefined,
+  signer: CaptureSigner,
+): Promise<string | null> {
+  if (!isPinnedFontRef(ref, previewId)) return null;
+  try {
+    return await signer(FONTS_BUCKET, ref as string);
+  } catch {
+    return null;
+  }
+}
+
 /** How a stored screenshot value should be rendered. */
 export type CaptureKind = 'none' | 'image-url' | 'image-ref' | 'snapshot';
 

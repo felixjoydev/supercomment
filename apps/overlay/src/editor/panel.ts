@@ -144,6 +144,17 @@ export interface PanelCallbacks {
   fontRecents?(): string[];
   /** U8: a family was picked; the controller records it into its recents. */
   onFontPicked?(family: string): void;
+  /**
+   * U9: an uploaded font's bytes for the recorded op (keyed by opId). The
+   * controller holds them and uploads at SAVE (so a discard never orphans an
+   * object), filling the op's `font.fileRef`. Absent → uploads are unavailable.
+   */
+  onFontFileUpload?(
+    opId: string,
+    file: { bytes: ArrayBuffer; contentType: string; ext: string },
+  ): void;
+  /** U9: how many fonts are already uploaded this change-set (drives the cap). */
+  fontUploadCount?(): number;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -1056,6 +1067,7 @@ export class PropertiesPanel {
         this.fontBtn?.focus?.();
       },
       registerEscape: this.cb.registerEscapeLayer,
+      uploadCount: this.cb.fontUploadCount,
     });
     this.activePicker = picker;
     void picker.open();
@@ -1063,7 +1075,12 @@ export class PropertiesPanel {
 
   /** Record a picked font, refresh the button label, and adapt the weight options. */
   private applyFontSelection(sel: FontSelection): void {
-    this.recordFontFamily(sel);
+    const op = this.recordFontFamily(sel);
+    // U9: hand the uploaded font's bytes to the controller for save-time upload,
+    // keyed by the op just recorded (its fileRef fills in at save).
+    if (sel.source === "upload" && sel.upload && op) {
+      this.cb.onFontFileUpload?.(op.opId, sel.upload);
+    }
     if (this.fontBtn) this.fontBtn.textContent = sel.family;
     this.adaptWeightOptions(sel.weights);
     this.cb.onFontPicked?.(sel.family);
@@ -1074,7 +1091,7 @@ export class PropertiesPanel {
    * weights). Mirrors {@link recordStyle}'s verified-apply + exact-revert, adding
    * the identity for a concrete family (a generic keyword records no identity).
    */
-  private recordFontFamily(sel: FontSelection): void {
+  private recordFontFamily(sel: FontSelection): ChangeOp {
     const property = "font-family";
     const before = this.beforeFor(property);
     const revertToBuild = this.revertFor(property);
@@ -1090,7 +1107,9 @@ export class PropertiesPanel {
       revertToBuild,
     };
     // The preview is unavailable if the write itself lost OR the Google face never
-    // loaded — either way the agent trusts the recorded family over the raster.
+    // loaded — either way the agent trusts the recorded family over the raster. An
+    // uploaded font's fileRef fills in at SAVE; if that upload fails the controller
+    // marks the op previewUnavailable then (never a dangling ref).
     const pu = previewUnavailable || sel.loadResult?.previewUnavailable === true;
     const font =
       sel.source === "generic"
@@ -1101,12 +1120,18 @@ export class PropertiesPanel {
             ...(sel.weights.length ? { weights: sel.weights } : {}),
             ...(sel.rawStack ? { rawStack: sel.rawStack } : {}),
           };
-    this.cb.record(
-      buildStyleOp({ target: this.target, property, before, after: sel.css, previewUnavailable: pu, font }),
-      dom,
-    );
+    const op = buildStyleOp({
+      target: this.target,
+      property,
+      before,
+      after: sel.css,
+      previewUnavailable: pu,
+      font,
+    });
+    this.cb.record(op, dom);
     this.markDegraded(property, pu);
     this.refreshCount();
+    return op;
   }
 
   /** Repopulate the Weight control with a family's real weights, keeping the value. */

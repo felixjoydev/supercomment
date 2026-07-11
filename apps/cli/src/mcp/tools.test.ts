@@ -238,6 +238,69 @@ describe("handleGetComment", () => {
 });
 
 // ---------------------------------------------------------------------------
+// forAgent — uploaded font gate (U9)
+// ---------------------------------------------------------------------------
+
+function fontComment(
+  trustLevel: TrustLevel,
+  opts: { referenceConfirmed?: boolean } = {},
+): McpComment {
+  const base = makeComment({ number: 5, trustLevel });
+  return {
+    ...base,
+    ...(opts.referenceConfirmed ? { referenceConfirmed: true } : {}),
+    context: {
+      ...base.context,
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1", anchors: [] },
+            property: "font-family",
+            after: '"Grifter", sans-serif',
+            font: {
+              family: "Grifter",
+              source: "upload",
+              fileRef: `${PREVIEW_ID}/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.woff2`,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+describe("forAgent uploaded-font gate (U9)", () => {
+  it("strips an UNCONFIRMED guest's font ref (family only) on getComment", async () => {
+    const store = new InMemoryCommentStore([fontComment("guest")]);
+    const out = await handleGetComment(store, { number: 5 });
+    const op = out.comment?.context.changeSet?.ops[0];
+    expect(op?.font?.fileRef).toBeUndefined();
+    expect(op?.font?.family).toBe("Grifter"); // install-by-name survives
+  });
+
+  it("strips an unconfirmed guest's font ref on the LIST path too (never-signed path)", async () => {
+    const store = new InMemoryCommentStore([fontComment("guest")]);
+    const out = await handleListOpenComments(store, { includeGuests: true });
+    const c = out.comments.find((x) => x.number === 5);
+    expect(c?.context.changeSet?.ops[0]?.font?.fileRef).toBeUndefined();
+  });
+
+  it("keeps a MEMBER's font ref through forAgent", async () => {
+    const store = new InMemoryCommentStore([fontComment("member")]);
+    const out = await handleGetComment(store, { number: 5 });
+    expect(out.comment?.context.changeSet?.ops[0]?.font?.fileRef).toBeDefined();
+  });
+
+  it("keeps a CONFIRMED guest's font ref through forAgent", async () => {
+    const store = new InMemoryCommentStore([fontComment("guest", { referenceConfirmed: true })]);
+    const out = await handleGetComment(store, { number: 5 });
+    expect(out.comment?.context.changeSet?.ops[0]?.font?.fileRef).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resolve / dismiss
 // ---------------------------------------------------------------------------
 

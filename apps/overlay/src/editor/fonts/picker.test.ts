@@ -225,13 +225,72 @@ describe("FontPicker (U8)", () => {
     expect(await offline.loadCatalog()).toBeNull();
   });
 
-  it("hides the Uploaded group until the session can upload (U9 cut)", async () => {
+  it("hides the Uploaded group until the session can upload (U9)", async () => {
     const h1 = setup({ env: fakeEnv({ uploadCapable: false }) });
     await h1.picker.open();
     expect(h1.groups()).not.toContain("Uploaded");
 
-    const h2 = setup({ env: fakeEnv({ uploadCapable: true }) });
+    const h2 = setup({
+      env: fakeEnv({ uploadCapable: true, previewUpload: async () => ({ ok: false }) }),
+    });
     await h2.picker.open();
     expect(h2.groups()).toContain("Uploaded");
+  });
+
+  it("uploads a picked font: previews, records source=upload, and closes (U9)", async () => {
+    const previewUpload = vi.fn(async () => ({
+      ok: true,
+      family: "Custom Sans",
+      css: '"Custom Sans", sans-serif',
+      weights: [],
+      upload: { bytes: new ArrayBuffer(4), contentType: "font/woff2", ext: "woff2" },
+      sizeWarning: false,
+    }));
+    const openFilePicker = vi.fn(async () => ({
+      name: "Custom.woff2",
+      size: 1000,
+      arrayBuffer: async () => new ArrayBuffer(4),
+    }));
+    const h = setup({
+      env: fakeEnv({ uploadCapable: true, previewUpload }),
+      openFilePicker,
+    });
+    await h.picker.open();
+    h.q(".sc-ep-fontupload")[0]!.dispatch("click", {});
+    await tick();
+    await tick();
+    expect(openFilePicker).toHaveBeenCalledOnce();
+    expect(previewUpload).toHaveBeenCalledOnce();
+    expect(h.selected[0]).toMatchObject({ source: "upload", family: "Custom Sans" });
+    expect(h.selected[0]!.upload).toBeDefined();
+    expect(h.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows an error and records nothing when the picked file is not a font (U9)", async () => {
+    const h = setup({
+      env: fakeEnv({
+        uploadCapable: true,
+        previewUpload: async () => ({ ok: false, reason: "not-a-font" }),
+      }),
+      openFilePicker: async () => ({ name: "x.woff2", size: 10, arrayBuffer: async () => new ArrayBuffer(4) }),
+    });
+    await h.picker.open();
+    h.q(".sc-ep-fontupload")[0]!.dispatch("click", {});
+    await tick();
+    await tick();
+    expect(h.selected).toHaveLength(0);
+    const err = h.q(".sc-ep-fonterror")[0];
+    expect(err?.textContent).toContain("not a supported font");
+  });
+
+  it("shows a cap message and no upload button once the limit is reached (U9)", async () => {
+    const h = setup({
+      env: fakeEnv({ uploadCapable: true, previewUpload: async () => ({ ok: false }) }),
+      uploadCount: () => 2,
+    });
+    await h.picker.open();
+    expect(h.q(".sc-ep-fontupload")).toHaveLength(0);
+    const notes = h.q(".sc-ep-fontempty").map((n) => n.textContent);
+    expect(notes.some((t) => t.includes("Upload limit reached"))).toBe(true);
   });
 });

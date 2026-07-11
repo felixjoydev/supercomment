@@ -105,6 +105,40 @@ describe("CaptureUploader", () => {
     ).resolves.toBeNull();
   });
 
+  it("uploadFont POSTs to the fonts bucket with the sniffed content-type (U9)", async () => {
+    let seen: SeenPut | undefined;
+    const put: StoragePutter = async (url, body, headers) => {
+      seen = { url, body, headers };
+      return { ok: true, status: 200 };
+    };
+    const up = new CaptureUploader(cfg(put));
+    const ref = await up.uploadFont({
+      bytes: new Blob([Uint8Array.from([0x77, 0x4f, 0x46, 0x32])], { type: "font/woff2" }),
+      contentType: "font/woff2",
+      ext: "woff2",
+    });
+    expect(ref).toBe("pv-123/fixed-id.woff2");
+    expect(seen?.url).toBe(
+      "https://proj.supabase.co/storage/v1/object/fonts/pv-123/fixed-id.woff2",
+    );
+    expect(seen?.headers["content-type"]).toBe("font/woff2");
+  });
+
+  it("uploadFont coerces a disallowed font extension to woff2", async () => {
+    let seenUrl = "";
+    const put: StoragePutter = async (url) => {
+      seenUrl = url;
+      return { ok: true, status: 200 };
+    };
+    const up = new CaptureUploader(cfg(put));
+    await up.uploadFont({
+      bytes: new Blob([Uint8Array.from([1])], { type: "font/woff2" }),
+      contentType: "font/woff2",
+      ext: "eot",
+    });
+    expect(seenUrl).toContain("/fonts/pv-123/fixed-id.woff2");
+  });
+
   it("uploadDataUrl uploads a real image but skips the snapshot fallback", async () => {
     let calls = 0;
     const put: StoragePutter = async () => {

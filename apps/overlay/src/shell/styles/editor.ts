@@ -744,6 +744,40 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
 }
 .sc-ep-fontweight-sel option { background: var(--ep-field); color: var(--ep-ink); }
 
+/* U9: the Uploaded group's upload affordance (button + rights notice + errors). */
+.sc-ep-fontupload-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px 8px;
+}
+.sc-ep-fontupload {
+  appearance: none;
+  border: 1px dashed var(--ep-line-2);
+  background: transparent;
+  color: var(--ep-ink);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  text-align: center;
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-fontupload:hover { background: var(--ep-field-2); }
+}
+.sc-ep-fontnotice {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ep-ink-3);
+}
+.sc-ep-fonterror {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ep-danger, #e5484d);
+}
+
 .sc-edit-panel :focus-visible {
   outline: 2px solid var(--ep-accent);
   outline-offset: 1px;

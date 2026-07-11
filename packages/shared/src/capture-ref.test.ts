@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 
 import {
   CAPTURES_BUCKET,
+  FONTS_BUCKET,
   classifyCaptureRef,
   resolveCaptureSrc,
+  isPinnedFontRef,
+  resolveFontSrc,
   type CaptureSigner,
 } from "./capture-ref.js";
 
@@ -84,5 +87,58 @@ describe("resolveCaptureSrc", () => {
     const url = await resolveCaptureSrc("https://attacker.example/p.png", signer);
     expect(signer).toHaveBeenCalledWith(CAPTURES_BUCKET, "https://attacker.example/p.png");
     expect(url).toBeNull();
+  });
+});
+
+const PREVIEW = "3fb218bf-0000-4000-8000-000000000000";
+const FONT_UUID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const PINNED = `${PREVIEW}/${FONT_UUID}.woff2`;
+
+describe("isPinnedFontRef (U9)", () => {
+  it("accepts exactly <previewId>/<uuid>.<font-ext> for THIS preview", () => {
+    expect(isPinnedFontRef(PINNED, PREVIEW)).toBe(true);
+    expect(isPinnedFontRef(`${PREVIEW}/${FONT_UUID}.woff`, PREVIEW)).toBe(true);
+    expect(isPinnedFontRef(`${PREVIEW}/${FONT_UUID}.ttf`, PREVIEW)).toBe(true);
+    expect(isPinnedFontRef(`${PREVIEW}/${FONT_UUID}.otf`, PREVIEW)).toBe(true);
+  });
+
+  it("rejects a ref pinned to a DIFFERENT preview (cross-preview theft)", () => {
+    const other = "99999999-0000-4000-8000-000000000000";
+    expect(isPinnedFontRef(`${other}/${FONT_UUID}.woff2`, PREVIEW)).toBe(false);
+  });
+
+  it("rejects non-font extensions, path traversal, subpaths, and junk", () => {
+    expect(isPinnedFontRef(`${PREVIEW}/${FONT_UUID}.svg`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(`${PREVIEW}/${FONT_UUID}.html`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(`${PREVIEW}/../secret/${FONT_UUID}.woff2`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(`${PREVIEW}/sub/${FONT_UUID}.woff2`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(`${PREVIEW}/not-a-uuid.woff2`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(`https://attacker.example/x.woff2`, PREVIEW)).toBe(false);
+    expect(isPinnedFontRef(PINNED, "")).toBe(false);
+    expect(isPinnedFontRef(undefined, PREVIEW)).toBe(false);
+  });
+});
+
+describe("resolveFontSrc (U9)", () => {
+  it("signs a pinned font ref via the fonts bucket", async () => {
+    const signer = vi.fn<CaptureSigner>(async (_b, p) => `https://signed/${p}?t=x`);
+    const url = await resolveFontSrc(PINNED, PREVIEW, signer);
+    expect(signer).toHaveBeenCalledWith(FONTS_BUCKET, PINNED);
+    expect(url).toBe(`https://signed/${PINNED}?t=x`);
+  });
+
+  it("never signs a ref that is not pinned to the preview (no round trip)", async () => {
+    const signer = vi.fn<CaptureSigner>(async () => "should-not-be-used");
+    const other = "99999999-0000-4000-8000-000000000000";
+    expect(await resolveFontSrc(`${other}/${FONT_UUID}.woff2`, PREVIEW, signer)).toBeNull();
+    expect(await resolveFontSrc(`${PREVIEW}/${FONT_UUID}.svg`, PREVIEW, signer)).toBeNull();
+    expect(signer).not.toHaveBeenCalled();
+  });
+
+  it("returns null (never throws) when the signer fails", async () => {
+    const bad: CaptureSigner = async () => {
+      throw new Error("boom");
+    };
+    await expect(resolveFontSrc(PINNED, PREVIEW, bad)).resolves.toBeNull();
   });
 });

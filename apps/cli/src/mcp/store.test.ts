@@ -499,6 +499,101 @@ describe("SupabaseCommentStore", () => {
     expect(c?.privatePrompt?.imageRefs).toEqual(["signed:prev/only.png"]);
   });
 
+  // --- Uploaded fonts (U9) ---------------------------------------------------
+
+  const FONT_UUID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const pinnedRef = (uuid = FONT_UUID) => `${PREVIEW_ID}/${uuid}.woff2`;
+
+  function fontOp(opId: string, fileRef: string, family = "Grifter") {
+    return {
+      opId,
+      type: "setStyle",
+      target: { selector: "h1", anchors: [] },
+      property: "font-family",
+      after: `"${family}", sans-serif`,
+      font: { family, source: "upload", fileRef },
+    };
+  }
+
+  function fontContext(...ops: unknown[]) {
+    return { selector: "h1", anchors: [], url: "https://x", consoleErrors: [], changeSet: { ops } };
+  }
+
+  it("signs a MEMBER comment's pinned uploaded font ref on getComment (U9)", async () => {
+    const client = fakeClient({
+      rows: [
+        row({ number: 5, trust_level: "member", context: fontContext(fontOp("o1", pinnedRef())) }),
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(5);
+    const op = c?.context?.changeSet?.ops[0];
+    expect(op?.font?.fileRef).toBe(`signed:${pinnedRef()}`);
+    expect(op?.font?.family).toBe("Grifter"); // family preserved
+  });
+
+  it("DROPS (never signs) a font ref pinned to a DIFFERENT preview (U9 pin gate)", async () => {
+    const foreign = `99999999-0000-4000-8000-000000000000/${FONT_UUID}.woff2`;
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [row({ number: 6, trust_level: "member", context: fontContext(fontOp("o1", foreign)) })],
+      signSpy: (_b, p) => signCalls.push(p),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(6);
+    const op = c?.context?.changeSet?.ops[0];
+    expect(op?.font?.fileRef).toBeUndefined(); // stripped to family-only
+    expect(op?.font?.family).toBe("Grifter");
+    expect(signCalls).toHaveLength(0); // pin check fails before any Storage round trip
+  });
+
+  it("caps signed font refs at MAX_RESOLVED_FONT_REFS; over-cap ops keep the family only (U9)", async () => {
+    const client = fakeClient({
+      rows: [
+        row({
+          number: 7,
+          trust_level: "member",
+          context: fontContext(
+            fontOp("o1", pinnedRef("aaaaaaaa-1111-4111-8111-111111111111"), "A"),
+            fontOp("o2", pinnedRef("bbbbbbbb-2222-4222-8222-222222222222"), "B"),
+            fontOp("o3", pinnedRef("cccccccc-3333-4333-8333-333333333333"), "C"),
+          ),
+        }),
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(7);
+    const ops = c!.context!.changeSet!.ops;
+    expect(ops[0]?.font?.fileRef).toContain("signed:");
+    expect(ops[1]?.font?.fileRef).toContain("signed:");
+    expect(ops[2]?.font?.fileRef).toBeUndefined(); // over the cap -> family only
+    expect(ops[2]?.font?.family).toBe("C");
+  });
+
+  it("does NOT sign an UNCONFIRMED guest's uploaded font ref (gated like a raster, U9)", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [row({ number: 8, trust_level: "guest", context: fontContext(fontOp("o1", pinnedRef())) })],
+      signSpy: (_b, p) => signCalls.push(p),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(8);
+    expect(signCalls).toHaveLength(0); // never signed
+    // Left raw here (forAgent strips it on delivery); crucially, not a signed URL.
+    expect(c?.context?.changeSet?.ops[0]?.font?.fileRef).toBe(pinnedRef());
+  });
+
+  it("signs a CONFIRMED guest's uploaded font ref (U9)", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-fc", number: 9, trust_level: "guest", context: fontContext(fontOp("o1", pinnedRef())) })],
+      confirmations: [{ comment_id: "c-fc", confirmed_at: "2026-01-02T00:00:00Z" }],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(9);
+    expect(c?.referenceConfirmed).toBe(true);
+    expect(c?.context?.changeSet?.ops[0]?.font?.fileRef).toBe(`signed:${pinnedRef()}`);
+  });
+
   it("resolveComment resolves number->id then calls the resolve_comment RPC with that id", async () => {
     const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
     const client = fakeClient({

@@ -15,6 +15,7 @@ import type {
   CapturedContext,
   ChangeOp,
   DeviceSurface,
+  VisualChangeSet,
 } from "@supercomment/shared";
 import { newCommentInputSchema } from "@supercomment/shared";
 import {
@@ -61,6 +62,7 @@ import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { createCanvasProbe } from "./editor/color/normalize.js";
 import { createFontEnv, reorderRecents, type FontPickerEnv } from "./editor/fonts/picker.js";
 import { FontRegistry } from "./editor/fonts/registry.js";
+import { MAX_UPLOADED_FONTS_PER_CHANGESET } from "./editor/fonts/upload.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
 import { filterBySurface, countBySurface } from "./device/surface-filter.js";
@@ -161,6 +163,11 @@ export class OverlayController {
   private fontRecents: string[] = [];
   /** U8: memoized picker environment (undefined = not yet built, null = offline). */
   private builtFontEnv: FontPickerEnv | null | undefined;
+  /** U9: uploaded-font bytes keyed by the op's id, uploaded at SAVE (never on discard). */
+  private pendingFontUploads = new Map<
+    string,
+    { bytes: ArrayBuffer; contentType: string; ext: string }
+  >();
   /** Active inline text edit (the innermost Escape layer); null when not editing text. */
   private inlineEdit: InlineTextHandle | null = null;
   /**
@@ -674,6 +681,14 @@ export class OverlayController {
     const capturedSwaps = changeSet ? [...this.pendingSwapImages] : [];
     if (changeSet) this.pendingSwapImages = [];
 
+    // U9: snapshot uploaded-font bytes atomically too; they upload at save and
+    // fill each op's font.fileRef. Deferring the upload to here (not on pick) is
+    // what guarantees a discard never orphans a stored object.
+    const capturedFonts = changeSet
+      ? new Map(this.pendingFontUploads)
+      : new Map<string, { bytes: ArrayBuffer; contentType: string; ext: string }>();
+    if (changeSet) this.pendingFontUploads = new Map();
+
     const context = await this.captureContext(target);
 
     // U9 (R15): guarantee a per-comment, ELEMENT-scoped "before" artifact is
@@ -698,6 +713,7 @@ export class OverlayController {
     await Promise.all([
       this.uploadScreenshotRef(context, element),
       this.uploadReferenceImages(context),
+      this.uploadFontRefs(changeSet, capturedFonts),
     ]);
 
     const payload: NewCommentInput = newCommentInputSchema.parse({
@@ -726,6 +742,14 @@ export class OverlayController {
       // U6: restore the picked swap files too, so a retry re-delivers them.
       if (capturedSwaps.length > 0) {
         this.pendingSwapImages = [...capturedSwaps, ...this.pendingSwapImages];
+      }
+      // U9: restore uploaded-font bytes so a retry re-uploads (unless a newer edit
+      // session already staged its own). Any object stored by the failed attempt
+      // is left to the orphan purge; the ref never persisted, so it is inert.
+      if (capturedFonts.size > 0) {
+        for (const [opId, file] of capturedFonts) {
+          if (!this.pendingFontUploads.has(opId)) this.pendingFontUploads.set(opId, file);
+        }
       }
       this.showSubmitError(result.message);
       return;
@@ -853,6 +877,43 @@ export class OverlayController {
     );
     const refs = results.filter((r): r is string => !!r);
     if (refs.length > 0) context.referenceImages = refs;
+  }
+
+  /**
+   * U9: upload each staged font file to the private `fonts` bucket at SAVE and
+   * write its object ref onto the matching `setStyle` op's `font.fileRef`. The
+   * upload is deferred to here (never on pick) so a discard leaves zero storage
+   * objects. On failure the op is marked previewUnavailable rather than carrying a
+   * dangling ref, so the agent trusts the recorded family name. Non-blocking:
+   * without an uploader that supports fonts, the ops keep the family only.
+   */
+  private async uploadFontRefs(
+    changeSet: VisualChangeSet | null,
+    files: Map<string, { bytes: ArrayBuffer; contentType: string; ext: string }>,
+  ): Promise<void> {
+    const uploader = this.config.uploader;
+    if (!changeSet || files.size === 0 || !uploader?.uploadFont) return;
+    await Promise.all(
+      changeSet.ops.map(async (op) => {
+        const file = op.opId ? files.get(op.opId) : undefined;
+        if (!file || op.font?.source !== "upload") return;
+        let ref: string | null = null;
+        try {
+          ref = await uploader.uploadFont!({
+            bytes: new Blob([file.bytes], { type: file.contentType }),
+            contentType: file.contentType,
+            ext: file.ext,
+          });
+        } catch {
+          ref = null;
+        }
+        if (ref) {
+          op.font = { ...op.font, fileRef: ref };
+        } else {
+          op.previewUnavailable = true;
+        }
+      }),
+    );
   }
 
   /** Surface a submit rejection as a transient notice; the form + buffer stay put. */
@@ -1309,6 +1370,14 @@ export class OverlayController {
       onFontPicked: (family) => {
         this.fontRecents = reorderRecents(this.fontRecents, family);
       },
+      // U9: stash uploaded-font bytes until save. Defensive cap re-check (the
+      // picker already gates on fontUploadCount): never exceed the per-change-set
+      // bound even if a client bypassed the UI.
+      onFontFileUpload: (opId, file) => {
+        if (this.pendingFontUploads.size >= MAX_UPLOADED_FONTS_PER_CHANGESET) return;
+        this.pendingFontUploads.set(opId, file);
+      },
+      fontUploadCount: () => this.pendingFontUploads.size,
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
@@ -1337,7 +1406,9 @@ export class OverlayController {
       FontFace: view.FontFace as Parameters<typeof createFontEnv>[0]["FontFace"],
       catalogUrl: `${origin.replace(/\/$/, "")}/sc/fonts-catalog.json`,
       registry: this.fontRegistry,
-      uploadCapable: false,
+      // U9: uploads are only meaningful when we can actually store the file at
+      // save; without an uploader the picker hides the Uploaded group.
+      uploadCapable: !!this.config.uploader,
     });
     return this.builtFontEnv;
   }
@@ -1368,6 +1439,8 @@ export class OverlayController {
     // U5: an explicit discard throws away the whole in-progress buffer,
     // including any typed-but-unsaved prompt text (R7).
     this.pendingPromptText = "";
+    // U9: and any staged font uploads (never stored, so nothing to purge).
+    this.pendingFontUploads = new Map();
   }
 
   /**
@@ -1384,6 +1457,9 @@ export class OverlayController {
     // U8: remove every FontFace the session added so document.fonts returns to
     // its developer-build baseline (device-mode child docs included).
     this.fontRegistry.drain();
+    // U9: drop staged (not-yet-uploaded) font bytes; a reset-to-build discards the
+    // whole buffer, and nothing was ever stored, so there is nothing to purge.
+    this.pendingFontUploads = new Map();
   }
 
   /**

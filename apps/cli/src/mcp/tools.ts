@@ -202,6 +202,28 @@ function forAgent(
       };
     }
   }
+  // U9: an uploaded font's `font.fileRef` is a raster-class channel too. Gate it
+  // the SAME way as the comment's rasters: for an unconfirmed guest, strip the ref
+  // from every change-set op so only the font FAMILY reaches the agent (install by
+  // name). This is load-bearing on the LIST path — which never signs, so the store
+  // leaves the raw path in place — and a redundant net on the focus path (the
+  // store already declined to sign or stripped it there).
+  if (
+    !shouldResolveRaster(next) &&
+    next.context?.changeSet?.ops?.some(
+      (op) => op.font?.source === "upload" && op.font.fileRef,
+    )
+  ) {
+    const ops = next.context.changeSet.ops.map((op) => {
+      if (op.font?.source !== "upload" || !op.font.fileRef) return op;
+      const { fileRef: _dropped, ...font } = op.font;
+      return { ...op, font };
+    });
+    next = {
+      ...next,
+      context: { ...next.context, changeSet: { ...next.context.changeSet, ops } },
+    };
+  }
   // Gate reply images (R19) the SAME way as the comment's rasters, but PER
   // REPLY: a GUEST reply's images are an untrusted raster channel withheld
   // until the send is confirmed; a MEMBER reply's always pass. This double-
