@@ -5,7 +5,7 @@
  * it just collects a `CommentDraft` and reports submit/cancel via callbacks.
  */
 import type { Intent, Severity } from "@supercomment/shared";
-import { intentSchema, severitySchema } from "@supercomment/shared";
+import { intentSchema, isValidCaptureImage, severitySchema } from "@supercomment/shared";
 import type { CommentDraft, FileReaderFn, Rect } from "../core/types.js";
 import { enterCard, exitCard } from "../shell/motion.js";
 
@@ -13,11 +13,6 @@ const FORM_WIDTH = 320;
 const FORM_MARGIN = 12;
 /** Rough height used for edge-aware vertical placement before measuring. */
 const FORM_EST_HEIGHT = 260;
-
-/** Max reference-image size — mirrors the 0027 `captures` bucket cap (also server-enforced). */
-const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
-/** Reference-image MIME types the bucket accepts. */
-const REFERENCE_MIME = /^image\/(png|jpe?g|webp)$/i;
 
 /** The minimal file shape the composer reads (a real `File` satisfies it). */
 export interface ReferenceFile {
@@ -311,10 +306,7 @@ export class CommentForm {
 
 /** True when a file is an accepted reference image within the size cap (client-side UX). */
 function isValidReferenceImage(file: ReferenceFile): boolean {
-  const type = (file.type ?? "").toLowerCase();
-  if (!REFERENCE_MIME.test(type)) return false;
-  if (typeof file.size === "number" && file.size > MAX_REFERENCE_BYTES) return false;
-  return true;
+  return isValidCaptureImage({ type: file.type, size: file.size });
 }
 
 /** Default file→data-URL reader (browser FileReader); resolves null on failure. */

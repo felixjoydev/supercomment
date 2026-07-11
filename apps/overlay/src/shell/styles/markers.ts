@@ -323,6 +323,76 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+/* Reply composer: "attach image" button + pending-image preview thumbs (R19). */
+.sc-reply-attach-wrap {
+  flex-shrink: 0;
+  display: inline-flex;
+}
+.sc-reply-attach {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-2);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 140ms ease;
+}
+.sc-reply-attach:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+.sc-compose-thumbs {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-compose-thumbs:empty {
+  display: none;
+}
+.sc-compose-thumb {
+  position: relative;
+  width: 56px;
+  height: 44px;
+  border-radius: 7px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.sc-compose-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sc-compose-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(20, 18, 16, 0.66);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .sc-reply-input {
   flex: 1;
@@ -384,6 +454,73 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
 /* A resolved (marked-done) pin dims. */
 .sc-marker.sc-resolved {
   opacity: 0.55;
+}
+
+/* Reviewer reference images ("what I want", R19) + reply-image thumbnails. */
+.sc-ref-gallery {
+  display: grid;
+  gap: 6px;
+}
+.sc-ref-gallery-cap {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.sc-ref-gallery-grid,
+.sc-reply-shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-shot {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: 72px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: zoom-in;
+  line-height: 0;
+  transition: transform 160ms var(--ease-out);
+}
+.sc-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+  display: block;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-shot:hover {
+    transform: translateY(-1px);
+  }
+}
+
+/* Full-viewport image lightbox (opened from a thumbnail). */
+.sc-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vmin;
+  background: rgba(20, 18, 16, 0.82);
+  cursor: zoom-out;
+}
+.sc-lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  cursor: default;
 }
 
 /* Reduced motion ------------------------------------------------------ */

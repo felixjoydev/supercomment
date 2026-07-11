@@ -12,6 +12,16 @@ export const mcpReplySchema = z.object({
   trustLevel: trustLevelSchema,
   body: z.string(),
   createdAt: z.string(),
+  /**
+   * Images attached to this reply (R19). On the focus read (`get_comment`) the
+   * NEWEST images across the whole thread are resolved to signed URLs (recency
+   * = the current ask); older / over-budget ones stay as raw `captures` paths
+   * (present but not rendered). A GUEST reply's images are an untrusted raster
+   * channel gated exactly like a guest comment's screenshot (R11): withheld
+   * from the agent until a member confirms the send. Absent when the reply has
+   * no images (or a guest's were withheld). Untrusted DATA like the note/body.
+   */
+  imageRefs: z.array(z.string()).optional(),
 });
 export type McpReply = z.infer<typeof mcpReplySchema>;
 
@@ -34,6 +44,13 @@ export const mcpPrivatePromptSchema = z.object({
   body: z.string(),
   /** Display name of the member who authored/last edited it (R3 attribution). */
   authorDisplayName: z.string(),
+  /**
+   * Images a member attached to the prompt (R19). TRUSTED like the body (member-
+   * authored), resolved to signed URLs unconditionally on the focus read — never
+   * gated, never redacted, never wrapped in the untrusted-input notice. Absent
+   * on the list view (presence-only curation) and when the prompt has no images.
+   */
+  imageRefs: z.array(z.string()).optional(),
 });
 export type McpPrivatePrompt = z.infer<typeof mcpPrivatePromptSchema>;
 
@@ -79,6 +96,14 @@ export const mcpCommentSchema = commentSchema.extend({
    * this flag; absent/false only withholds a GUEST comment's raster.
    */
   referenceConfirmed: z.boolean().optional(),
+  /**
+   * WHEN the guest hand-off was confirmed (the `agent_reference_confirmations`
+   * timestamp). Used to gate GUEST reply images by recency (R19 security): the
+   * comment-level confirm approves the thread AS IT WAS at that instant, so a
+   * guest image appended to the thread AFTER it was never reviewed and must be
+   * withheld until a fresh send re-confirms. Present iff `referenceConfirmed`.
+   */
+  referenceConfirmedAt: z.string().optional(),
   /**
    * One-line inventory of all captured signals (relevance layer). Always
    * present on agent-facing comments so the agent knows what exists even when a

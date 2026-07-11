@@ -191,8 +191,18 @@ export function toExistingMarkers(
       severity: c.severity,
       status: c.status,
       createdAt: c.createdAt,
+      referenceImages: readReferenceImages(c.context),
     },
   }));
+}
+
+/** Defensively read reviewer reference-image refs (R19) out of a comment's context. */
+function readReferenceImages(context: unknown): string[] | undefined {
+  if (!context || typeof context !== "object") return undefined;
+  const raw = (context as { referenceImages?: unknown }).referenceImages;
+  if (!Array.isArray(raw)) return undefined;
+  const refs = raw.filter((r): r is string => typeof r === "string" && r.length > 0);
+  return refs.length > 0 ? refs : undefined;
 }
 
 /**

@@ -8,4 +8,5 @@ export * from "./comment-row.js";
 export * from "./page-path.js";
 export * from "./unread.js";
 export * from "./capture-ref.js";
+export * from "./capture-image.js";
 export * from "./source-ref.js";

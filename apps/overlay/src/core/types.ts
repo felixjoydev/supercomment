@@ -69,6 +69,12 @@ export interface MarkerComment {
   createdAt?: string;
   /** `template` = a visual-edit comment; drives the distinct marker treatment (R11). */
   kind?: CommentKind;
+  /**
+   * Reviewer-uploaded reference images ("what I want", R19) — `captures` bucket
+   * object PATHS, signed on demand for the popover (U12 read). Carried from
+   * `context.referenceImages`; absent/empty for comments without any.
+   */
+  referenceImages?: string[];
 }
 
 /**

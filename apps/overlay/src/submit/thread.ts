@@ -21,6 +21,8 @@ export interface ReplyRow {
   trust_level: string;
   body: string;
   created_at: string;
+  /** Attached image refs (`captures` paths, 0048); signed on read for display. */
+  image_refs?: string[];
 }
 
 export interface ThreadClientConfig {
@@ -33,13 +35,23 @@ export interface ThreadClientConfig {
 /** The overlay-facing thread operations. */
 export interface ThreadClient {
   listReplies(commentId: string): Promise<ReplyRow[]>;
-  createReply(commentId: string, body: string): Promise<ReplyRow | null>;
+  createReply(
+    commentId: string,
+    body: string,
+    imageRefs?: string[],
+  ): Promise<ReplyRow | null>;
   resolve(commentId: string, resolved: boolean): Promise<boolean>;
   deleteReply(replyId: string): Promise<boolean>;
   deleteThread(commentId: string): Promise<boolean>;
   /** Mark a thread read/unread for the current viewer (0037/U12). */
   markRead(commentId: string): Promise<boolean>;
   markUnread(commentId: string): Promise<boolean>;
+  /**
+   * Sign a private `captures` object PATH into a temporary, directly-loadable
+   * URL for the popover (reviewer reference images + reply images, R19). Null on
+   * any failure — a broken image must never break the popover.
+   */
+  signCapture(path: string): Promise<string | null>;
 }
 
 export class SessionThreadClient implements ThreadClient {
@@ -70,7 +82,7 @@ export class SessionThreadClient implements ThreadClient {
       const url =
         `${this.base}/rest/v1/comment_replies` +
         `?comment_id=eq.${encodeURIComponent(commentId)}` +
-        `&select=id,author_display_name,trust_level,body,created_at` +
+        `&select=id,author_display_name,trust_level,body,created_at,image_refs` +
         `&order=created_at.asc`;
       const res = await fetch(url, { headers: await this.authHeaders() });
       if (!res.ok) return [];
@@ -81,10 +93,15 @@ export class SessionThreadClient implements ThreadClient {
     }
   }
 
-  async createReply(commentId: string, body: string): Promise<ReplyRow | null> {
+  async createReply(
+    commentId: string,
+    body: string,
+    imageRefs: string[] = [],
+  ): Promise<ReplyRow | null> {
     return this.rpcObject<ReplyRow>("create_review_reply", {
       p_comment_id: commentId,
       p_body: body,
+      p_image_refs: imageRefs,
     });
   }
 
@@ -109,6 +126,44 @@ export class SessionThreadClient implements ThreadClient {
 
   async markUnread(commentId: string): Promise<boolean> {
     return this.rpcOk("mark_thread_unread", { p_comment_id: commentId });
+  }
+
+  /**
+   * Sign a `captures` bucket object path into a short-lived URL so the popover
+   * can render a reviewer reference image / reply image (R19). Uses the Storage
+   * REST sign endpoint with the SAME auth as every other call (apikey + the anon
+   * SESSION JWT); the 0027/0032 RLS authorizes the read via the review_sessions
+   * row. The REST response's `signedURL` is RELATIVE (e.g.
+   * `/object/sign/captures/…?token=…`) — capital-URL and NOT absolute, unlike
+   * supabase-js's `signedUrl` — so the usable URL is `${base}/storage/v1${rel}`.
+   * Never throws (best-effort, mirrors every method here).
+   *
+   * VERIFY IN REAL ENV: the live Storage sign POST (auth, the 0027/0032 RLS,
+   * CORS from the customer origin) cannot run in the sandbox; only the request
+   * shape + URL construction are unit-tested.
+   */
+  async signCapture(path: string): Promise<string | null> {
+    try {
+      // Encode each path SEGMENT (preserving the `/` separators) — reply/prompt
+      // refs are RPC-shape-validated, but `context.referenceImages` is guest-
+      // controlled and could carry `?`/`#`/space/unicode that would otherwise
+      // corrupt or re-target the sign URL. Storage does an exact-name lookup, so
+      // the encoded path only ever signs the caller's own object under RLS.
+      const safePath = path.split("/").map(encodeURIComponent).join("/");
+      const res = await fetch(
+        `${this.base}/storage/v1/object/sign/captures/${safePath}`,
+        {
+          method: "POST",
+          headers: await this.authHeaders(),
+          body: JSON.stringify({ expiresIn: 3600 }),
+        },
+      );
+      if (!res.ok) return null;
+      const data = (await res.json()) as { signedURL?: string };
+      return data?.signedURL ? `${this.base}/storage/v1${data.signedURL}` : null;
+    } catch {
+      return null;
+    }
   }
 
   /** POST an RPC and return its single-row result, or null on any failure. */

@@ -502,6 +502,40 @@ describe("U6 trusted private prompt", () => {
     expect(out.comment?.privatePrompt?.body).toBe(MULTILINE_PROMPT);
   });
 
+  it("get_comment delivers a member prompt's images untouched — TRUSTED, never gated (R19)", async () => {
+    const store = new InMemoryCommentStore([
+      {
+        // Even on a GUEST comment, the member-authored prompt's images are trusted.
+        ...makeComment({ number: 1, trustLevel: "guest" }),
+        privatePrompt: {
+          body: "match this",
+          authorDisplayName: "Priya",
+          imageRefs: ["https://signed.example/p.png"],
+        },
+      },
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.privatePrompt?.imageRefs).toEqual([
+      "https://signed.example/p.png",
+    ]);
+  });
+
+  it("list_open_comments omits prompt images (presence-only; focus read delivers them, R19)", async () => {
+    const store = new InMemoryCommentStore([
+      {
+        ...makeComment({ number: 1, trustLevel: "member" }),
+        privatePrompt: {
+          body: "match this",
+          authorDisplayName: "Priya",
+          imageRefs: ["prev/p.png"],
+        },
+      },
+    ]);
+    const out = await handleListOpenComments(store);
+    expect(out.comments[0]?.privatePrompt?.imageRefs).toBeUndefined();
+    expect(out.comments[0]?.contextSignals).toContain("prompt");
+  });
+
   it("composes prompt PRESENCE into contextSignals on both list and focus reads", async () => {
     const store = new InMemoryCommentStore([
       withPrompt(makeComment({ number: 1, trustLevel: "member" }), "Do the thing."),
@@ -861,6 +895,101 @@ describe("U7 confirm-gated guest reference passthrough (R10-R12)", () => {
     };
     expect(payload.comment?.context?.screenshot).toBe("prev/confirmed.png");
     expect(payload.securityNotice).toBe(UNTRUSTED_INPUT_NOTICE);
+  });
+
+  // Reply-image gating (R19): a guest reply's images ride the confirm gate, but
+  // RECENCY-scoped — a guest image is admitted only if the reply predates the
+  // confirmation (an image appended after the send was never reviewed).
+  function replyComment(
+    trustLevel: TrustLevel,
+    replies: McpComment["thread"],
+    opts: { referenceConfirmedAt?: string } = {},
+  ): McpComment {
+    return {
+      ...makeComment({ number: 1, trustLevel }),
+      ...(opts.referenceConfirmedAt !== undefined
+        ? { referenceConfirmed: true, referenceConfirmedAt: opts.referenceConfirmedAt }
+        : {}),
+      thread: replies,
+    };
+  }
+
+  it("strips an UNCONFIRMED guest reply's images (text still flows) — R19/R11", async () => {
+    const store = new InMemoryCommentStore([
+      replyComment("guest", [
+        {
+          author: "Client",
+          trustLevel: "guest",
+          body: "like this",
+          createdAt: "2026-01-01T00:00:00Z",
+          imageRefs: ["prev/g.png"],
+        },
+      ]),
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.thread?.[0]?.imageRefs).toBeUndefined();
+    expect(out.comment?.thread?.[0]?.body).toBe("like this");
+  });
+
+  it("keeps a MEMBER reply's images even on an unconfirmed guest comment", async () => {
+    const store = new InMemoryCommentStore([
+      replyComment("guest", [
+        {
+          author: "dev",
+          trustLevel: "member",
+          body: "do this",
+          createdAt: "2026-01-01T00:00:00Z",
+          imageRefs: ["https://signed.example/dev.png"],
+        },
+      ]),
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.thread?.[0]?.imageRefs).toEqual([
+      "https://signed.example/dev.png",
+    ]);
+  });
+
+  it("passes a guest reply's images once CONFIRMED (reply predates the confirm)", async () => {
+    const store = new InMemoryCommentStore([
+      replyComment(
+        "guest",
+        [
+          {
+            author: "Client",
+            trustLevel: "guest",
+            body: "like this",
+            createdAt: "2026-01-01T00:00:00Z",
+            imageRefs: ["https://signed.example/g.png"],
+          },
+        ],
+        { referenceConfirmedAt: "2026-01-02T00:00:00Z" },
+      ),
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.thread?.[0]?.imageRefs).toEqual([
+      "https://signed.example/g.png",
+    ]);
+  });
+
+  it("STRIPS a guest reply image APPENDED AFTER the confirm (TOCTOU, security)", async () => {
+    const store = new InMemoryCommentStore([
+      replyComment(
+        "guest",
+        [
+          {
+            author: "Client",
+            trustLevel: "guest",
+            body: "sneaky",
+            createdAt: "2026-01-03T00:00:00Z", // after the confirm below
+            imageRefs: ["https://signed.example/post.png"],
+          },
+        ],
+        { referenceConfirmedAt: "2026-01-02T00:00:00Z" },
+      ),
+    ]);
+    const out = await handleGetComment(store, { number: 1 });
+    expect(out.comment?.thread?.[0]?.imageRefs).toBeUndefined(); // withheld
+    expect(out.comment?.thread?.[0]?.body).toBe("sneaky"); // text still flows
   });
 });
 

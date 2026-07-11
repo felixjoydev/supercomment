@@ -351,6 +351,31 @@ describe("toExistingMarkers", () => {
     expect(markers[0]!.content.note).toBe("n");
     expect(markers[0]!.content.authorDisplayName).toBe("Ada");
     expect(markers[1]!.content.authorDisplayName).toBe("Grace");
+    // No reference images on these two → the field is omitted (undefined).
+    expect(markers[0]!.content.referenceImages).toBeUndefined();
+  });
+
+  it("carries reviewer reference-image refs into the popover content (R19)", () => {
+    const markers = toExistingMarkers([
+      {
+        id: "c1",
+        number: 1,
+        intent: "fix",
+        severity: "minor",
+        note: "n",
+        status: "open",
+        isStale: false,
+        // Well-formed refs survive; empties / non-strings are dropped defensively.
+        context: { referenceImages: ["prev/a.png", "prev/b.webp", "", 5] },
+        createdAt: "",
+        authorDisplayName: "Ada",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
+      },
+    ]);
+    expect(markers[0]!.content.referenceImages).toEqual(["prev/a.png", "prev/b.webp"]);
   });
 
   it("carries the captured anchors through for the U8 re-anchor pass", () => {

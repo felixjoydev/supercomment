@@ -75,6 +75,11 @@ export interface CommentView {
    * hydrated on initial load in getCommentsForPreview, kept live via
    * onLocalUpdate after an in-session edit.
    */
-  privatePrompt: { body: string; authorDisplayName: string } | null;
+  privatePrompt: {
+    body: string;
+    authorDisplayName: string;
+    /** Attached image refs (`captures` paths, 0049); signed on read for display. */
+    imageRefs: string[];
+  } | null;
 }
 

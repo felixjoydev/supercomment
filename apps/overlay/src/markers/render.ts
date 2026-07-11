@@ -10,7 +10,9 @@
  * content so a reviewer can READ the thread on the live deploy, not just see
  * numbered pins.
  */
-import type { MarkerComment, Rect } from "../core/types.js";
+import { isValidCaptureImage, resolveCaptureSrc } from "@supercomment/shared";
+
+import type { MarkerComment, Rect, ScreenshotUploader } from "../core/types.js";
 import {
   clusterMarkers,
   partitionByViewport,
@@ -69,6 +71,11 @@ export class MarkerLayer {
     private readonly thread?: ThreadClient,
     /** The current reviewer, for own-reply delete + member-only thread delete. */
     private readonly currentUser?: { displayName: string; role: string },
+    /**
+     * Out-of-band image uploader (0027/U13 seam) for reply-image attachments
+     * (R19). Absent (tunnel/tests) → the reply composer shows no attach control.
+     */
+    private readonly uploader?: ScreenshotUploader,
   ) {
     this.container = doc.createElement("div");
     this.container.className = "sc-marker-container";
@@ -388,6 +395,15 @@ export class MarkerLayer {
       entry.appendChild(note);
     }
 
+    // Reviewer reference images ("what I want", R19) — signed + shown so a
+    // reviewer SEES the attached reference on the live deploy, not just its note.
+    // Needs the thread client's signer; without one (tunnel/tests) there is no
+    // way to sign a private path, so the block is skipped rather than empty.
+    const refImages = m.content?.referenceImages;
+    if (refImages && refImages.length > 0 && this.thread) {
+      entry.appendChild(this.buildReferenceGallery(refImages));
+    }
+
     if (interactive) {
       const replies = this.doc.createElement("div");
       replies.className = "sc-reply-list";
@@ -400,6 +416,87 @@ export class MarkerLayer {
     }
 
     return entry;
+  }
+
+  /**
+   * A captioned row of the reviewer's reference-image thumbnails (R19), shown in
+   * the popover under the note. Signs each `captures` path via the thread
+   * client's `signCapture` and fills slots asynchronously; a failed sign drops
+   * its slot, so a broken reference is silently omitted (never a broken <img>).
+   */
+  private buildReferenceGallery(refs: string[]): HTMLElement {
+    const gallery = this.doc.createElement("div");
+    gallery.className = "sc-ref-gallery";
+    const cap = this.doc.createElement("div");
+    cap.className = "sc-ref-gallery-cap";
+    cap.textContent =
+      refs.length > 1
+        ? `Reference · what I want · ${refs.length}`
+        : "Reference · what I want";
+    const grid = this.doc.createElement("div");
+    grid.className = "sc-ref-gallery-grid";
+    gallery.append(cap, grid);
+    void this.fillCaptureThumbs(refs, grid);
+    return gallery;
+  }
+
+  /**
+   * Sign each `captures` ref (in stored order) and fill/remove its slot in
+   * `grid` — the shared primitive behind both reference-image and reply-image
+   * thumbnails. Best-effort: with no thread client (tunnel/tests) there is no
+   * signer, so nothing renders; an individual failed sign drops only its slot.
+   * `resolveCaptureSrc` also passes an inline `data:image/*` value through.
+   */
+  private async fillCaptureThumbs(refs: string[], grid: HTMLElement): Promise<void> {
+    const thread = this.thread;
+    if (!thread) return;
+    const signer = (_bucket: string, path: string) => thread.signCapture(path);
+    // One ordered slot per ref so signs completing out of order keep position.
+    const slots = refs.map(() => {
+      const slot = this.doc.createElement("button");
+      slot.type = "button";
+      slot.className = "sc-shot is-loading";
+      slot.setAttribute("aria-label", "Open image");
+      grid.appendChild(slot);
+      return slot;
+    });
+    await Promise.all(
+      refs.map(async (ref, i) => {
+        const slot = slots[i]!;
+        const url = await resolveCaptureSrc(ref, signer);
+        if (!url) {
+          slot.remove();
+          return;
+        }
+        const img = this.doc.createElement("img") as HTMLImageElement;
+        img.src = url;
+        img.alt = "Attached image";
+        slot.classList.remove("is-loading");
+        slot.appendChild(img);
+        slot.addEventListener("click", () => this.openLightbox(url));
+      }),
+    );
+  }
+
+  /** Full-viewport image lightbox; dismiss on backdrop click or Escape. */
+  private openLightbox(url: string): void {
+    const box = this.doc.createElement("div");
+    box.className = "sc-lightbox";
+    const img = this.doc.createElement("img") as HTMLImageElement;
+    img.src = url;
+    img.alt = "Attached image";
+    img.addEventListener("click", (e) => e.stopPropagation());
+    box.appendChild(img);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    const close = () => {
+      box.remove();
+      this.doc.removeEventListener("keydown", onKey);
+    };
+    box.addEventListener("click", () => close());
+    this.doc.addEventListener("keydown", onKey);
+    this.parent.appendChild(box);
   }
 
   /**
@@ -565,10 +662,21 @@ export class MarkerLayer {
       head.appendChild(del);
     }
     main.appendChild(head);
-    const body = this.doc.createElement("div");
-    body.className = "sc-reply-body";
-    body.textContent = r.body;
-    main.appendChild(body);
+    if (r.body) {
+      const body = this.doc.createElement("div");
+      body.className = "sc-reply-body";
+      body.textContent = r.body;
+      main.appendChild(body);
+    }
+    // Attached reply images (R19) — signed + shown inline in the thread. Needs
+    // the signer; an image-only reply (empty body) still shows its pictures.
+    const imgs = r.image_refs;
+    if (imgs && imgs.length > 0 && this.thread) {
+      const shots = this.doc.createElement("div");
+      shots.className = "sc-reply-shots";
+      main.appendChild(shots);
+      void this.fillCaptureThumbs(imgs, shots);
+    }
     el.appendChild(main);
     return el;
   }
@@ -589,17 +697,26 @@ export class MarkerLayer {
     send.textContent = "↑"; // ↑ send arrow
     send.title = "Send reply";
     send.setAttribute("aria-label", "Send reply");
+    // Pending reply-image data URLs (uploaded out-of-band at send, R19). Local to
+    // this composer; one removable preview thumb per pending image.
+    const pending: string[] = [];
+    const thumbs = this.doc.createElement("div");
+    thumbs.className = "sc-compose-thumbs";
+
     const submit = async () => {
       const body = input.value.trim();
-      if (!body) return;
+      if (!body && pending.length === 0) return; // image-only reply is allowed
       send.disabled = true;
       input.disabled = true;
-      const reply = await this.thread!.createReply(commentId, body);
+      const refs = await this.uploadComposeImages(pending);
+      const reply = await this.thread!.createReply(commentId, body, refs);
       send.disabled = false;
       input.disabled = false;
       if (reply) {
         list.appendChild(this.buildReplyElement(reply, list));
         input.value = "";
+        pending.length = 0;
+        thumbs.replaceChildren();
         input.focus();
       } else {
         this.flash(box, "Could not send. Try again.");
@@ -614,8 +731,112 @@ export class MarkerLayer {
       }
     });
     box.appendChild(input);
+    // Attach control only when an uploader is wired (else a picked file is lost).
+    if (this.uploader) box.appendChild(this.buildAttachControl(pending, thumbs));
     box.appendChild(send);
+    box.appendChild(thumbs);
     return box;
+  }
+
+  /** The "attach image" button + hidden file input for the reply composer (R19). */
+  private buildAttachControl(pending: string[], thumbs: HTMLElement): HTMLElement {
+    const wrap = this.doc.createElement("span");
+    wrap.className = "sc-reply-attach-wrap";
+    const btn = this.doc.createElement("button");
+    btn.type = "button";
+    btn.className = "sc-reply-attach";
+    btn.title = "Attach image";
+    btn.setAttribute("aria-label", "Attach image");
+    btn.textContent = "+";
+    const file = this.doc.createElement("input") as HTMLInputElement;
+    file.type = "file";
+    file.setAttribute("accept", "image/png,image/jpeg,image/webp");
+    file.setAttribute("multiple", "true");
+    file.style.display = "none";
+    file.addEventListener("change", () => {
+      const list = (
+        file as unknown as {
+          files?: ArrayLike<Blob & { type: string; size: number }> | null;
+        }
+      ).files;
+      const picked = list ? Array.from(list) : [];
+      void this.addComposeImages(picked, pending, thumbs);
+      try {
+        file.value = "";
+      } catch {
+        /* some engines forbid clearing a file input's value */
+      }
+    });
+    btn.addEventListener("click", () => file.click?.());
+    wrap.append(btn, file);
+    return wrap;
+  }
+
+  /** Validate + read each picked file to a data URL; add a removable preview thumb. */
+  private async addComposeImages(
+    files: Array<Blob & { type: string; size: number }>,
+    pending: string[],
+    thumbs: HTMLElement,
+  ): Promise<void> {
+    for (const file of files) {
+      if (!isValidCaptureImage({ type: file.type, size: file.size })) continue;
+      const dataUrl = await this.readImageFile(file);
+      if (!dataUrl) continue;
+      pending.push(dataUrl);
+      thumbs.appendChild(this.buildComposeThumb(dataUrl, pending));
+    }
+  }
+
+  /** A pending-image preview chip (its data URL) with a remove button. */
+  private buildComposeThumb(dataUrl: string, pending: string[]): HTMLElement {
+    const chip = this.doc.createElement("div");
+    chip.className = "sc-compose-thumb";
+    const img = this.doc.createElement("img") as HTMLImageElement;
+    img.src = dataUrl;
+    img.alt = "Attached image";
+    const remove = this.doc.createElement("button");
+    remove.type = "button";
+    remove.className = "sc-compose-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Remove image");
+    remove.addEventListener("click", () => {
+      const idx = pending.indexOf(dataUrl);
+      if (idx >= 0) pending.splice(idx, 1);
+      chip.remove();
+    });
+    chip.append(img, remove);
+    return chip;
+  }
+
+  /** Upload pending data URLs out-of-band → refs; skip failures. Empty with no uploader. */
+  private async uploadComposeImages(pending: string[]): Promise<string[]> {
+    const uploader = this.uploader;
+    if (!uploader || pending.length === 0) return [];
+    const results = await Promise.all(
+      pending.map((d) => uploader.uploadDataUrl(d).catch(() => null)),
+    );
+    return results.filter((r): r is string => !!r);
+  }
+
+  /** Read a File/Blob to a data URL; null on failure (browser FileReader). */
+  private readImageFile(file: Blob): Promise<string | null> {
+    return new Promise((resolve) => {
+      try {
+        const FR = (globalThis as unknown as { FileReader?: typeof FileReader })
+          .FileReader;
+        if (!FR) {
+          resolve(null);
+          return;
+        }
+        const reader = new FR();
+        reader.onload = () =>
+          resolve(typeof reader.result === "string" ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+      } catch {
+        resolve(null);
+      }
+    });
   }
 
   /** Remove a marker entirely (after its thread is deleted) and repaint. */

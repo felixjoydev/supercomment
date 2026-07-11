@@ -17,6 +17,7 @@ import type { CommentView } from "./types";
 export interface AgentPromptRow {
   body: string;
   author_display_name: string;
+  image_refs?: string[] | null;
 }
 
 /**
@@ -33,7 +34,7 @@ export interface AgentPromptRow {
 export interface AgentPromptClient {
   rpc(
     name: "set_agent_prompt",
-    args: { p_comment_id: string; p_body: string },
+    args: { p_comment_id: string; p_body: string; p_image_refs: string[] },
   ): PromiseLike<{ data: AgentPromptRow[] | null; error: { message: string } | null }>;
 }
 
@@ -57,7 +58,13 @@ export function promptFromRows(
   rows: AgentPromptRow[] | null | undefined,
 ): CommentView["privatePrompt"] {
   const row = rows?.[0];
-  return row ? { body: row.body, authorDisplayName: row.author_display_name } : null;
+  return row
+    ? {
+        body: row.body,
+        authorDisplayName: row.author_display_name,
+        imageRefs: row.image_refs ?? [],
+      }
+    : null;
 }
 
 /**
@@ -71,12 +78,14 @@ export async function saveAgentPrompt(
   client: AgentPromptClient,
   commentId: string,
   body: string,
+  imageRefs: string[] = [],
 ): Promise<
   { ok: true; prompt: CommentView["privatePrompt"] } | { ok: false; error: string }
 > {
   const { data, error } = await client.rpc("set_agent_prompt", {
     p_comment_id: commentId,
     p_body: body,
+    p_image_refs: imageRefs,
   });
   if (error) return { ok: false, error: error.message };
   return { ok: true, prompt: promptFromRows(data) };

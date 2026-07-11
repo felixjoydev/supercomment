@@ -27,10 +27,22 @@ describe("agent prompt editor visibility (canShowAgentPrompt)", () => {
 });
 
 describe("promptFromRows — set_agent_prompt SETOF derivation", () => {
-  it("derives {body, authorDisplayName} from a single returned row", () => {
+  it("derives {body, authorDisplayName, imageRefs} from a single returned row", () => {
     expect(
       promptFromRows([{ body: "Use dark mode for this button", author_display_name: "Ada" }]),
-    ).toEqual({ body: "Use dark mode for this button", authorDisplayName: "Ada" });
+    ).toEqual({
+      body: "Use dark mode for this button",
+      authorDisplayName: "Ada",
+      imageRefs: [],
+    });
+  });
+
+  it("carries the row's image_refs through (R19)", () => {
+    expect(
+      promptFromRows([
+        { body: "", author_display_name: "Ada", image_refs: ["prev/a.png"] },
+      ]),
+    ).toEqual({ body: "", authorDisplayName: "Ada", imageRefs: ["prev/a.png"] });
   });
 
   it("is null for zero rows — the clear path, same as 'never had one'", () => {
@@ -61,20 +73,39 @@ describe("saveAgentPrompt — set_agent_prompt wrapper", () => {
     expect(client.rpc).toHaveBeenCalledWith("set_agent_prompt", {
       p_comment_id: "c1",
       p_body: "Fix the header spacing",
+      p_image_refs: [],
     });
     expect(result).toEqual({
       ok: true,
-      prompt: { body: "Fix the header spacing", authorDisplayName: "Priya" },
+      prompt: { body: "Fix the header spacing", authorDisplayName: "Priya", imageRefs: [] },
     });
   });
 
-  it("saving an empty body clears the prompt (zero rows back -> null)", async () => {
+  it("passes attached image refs and returns them (image-only prompt allowed, R19)", async () => {
+    const client = fakeClient({
+      data: [{ body: "", author_display_name: "Priya", image_refs: ["prev/x.png"] }],
+    });
+    const result = await saveAgentPrompt(client, "c1", "", ["prev/x.png"]);
+
+    expect(client.rpc).toHaveBeenCalledWith("set_agent_prompt", {
+      p_comment_id: "c1",
+      p_body: "",
+      p_image_refs: ["prev/x.png"],
+    });
+    expect(result).toEqual({
+      ok: true,
+      prompt: { body: "", authorDisplayName: "Priya", imageRefs: ["prev/x.png"] },
+    });
+  });
+
+  it("saving an empty body AND no images clears the prompt (zero rows back -> null)", async () => {
     const client = fakeClient({ data: [] });
     const result = await saveAgentPrompt(client, "c1", "");
 
     expect(client.rpc).toHaveBeenCalledWith("set_agent_prompt", {
       p_comment_id: "c1",
       p_body: "",
+      p_image_refs: [],
     });
     expect(result).toEqual({ ok: true, prompt: null });
   });
@@ -93,8 +124,12 @@ describe("saveAgentPrompt — set_agent_prompt wrapper", () => {
     expect(client.rpc).toHaveBeenCalledWith("set_agent_prompt", {
       p_comment_id: "c1",
       p_body: secret,
+      p_image_refs: [],
     });
-    expect(result).toEqual({ ok: true, prompt: { body: secret, authorDisplayName: "Ada" } });
+    expect(result).toEqual({
+      ok: true,
+      prompt: { body: secret, authorDisplayName: "Ada", imageRefs: [] },
+    });
   });
 
   it("surfaces an RPC error without throwing", async () => {

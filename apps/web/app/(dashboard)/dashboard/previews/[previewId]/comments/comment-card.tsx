@@ -7,7 +7,7 @@ import type { CommentView } from '@/lib/comments/types';
 import { severityLabel, intentLabel, trustLabel, statusLabel } from '@/lib/comments/labels';
 import { createClient } from '@/lib/supabase/client';
 import { ContextDetail } from './context-detail';
-import { CaptureThumb } from './capture-image';
+import { CaptureThumb, ReferenceGallery } from './capture-image';
 import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
@@ -143,6 +143,11 @@ export function CommentCard({
             />
           )}
 
+          <ReferenceGallery
+            refs={comment.context?.referenceImages}
+            number={comment.number}
+          />
+
           {muted && comment.resolvedSummary && (
             <p className="comment-outcome">
               {resolved ? 'Resolution: ' : 'Reason: '}
@@ -156,6 +161,7 @@ export function CommentCard({
 
           <CommentThread
             commentId={comment.id}
+            previewId={comment.previewId}
             latestReplyAt={comment.latestReplyAt}
             onReplied={(replyAt) => void setRead(true, replyAt ?? undefined)}
           />

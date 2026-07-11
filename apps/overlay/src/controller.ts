@@ -183,6 +183,7 @@ export class OverlayController {
       undefined,
       config.threadClient,
       config.currentUser,
+      config.uploader,
     );
     this.inspector = new InspectorLayer(this.doc, this.shell.layer);
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);

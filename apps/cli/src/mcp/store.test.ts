@@ -4,6 +4,7 @@ import {
   CAPTURE_SIGN_TTL_SECONDS,
   InMemoryCommentStore,
   MAX_RESOLVED_REFERENCE_IMAGES,
+  MAX_RESOLVED_THREAD_IMAGES,
   SupabaseCommentStore,
   type SupabaseLike,
 } from "./store.js";
@@ -340,6 +341,162 @@ describe("SupabaseCommentStore", () => {
     const client = fakeClient({ rows: [row({ number: 5 })], replies: [] });
     const store = new SupabaseCommentStore(client, PREVIEW_ID);
     expect((await store.getComment(5))?.thread).toBeUndefined();
+  });
+
+  it("getComment resolves the NEWEST thread reply images (recency), capped at MAX_RESOLVED_THREAD_IMAGES", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [row({ number: 5, trust_level: "member" })],
+      replies: [
+        {
+          author_display_name: "dev",
+          trust_level: "member",
+          body: "first",
+          created_at: "2026-01-01T00:00:00Z",
+          image_refs: ["prev/a.png", "prev/b.png"],
+        },
+        {
+          author_display_name: "dev",
+          trust_level: "member",
+          body: "then",
+          created_at: "2026-01-02T00:00:00Z",
+          image_refs: ["prev/c.png", "prev/d.png"],
+        },
+      ],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(5);
+    // Only the newest 3 across the whole thread are signed; the oldest (a) stays raw.
+    expect(signCalls).toHaveLength(MAX_RESOLVED_THREAD_IMAGES);
+    expect(signCalls).not.toContain("prev/a.png");
+    expect(new Set(signCalls)).toEqual(new Set(["prev/d.png", "prev/c.png", "prev/b.png"]));
+    // The latest reply (current ask) is fully resolved.
+    expect(c?.thread?.[1]?.imageRefs).toEqual(["signed:prev/c.png", "signed:prev/d.png"]);
+    // Its predecessor keeps the over-cap oldest as a raw path, the newer signed.
+    expect(c?.thread?.[0]?.imageRefs).toEqual(["prev/a.png", "signed:prev/b.png"]);
+  });
+
+  it("does NOT sign an UNCONFIRMED guest reply's images (gated like a guest raster, R11)", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [row({ number: 6, trust_level: "guest" })],
+      replies: [
+        {
+          author_display_name: "Client",
+          trust_level: "guest",
+          body: "like this",
+          created_at: "2026-01-01T00:00:00Z",
+          image_refs: ["prev/guest-reply.png"],
+        },
+      ],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(6);
+    expect(signCalls).toHaveLength(0); // withheld from resolution
+    expect(c?.thread?.[0]?.imageRefs).toEqual(["prev/guest-reply.png"]); // raw
+  });
+
+  it("resolves a guest reply's images once the send is CONFIRMED (reply predates the confirm)", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-conf", number: 7, trust_level: "guest" })],
+      replies: [
+        {
+          author_display_name: "Client",
+          trust_level: "guest",
+          body: "like this",
+          created_at: "2026-01-01T00:00:00Z",
+          image_refs: ["prev/guest-reply.png"],
+        },
+      ],
+      confirmations: [{ comment_id: "c-conf", confirmed_at: "2026-01-02T00:00:00Z" }],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(7);
+    expect(c?.referenceConfirmed).toBe(true);
+    expect(c?.thread?.[0]?.imageRefs).toEqual(["signed:prev/guest-reply.png"]);
+  });
+
+  it("WITHHOLDS a guest reply image APPENDED AFTER the confirm (recency gate, security)", async () => {
+    const signCalls: string[] = [];
+    const client = fakeClient({
+      rows: [row({ id: "c-toctou", number: 11, trust_level: "guest" })],
+      replies: [
+        // A guest reply added AFTER the member confirmed the send — never reviewed.
+        {
+          author_display_name: "Client",
+          trust_level: "guest",
+          body: "sneaky",
+          created_at: "2026-01-03T00:00:00Z",
+          image_refs: ["prev/post-confirm.png"],
+        },
+      ],
+      confirmations: [{ comment_id: "c-toctou", confirmed_at: "2026-01-02T00:00:00Z" }],
+      signSpy: (_b, path) => signCalls.push(path),
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(11);
+    expect(c?.referenceConfirmed).toBe(true); // comment-level confirm still set
+    expect(signCalls).toHaveLength(0); // but the later guest image is NOT signed
+    expect(c?.thread?.[0]?.imageRefs).toEqual(["prev/post-confirm.png"]); // raw; forAgent strips
+  });
+
+  it("resolves a MEMBER reply's images even on an unconfirmed guest comment", async () => {
+    const client = fakeClient({
+      rows: [row({ number: 8, trust_level: "guest" })], // comment guest + unconfirmed
+      replies: [
+        {
+          author_display_name: "dev",
+          trust_level: "member",
+          body: "do this",
+          created_at: "2026-01-01T00:00:00Z",
+          image_refs: ["prev/dev-reply.png"],
+        },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(8);
+    expect(c?.thread?.[0]?.imageRefs).toEqual(["signed:prev/dev-reply.png"]);
+  });
+
+  it("resolves a member prompt's images to signed URLs on getComment (TRUSTED, no gate)", async () => {
+    const client = fakeClient({
+      // Even on a GUEST comment, the member-authored prompt's images are trusted.
+      rows: [row({ id: "c-p", number: 9, trust_level: "guest" })],
+      prompts: [
+        {
+          comment_id: "c-p",
+          body: "match this",
+          author_display_name: "Ada",
+          image_refs: ["prev/p1.png", "prev/p2.png"],
+        },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(9);
+    expect(c?.privatePrompt?.imageRefs).toEqual([
+      "signed:prev/p1.png",
+      "signed:prev/p2.png",
+    ]);
+  });
+
+  it("keeps an IMAGE-ONLY prompt (empty body + images) as a real prompt", async () => {
+    const client = fakeClient({
+      rows: [row({ id: "c-io", number: 10 })],
+      prompts: [
+        {
+          comment_id: "c-io",
+          body: "",
+          author_display_name: "Ada",
+          image_refs: ["prev/only.png"],
+        },
+      ],
+    });
+    const store = new SupabaseCommentStore(client, PREVIEW_ID);
+    const c = await store.getComment(10);
+    expect(c?.privatePrompt?.body).toBe("");
+    expect(c?.privatePrompt?.imageRefs).toEqual(["signed:prev/only.png"]);
   });
 
   it("resolveComment resolves number->id then calls the resolve_comment RPC with that id", async () => {

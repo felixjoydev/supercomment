@@ -335,6 +335,7 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
       resolve: async () => true,
       deleteReply: async () => true,
       deleteThread: async () => true,
+      signCapture: async (path: string) => `https://signed.example/${path}`,
     } as unknown as ThreadClient;
     return { thread, listedFor: () => listed };
   }
@@ -362,6 +363,105 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     expect(parent.querySelector(".sc-act-more")).not.toBeNull(); // member: delete menu
     await Promise.resolve();
     expect(listedFor()).toBe("c1"); // replies loaded for the thread
+  });
+
+  it("shows reviewer reference images as popover thumbnails, signed on open (R19)", async () => {
+    const { thread } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role: "member" },
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: {
+        id: "c1",
+        note: "hi",
+        authorDisplayName: "Ada",
+        status: "open",
+        referenceImages: ["prev/a.png", "prev/b.webp"],
+      },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+
+    // Caption is synchronous and shows the count when there is more than one.
+    const cap = parent.querySelector(".sc-ref-gallery-cap");
+    expect(cap).not.toBeNull();
+    expect(cap!.textContent).toContain("2");
+
+    // Thumbnails fill after each ref signs (a macrotask flush covers the awaits).
+    await new Promise((r) => setTimeout(r));
+    const shots = parent.querySelectorAll(".sc-shot");
+    expect(shots.length).toBe(2);
+    const img = shots[0]!.children[0] as unknown as { tagName: string; src: string };
+    expect(img.tagName).toBe("IMG");
+    expect(img.src).toBe("https://signed.example/prev/a.png");
+  });
+
+  it("omits the reference gallery when no thread client is wired (no signer)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: {
+        note: "hi",
+        authorDisplayName: "Ada",
+        referenceImages: ["prev/a.png"],
+      },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-ref-gallery")).toBeNull();
+  });
+
+  it("shows the reply-image attach control when an uploader is wired (R19)", () => {
+    const { thread } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role: "member" },
+      { uploadDataUrl: async () => "prev/x.png" },
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-reply-attach")).not.toBeNull();
+  });
+
+  it("omits the reply-image attach control when no uploader is wired", () => {
+    const { thread } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role: "member" },
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-reply-attach")).toBeNull();
   });
 
   it("hides the delete-thread menu from a guest, but still allows reply + mark-done", () => {

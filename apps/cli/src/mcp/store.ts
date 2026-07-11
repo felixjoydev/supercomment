@@ -242,6 +242,17 @@ export const CAPTURE_SIGN_TTL_SECONDS = 10 * 60;
 export const MAX_RESOLVED_REFERENCE_IMAGES = 2;
 
 /**
+ * R18 token budget for THREAD reply images (R19): at most this many images
+ * across the whole thread are resolved to signed URLs on the focus read,
+ * NEWEST-first (the latest images are the current ask; the reviewer/developer
+ * back-and-forth converges on the most recent). Slightly higher than the
+ * single-comment reference cap because a thread legitimately carries more
+ * back-and-forth (reviewer image → developer image → reviewer's latest). Older
+ * / over-cap images stay as raw paths, present but unresolved.
+ */
+export const MAX_RESOLVED_THREAD_IMAGES = 3;
+
+/**
  * Single source of truth for "may this comment's captured raster(s) reach the
  * agent?" (R11/R12): a MEMBER comment's screenshot/referenceImages always
  * resolve; a GUEST comment's resolve ONLY once a developer has explicitly
@@ -259,6 +270,34 @@ export function shouldResolveRaster(comment: {
   referenceConfirmed?: boolean;
 }): boolean {
   return comment.trustLevel !== "guest" || comment.referenceConfirmed === true;
+}
+
+/**
+ * May a THREAD REPLY's images (R19) reach the agent? A MEMBER reply's always
+ * may (trusted author). A GUEST reply's images are an untrusted raster channel
+ * admitted ONLY when a member has confirmed the send AND the reply is no newer
+ * than that confirmation — the comment-level confirm approves the thread AS IT
+ * WAS at `confirmedAt`, so an image a guest APPENDS afterward was never reviewed
+ * and stays withheld until a fresh send re-confirms (send_comment_to_agent
+ * refreshes confirmed_at on a genuine re-enqueue). This closes the gap where a
+ * one-time confirmation would permanently auto-admit every later guest image.
+ *
+ * Fails CLOSED: an absent confirmation, or an unparseable timestamp on either
+ * side, withholds the image. Used by BOTH the store (skip signing) and
+ * tools.ts's `forAgent` (strip), the same defense-in-depth pairing as
+ * {@link shouldResolveRaster}.
+ */
+export function shouldResolveReplyImage(reply: {
+  trustLevel: TrustLevel;
+  createdAt: string;
+  referenceConfirmedAt?: string;
+}): boolean {
+  if (reply.trustLevel !== "guest") return true;
+  if (!reply.referenceConfirmedAt) return false;
+  const created = Date.parse(reply.createdAt);
+  const confirmed = Date.parse(reply.referenceConfirmedAt);
+  if (Number.isNaN(created) || Number.isNaN(confirmed)) return false;
+  return created <= confirmed;
 }
 
 /**
@@ -282,11 +321,13 @@ export function shouldResolveRaster(comment: {
 function rowToMcpComment(
   row: CommentRow,
   prompt?: McpPrivatePrompt,
-  referenceConfirmed?: boolean,
+  /** The `agent_reference_confirmations.confirmed_at` (present iff confirmed). */
+  referenceConfirmedAt?: string,
 ): McpComment {
+  const referenceConfirmed = referenceConfirmedAt !== undefined;
   const n = withPrivateExtras(normalizeCommentRow(row), {
     ...(prompt ? { privatePrompt: prompt } : {}),
-    ...(referenceConfirmed !== undefined ? { referenceConfirmed } : {}),
+    ...(referenceConfirmed ? { referenceConfirmed: true } : {}),
   });
   // U8: this is the agent-facing (untrusted-input) delivery boundary. Redact
   // reviewer-authored free-text — the visual change-set values AND the note —
@@ -316,6 +357,7 @@ function rowToMcpComment(
     ...(n.resolvedSummary ? { resolvedSummary: n.resolvedSummary } : {}),
     ...(n.privatePrompt ? { privatePrompt: n.privatePrompt } : {}),
     ...(n.referenceConfirmed ? { referenceConfirmed: true } : {}),
+    ...(referenceConfirmedAt ? { referenceConfirmedAt } : {}),
     createdAt: n.createdAt,
     trustLevel: n.trustLevel,
   };
@@ -438,7 +480,7 @@ export class SupabaseCommentStore implements CommentStore {
     ]);
     if (error) throw asError(error, "Failed to list open comments");
     return ((data ?? []) as CommentRow[]).map((row) =>
-      rowToMcpComment(row, prompts.get(row.id), confirmations.has(row.id)),
+      rowToMcpComment(row, prompts.get(row.id), confirmations.get(row.id)),
     );
   }
 
@@ -462,7 +504,7 @@ export class SupabaseCommentStore implements CommentStore {
     let comment = rowToMcpComment(
       row,
       prompts.get(row.id),
-      confirmations.has(row.id),
+      confirmations.get(row.id),
     );
     // U7 / R10: resolve the raw captured-storage path(s) into a viewable
     // (signed) form, but ONLY on this focus read, and ONLY when the gating
@@ -472,10 +514,32 @@ export class SupabaseCommentStore implements CommentStore {
     if (shouldResolveRaster(comment)) {
       comment = { ...comment, context: await this.resolveRasters(comment.context) };
     }
+    // Prompt images (R19) are member-authored and TRUSTED — resolve them to
+    // signed URLs UNCONDITIONALLY on the focus read (no confirm gate, unlike a
+    // guest's rasters), the same way the prompt body is delivered verbatim. The
+    // set is already bounded by the write-side cap, so no thread-style budget.
+    const promptImages = comment.privatePrompt?.imageRefs;
+    if (promptImages && promptImages.length > 0) {
+      const resolved = await Promise.all(
+        promptImages.map(async (ref) => (await resolveCaptureSrc(ref, this.signer)) ?? ref),
+      );
+      comment = {
+        ...comment,
+        privatePrompt: { ...comment.privatePrompt!, imageRefs: resolved },
+      };
+    }
     // Attach the discussion thread (0033) so the agent reads the whole
-    // back-and-forth; the last reply is the decisive instruction.
+    // back-and-forth; the last reply is the decisive instruction. Reply images
+    // (R19) are resolved newest-first (recency = the current ask) and gated per
+    // reply on the comment's confirm state (a guest reply's images ride the same
+    // R11 gate as the comment's own rasters).
     const thread = await this.fetchThread(row.id);
-    return thread.length > 0 ? { ...comment, thread } : comment;
+    if (thread.length === 0) return comment;
+    const resolvedThread = await this.resolveThreadImages(
+      thread,
+      comment.referenceConfirmedAt,
+    );
+    return { ...comment, thread: resolvedThread };
   }
 
   /**
@@ -560,7 +624,7 @@ export class SupabaseCommentStore implements CommentStore {
     const map = new Map<string, McpPrivatePrompt>();
     const base = this.client
       .from("agent_prompts")
-      .select("comment_id, body, author_display_name")
+      .select("comment_id, body, author_display_name, image_refs")
       .eq("preview_id", this.previewId);
     let data: unknown[] | null;
     let error: unknown;
@@ -578,12 +642,17 @@ export class SupabaseCommentStore implements CommentStore {
       comment_id: string;
       body: string;
       author_display_name: string;
+      image_refs?: string[] | null;
     }[]) {
       const body = typeof r.body === "string" ? r.body : "";
-      if (body.trim() === "") continue;
+      const imageRefs = Array.isArray(r.image_refs) ? r.image_refs : [];
+      // An image-only prompt (empty body, images present) is a real prompt —
+      // keep it; only a truly empty row (no body AND no images) is dropped.
+      if (body.trim() === "" && imageRefs.length === 0) continue;
       map.set(r.comment_id, {
         body,
         authorDisplayName: r.author_display_name,
+        ...(imageRefs.length > 0 ? { imageRefs } : {}),
       });
     }
     return map;
@@ -607,11 +676,14 @@ export class SupabaseCommentStore implements CommentStore {
    */
   private async fetchReferenceConfirmations(
     commentId?: string,
-  ): Promise<Set<string>> {
-    const set = new Set<string>();
+  ): Promise<Map<string, string>> {
+    // comment_id → confirmed_at. Presence (has) still means "confirmed" (gates
+    // the comment's OWN rasters); the timestamp additionally gates GUEST reply
+    // images by recency (R19) so an image appended AFTER the confirm is withheld.
+    const map = new Map<string, string>();
     const base = this.client
       .from("agent_reference_confirmations")
-      .select("comment_id")
+      .select("comment_id, confirmed_at")
       .eq("preview_id", this.previewId);
     let data: unknown[] | null;
     let error: unknown;
@@ -624,11 +696,11 @@ export class SupabaseCommentStore implements CommentStore {
       data = list.data;
       error = list.error;
     }
-    if (error || !data) return set;
-    for (const r of data as { comment_id: string }[]) {
-      set.add(r.comment_id);
+    if (error || !data) return map;
+    for (const r of data as { comment_id: string; confirmed_at?: string | null }[]) {
+      map.set(r.comment_id, typeof r.confirmed_at === "string" ? r.confirmed_at : "");
     }
-    return set;
+    return map;
   }
 
   /**
@@ -638,7 +710,7 @@ export class SupabaseCommentStore implements CommentStore {
   private async fetchThread(commentId: string): Promise<McpReply[]> {
     const { data, error } = await this.client
       .from("comment_replies")
-      .select("author_display_name, trust_level, body, created_at")
+      .select("author_display_name, trust_level, body, created_at, image_refs")
       .eq("comment_id", commentId)
       .order("created_at", { ascending: true });
     if (error || !data) return [];
@@ -648,13 +720,76 @@ export class SupabaseCommentStore implements CommentStore {
         trust_level: string;
         body: string;
         created_at: string;
+        image_refs?: string[] | null;
       }[]
     ).map((r) => ({
       author: r.author_display_name,
       trustLevel: r.trust_level as McpReply["trustLevel"],
       body: redactSecrets(r.body),
       createdAt: r.created_at,
+      // Raw `captures` paths here; getComment resolves the newest (recency)
+      // and gates guest replies. Omitted when the reply carries no images.
+      ...(r.image_refs && r.image_refs.length > 0
+        ? { imageRefs: r.image_refs }
+        : {}),
     }));
+  }
+
+  /**
+   * Recency-weighted resolution of thread reply images (R19). Across the WHOLE
+   * thread the LATEST images are the current ask, so this signs only the newest
+   * `MAX_RESOLVED_THREAD_IMAGES` and leaves older / over-budget ones as raw
+   * `captures` paths (their existence is still signaled, but they don't burn a
+   * signed-URL round trip) — the same latest-first + cap shape `resolveRasters`
+   * uses for one comment's reference images, lifted to thread scope. So a
+   * reviewer who comes back after a fix with a NEW image makes THAT the resolved
+   * current-ask, while earlier images stay as context.
+   *
+   * Gating (R11): a GUEST reply's images are an untrusted raster channel,
+   * resolved ONLY when a member has confirmed the hand-off (referenceConfirmed);
+   * a member reply's images always resolve. An unconfirmed guest reply's images
+   * are never signed here AND are stripped by `forAgent` (the SAME predicate) —
+   * a double guard, mirroring the comment-raster path. Never throws.
+   */
+  private async resolveThreadImages(
+    thread: McpReply[],
+    referenceConfirmedAt?: string,
+  ): Promise<McpReply[]> {
+    // Newest-first pool of every reply image. `thread` is chronological asc, so
+    // walking replies (and images within a reply) from the end yields newest-first.
+    const pool: { replyIdx: number; imgIdx: number; ref: string }[] = [];
+    for (let r = thread.length - 1; r >= 0; r--) {
+      const reply = thread[r]!;
+      const refs = reply.imageRefs;
+      if (!refs || refs.length === 0) continue;
+      const allowed = shouldResolveReplyImage({
+        trustLevel: reply.trustLevel,
+        createdAt: reply.createdAt,
+        referenceConfirmedAt,
+      });
+      if (!allowed) continue; // guest not-yet-confirmed / appended-after-confirm: forAgent strips
+      for (let i = refs.length - 1; i >= 0; i--) {
+        pool.push({ replyIdx: r, imgIdx: i, ref: refs[i]! });
+      }
+    }
+    if (pool.length === 0) return thread;
+    // Sign only the newest allowed images, up to the thread-wide budget.
+    const toResolve = pool.slice(0, MAX_RESOLVED_THREAD_IMAGES);
+    const signed = new Map<string, string>();
+    await Promise.all(
+      toResolve.map(async (p) => {
+        const url = await resolveCaptureSrc(p.ref, this.signer);
+        if (url) signed.set(`${p.replyIdx}:${p.imgIdx}`, url);
+      }),
+    );
+    if (signed.size === 0) return thread;
+    // Swap in signed URLs where resolved; keep the raw ref otherwise (older /
+    // over-cap / unpermitted stay as bare paths, exactly like resolveRasters).
+    return thread.map((reply, r) => {
+      const refs = reply.imageRefs;
+      if (!refs || refs.length === 0) return reply;
+      return { ...reply, imageRefs: refs.map((ref, i) => signed.get(`${r}:${i}`) ?? ref) };
+    });
   }
 
   async resolveComment(

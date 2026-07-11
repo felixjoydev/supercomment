@@ -97,30 +97,38 @@ describe("reconcileUnread", () => {
     const existing = mk({
       id: "a",
       sendStatus: "pending",
-      privatePrompt: { body: "check the spacing", authorDisplayName: "Alice" },
+      privatePrompt: { body: "check the spacing", authorDisplayName: "Alice", imageRefs: [] },
     });
     // A freshly broadcast row (via toCommentView) always defaults these to
     // null since neither has a join on the raw comments row.
     const incoming = mk({ id: "a", sendStatus: null, privatePrompt: null });
     const merged = reconcileUnread(existing, incoming);
     expect(merged.sendStatus).toBe("pending");
-    expect(merged.privatePrompt).toEqual({ body: "check the spacing", authorDisplayName: "Alice" });
+    expect(merged.privatePrompt).toEqual({
+      body: "check the spacing",
+      authorDisplayName: "Alice",
+      imageRefs: [],
+    });
   });
 
   it("prefers the incoming sendStatus/privatePrompt when the broadcast actually carries one", () => {
     const existing = mk({
       id: "a",
       sendStatus: "pending",
-      privatePrompt: { body: "old prompt", authorDisplayName: "Alice" },
+      privatePrompt: { body: "old prompt", authorDisplayName: "Alice", imageRefs: [] },
     });
     const incoming = mk({
       id: "a",
       sendStatus: "done",
-      privatePrompt: { body: "new prompt", authorDisplayName: "Bob" },
+      privatePrompt: { body: "new prompt", authorDisplayName: "Bob", imageRefs: [] },
     });
     const merged = reconcileUnread(existing, incoming);
     expect(merged.sendStatus).toBe("done");
-    expect(merged.privatePrompt).toEqual({ body: "new prompt", authorDisplayName: "Bob" });
+    expect(merged.privatePrompt).toEqual({
+      body: "new prompt",
+      authorDisplayName: "Bob",
+      imageRefs: [],
+    });
   });
 });
 

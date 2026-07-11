@@ -131,19 +131,24 @@ async function getReadReceiptMap(
 async function getAgentPromptMap(
   supabase: Awaited<ReturnType<typeof createClient>>,
   previewId: string,
-): Promise<Map<string, { body: string; authorDisplayName: string }>> {
-  const map = new Map<string, { body: string; authorDisplayName: string }>();
+): Promise<Map<string, NonNullable<CommentView['privatePrompt']>>> {
+  const map = new Map<string, NonNullable<CommentView['privatePrompt']>>();
   const { data, error } = await supabase
     .from('agent_prompts')
-    .select('comment_id, body, author_display_name')
+    .select('comment_id, body, author_display_name, image_refs')
     .eq('preview_id', previewId);
   if (error) return map; // non-critical; degrades to "no prompt shown"
   for (const row of (data ?? []) as {
     comment_id: string;
     body: string;
     author_display_name: string;
+    image_refs?: string[] | null;
   }[]) {
-    map.set(row.comment_id, { body: row.body, authorDisplayName: row.author_display_name });
+    map.set(row.comment_id, {
+      body: row.body,
+      authorDisplayName: row.author_display_name,
+      imageRefs: row.image_refs ?? [],
+    });
   }
   return map;
 }
