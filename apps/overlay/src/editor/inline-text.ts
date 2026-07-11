@@ -6,8 +6,8 @@
  * never paste markup or clobber child structure). Committing on blur or Enter
  * records a `setText` op with the NORMALIZED before→after; Escape cancels and
  * restores the original text. The visual change is an ephemeral preview like
- * every other editor edit — the controller registers a revert with the
- * PreviewLog.
+ * every other editor edit — the controller records it into the history engine
+ * with its redo/undo/revert-to-build closures (U3).
  *
  * Leaf-only (no element children) is the safety rule: editing the text of a node
  * with children would blow away those children (G12). Never throws; returns null

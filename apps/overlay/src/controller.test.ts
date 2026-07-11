@@ -653,6 +653,39 @@ describe("OverlayController — edit buffer lifecycle (G13/R7)", () => {
     expect(controller.editSession.size).toBe(1);
   });
 
+  it("Cmd+Z undoes and Shift+Cmd+Z redoes through the history engine (R16, U3)", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "40";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    expect(controller.editSession.size).toBe(1);
+
+    // A non-text target → the shortcut drives history, not native undo.
+    const div = { tagName: "DIV" };
+    doc.dispatch("keydown", { key: "z", metaKey: true, composedPath: () => [div], preventDefault: () => {} });
+    expect(controller.editSession.size).toBe(0);
+
+    doc.dispatch("keydown", { key: "z", metaKey: true, shiftKey: true, composedPath: () => [div], preventDefault: () => {} });
+    expect(controller.editSession.size).toBe(1);
+  });
+
+  it("Cmd+Z with focus in a text field leaves history untouched (native undo, U3)", () => {
+    const { controller, doc, q } = makeController();
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "40";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    expect(controller.editSession.size).toBe(1);
+
+    // composedPath hits a TEXTAREA (e.g. the prompt field) → native undo wins.
+    const textarea = { tagName: "TEXTAREA" };
+    doc.dispatch("keydown", { key: "z", metaKey: true, composedPath: () => [textarea], preventDefault: () => {} });
+    expect(controller.editSession.size).toBe(1); // history untouched
+  });
+
   it("keeps edits private — nothing is submitted while editing (R7)", () => {
     const submitter = new StubSubmitter();
     const { controller, doc, q } = makeController({ submitter });

@@ -465,11 +465,23 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
 }
 .sc-ep-count {
   flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
   color: var(--ep-ink-2);
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: 6px;
 }
-.sc-ep-undo {
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-count:hover { color: var(--ep-ink); }
+}
+.sc-ep-undo,
+.sc-ep-redo {
   appearance: none;
   border: 0;
   box-shadow: inset 0 0 0 1px var(--ep-line-2);
@@ -484,9 +496,11 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   transition: background-color 150ms ease, opacity 150ms ease;
 }
 @media (hover: hover) and (pointer: fine) {
-  .sc-ep-undo:hover:not(:disabled) { background: var(--ep-field); }
+  .sc-ep-undo:hover:not(:disabled),
+  .sc-ep-redo:hover:not(:disabled) { background: var(--ep-field); }
 }
-.sc-ep-undo:disabled { color: var(--ep-ink-3); cursor: not-allowed; opacity: 0.6; }
+.sc-ep-undo:disabled,
+.sc-ep-redo:disabled { color: var(--ep-ink-3); cursor: not-allowed; opacity: 0.6; }
 .sc-ep-save {
   appearance: none;
   border: 0;
@@ -505,6 +519,76 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
 }
 .sc-ep-save:active:not(:disabled) { transform: scale(0.97); }
 .sc-ep-save:disabled { background: var(--ep-field-2); color: var(--ep-ink-3); cursor: not-allowed; }
+
+/* U3: the session review list (R17), anchored above the footer counter. */
+.sc-ep-edits {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 64px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--ep-field);
+  border: 1px solid var(--ep-line-2);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 2;
+}
+.sc-ep-edit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 7px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sc-ep-edit-row:hover { background: var(--ep-field-2); }
+}
+.sc-ep-edit-label {
+  font-size: 12px;
+  color: var(--ep-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-ep-edit-revert {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ep-line-2);
+  color: var(--ep-ink-2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.sc-ep-edits-empty {
+  font-size: 12px;
+  color: var(--ep-ink-3);
+  padding: 6px 8px;
+}
+.sc-ep-edits-discard {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ep-danger, #e5484d);
+  border-radius: 7px;
+  padding: 8px;
+  margin-top: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
 
 .sc-edit-panel :focus-visible {
   outline: 2px solid var(--ep-accent);

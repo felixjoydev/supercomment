@@ -1,139 +1,83 @@
 /**
- * U9 — the edit-session buffer.
+ * U9 — the edit-session buffer, now a thin FACADE over the {@link HistoryEngine}.
  *
  * The in-progress set of visual edits a reviewer is authoring, held INDEPENDENT
- * of selection mode and the live DOM. This is the editor's state model: the
- * content/style/structural edit units (U10–U12) record ops into it, and submit
- * (U13) folds `toChangeSet()` into `context.changeSet`.
+ * of selection mode and the live DOM. Since U3 the authoritative structure is the
+ * history engine (which owns the coalescing tip map, the first-write-wins
+ * baseline, and undo/redo); this class keeps the buffer's public API
+ * (record/remove/has/undoLast/size/isEmpty/list/toChangeSet/discard) so the
+ * controller's submit contract and the panel tests are untouched.
  *
- * Why a standalone object (G13/R7): switching selection mode or pressing Esc
- * clears the SELECTION, but must NOT discard in-progress edits — the controller
- * keeps this session across that churn. Edits are private to the reviewer until
- * they explicitly save; `discard()` throws them away.
- *
- * Coalescing: re-editing the same target+property UPDATES in place rather than
- * appending, and the ORIGINAL before-value is preserved across successive edits
- * (so the change-set reflects "developer's build → desired", never an
- * intermediate value). An edit whose value returns to its original is dropped
- * entirely (a net no-op leaves no trace). Structural inserts never coalesce
- * (each new node is distinct).
+ * The submit path folds `toChangeSet()` into `context.changeSet`; the controller
+ * drives real undo/redo, gestures, per-edit revert, and Discard-all directly on
+ * `history`. A bare `record(op)` (no DOM closures) is a buffer-only path used by
+ * tests and any caller that only cares about the projection.
  */
 import type { ChangeOp, VisualChangeSet } from "@supercomment/shared";
 
-/**
- * A stable key for "the same logical edit". Style/text/attr/remove/move/
- * visibility ops coalesce by target + property + breakpoint + state; every
- * `insertNode` is distinct (keyed by its opId) since each is a new node.
- */
-export function opKey(op: ChangeOp): string {
-  const t = op.target;
-  const targetId = t.source
-    ? `${t.source.file}:${t.source.line}:${t.source.column}`
-    : t.selector;
-  if (op.type === "insertNode") {
-    return `insertNode|${op.opId}`;
-  }
-  return [
-    op.type,
-    targetId,
-    op.property ?? "",
-    op.responsive ?? "base",
-    op.state ?? "default",
-  ].join("|");
-}
+import { opKey } from "./op-key.js";
+import { HistoryEngine, type EditDom } from "./history.js";
+import type { ColorProbe } from "./color/normalize.js";
+
+export { opKey };
+
+const NOOP_DOM: EditDom = {
+  apply: () => {},
+  invert: () => {},
+  revertToBuild: () => {},
+};
 
 export class EditSession {
-  private readonly ops = new Map<string, ChangeOp>();
-  private readonly authoredCommit?: string;
+  /** The authoritative history engine; the controller drives it directly. */
+  readonly history: HistoryEngine;
 
   /** @param authoredCommit build the edits are authored against (drift guard). */
-  constructor(authoredCommit?: string) {
-    this.authoredCommit = authoredCommit;
+  constructor(authoredCommit?: string, opts: { probe?: ColorProbe } = {}) {
+    this.history = new HistoryEngine({ authoredCommit, probe: opts.probe });
   }
 
-  /**
-   * Record (or update) one edit. Re-editing the same target+property preserves
-   * the original before-value and updates the after-value; a value that returns
-   * to its original drops the edit entirely.
-   */
+  /** Record (or update) one edit into the buffer with no DOM effect (facade path). */
   record(op: ChangeOp): void {
-    const key = opKey(op);
-    const existing = this.ops.get(key);
-    const merged: ChangeOp = existing
-      ? { ...op, before: existing.before }
-      : op;
-
-    // Net no-op: a VALUE edit (before + after both present) that ends where it
-    // started leaves no trace. Structural ops (before/after absent) are exempt.
-    if (
-      merged.before != null &&
-      merged.after != null &&
-      merged.before === merged.after
-    ) {
-      this.ops.delete(key);
-      return;
-    }
-    this.ops.set(key, merged);
+    this.history.record(op, NOOP_DOM);
   }
 
-  /** Remove a recorded edit (the reviewer reverted this one change). */
+  /** Remove a recorded edit (per-edit revert). */
   remove(op: ChangeOp): void {
-    this.ops.delete(opKey(op));
+    this.history.revertKey(opKey(op));
   }
 
-  /** True when an op with this logical key is currently buffered. Lets the
-   * controller keep its ephemeral preview log in lockstep with the buffer
-   * (e.g. drop a preview whose op just coalesced away to a net no-op). */
+  /** True when an op with this logical key is currently buffered. */
   has(op: ChangeOp): boolean {
-    return this.ops.has(opKey(op));
+    return this.history.hasKey(opKey(op));
   }
 
-  /**
-   * Undo the most-recently recorded edit (the footer Undo, requirement H).
-   * Returns the removed op (so the caller can revert its ephemeral preview) or
-   * null when the buffer is empty. Insertion order is preserved through
-   * coalescing, so this is the last *distinct* edit the reviewer made.
-   */
+  /** Undo the most-recent recorded step; returns the primary op undone (or null). */
   undoLast(): ChangeOp | null {
-    let lastKey: string | undefined;
-    for (const key of this.ops.keys()) lastKey = key; // Map preserves insert order
-    if (lastKey === undefined) return null;
-    const op = this.ops.get(lastKey) ?? null;
-    this.ops.delete(lastKey);
-    return op;
+    return this.history.undo();
   }
 
-  /** True when nothing has been edited yet. */
+  /** True when nothing nets to a change. */
   isEmpty(): boolean {
-    return this.ops.size === 0;
+    return this.history.isEmpty();
   }
 
-  /** Number of distinct edits currently recorded. */
+  /** Number of distinct edits currently in the net change-set. */
   get size(): number {
-    return this.ops.size;
+    return this.history.size;
   }
 
-  /** The recorded ops, in insertion order. */
+  /** The net ops, in insertion order. */
   list(): ChangeOp[] {
-    return [...this.ops.values()];
+    return this.history.projectOps();
   }
 
-  /** Throw away all in-progress edits (explicit discard). */
+  /** Throw away all in-progress edits and reset the page to build (non-undoable). */
   discard(): void {
-    this.ops.clear();
+    this.history.resetToBuild();
   }
 
-  /**
-   * The change-set to fold into `context.changeSet` at submit, or `null` when
-   * there is nothing to save.
-   */
+  /** The change-set to fold into `context.changeSet`, or null when empty. */
   toChangeSet(): VisualChangeSet | null {
-    if (this.ops.size === 0) {
-      return null;
-    }
-    return {
-      ...(this.authoredCommit ? { authoredCommit: this.authoredCommit } : {}),
-      ops: this.list(),
-    };
+    return this.history.toChangeSet();
   }
 }

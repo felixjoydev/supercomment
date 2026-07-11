@@ -51,13 +51,14 @@ import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
 import { EditSession, opKey } from "./editor/edit-session.js";
+import type { EditDom } from "./editor/history.js";
 import { buildEditTarget } from "./editor/edit-target.js";
 import { PropertiesPanel } from "./editor/panel.js";
-import { PreviewLog } from "./editor/preview-log.js";
 import { InspectorLayer } from "./editor/inspector.js";
 import { beginInlineTextEdit, type InlineTextHandle } from "./editor/inline-text.js";
 import { EscapeStack, ESCAPE_PRIORITY } from "./editor/escape-stack.js";
 import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
+import { createCanvasProbe } from "./editor/color/normalize.js";
 import { DeviceMode } from "./device/device-mode.js";
 import { DeviceToolbar } from "./device/device-toolbar.js";
 import { filterBySurface, countBySurface } from "./device/surface-filter.js";
@@ -81,6 +82,31 @@ const REANCHOR_MAX_ATTEMPTS = 10;
  */
 const COMMENT_SYNC_INTERVAL_MS = 15_000;
 
+/**
+ * True when a keyboard event originates inside a text-editing surface (an input,
+ * textarea, or contenteditable), so the browser's native field undo should win
+ * over the editor's history undo (U3). Walks the composed path so it sees shadow
+ * inputs and the host element carrying contenteditable during an inline text edit;
+ * falls back to the event target when composedPath is unavailable (node doubles).
+ */
+function isTextEditingTarget(e: KeyboardEvent): boolean {
+  const path =
+    (e as { composedPath?: () => unknown[] }).composedPath?.() ??
+    (e.target ? [e.target] : []);
+  for (const node of path as Array<{
+    tagName?: string;
+    isContentEditable?: boolean;
+    getAttribute?: (n: string) => string | null;
+  }>) {
+    const tag = node?.tagName?.toUpperCase?.();
+    if (tag === "INPUT" || tag === "TEXTAREA") return true;
+    if (node?.isContentEditable) return true;
+    const ce = node?.getAttribute?.("contenteditable");
+    if (ce != null && ce !== "false") return true;
+  }
+  return false;
+}
+
 export class OverlayController {
   private readonly doc: Document;
   private readonly shell: ShellRoot;
@@ -97,13 +123,6 @@ export class OverlayController {
    * only on an explicit reviewer action, never by mode churn.
    */
   readonly editSession: EditSession;
-  /**
-   * Ephemeral-preview reverts for the visual editor (kept in lockstep with
-   * `editSession` by op key). Lives on the controller so previews across EVERY
-   * edited element can be reverted on close/discard, not just the current one
-   * (baked-in decision: previews are ephemeral). Empty outside edit mode.
-   */
-  private readonly previewLog = new PreviewLog();
   /** The in-page element inspector (tag badge + dims + spacing pills), R-D. */
   private readonly inspector: InspectorLayer;
   /** Teardown for every listener this controller binds (plans/008). */
@@ -252,8 +271,17 @@ export class OverlayController {
       this.deviceToolbar = null;
     }
 
-    this.editSession = new EditSession();
+    this.editSession = new EditSession(undefined, { probe: createCanvasProbe(this.doc) });
+    // Any history change (record, undo/redo, revert, discard) re-syncs the open
+    // panel's counter + undo/redo state; control re-reads happen on the explicit
+    // undo/redo/revert paths (resync), so live typing is never disrupted (U3).
+    this.editSession.history.subscribe(() => this.editPanel?.refreshUi());
     this.bindEvents();
+  }
+
+  /** The authoritative edit history (undo/redo, projection, baseline) — U3. */
+  private get history() {
+    return this.editSession.history;
   }
 
   /**
@@ -690,13 +718,10 @@ export class OverlayController {
     // top-level) and notify the parent (if this is the device-iframe child).
     this.bumpSurfaceCount(this.surface);
     this.config.onCommentSubmitted?.(this.surface);
-    // The edits are now saved as a comment (R7): clear the buffer AND revert the
-    // ephemeral previews to the developer build (U2 — the modified state is now
-    // captured in the comment's screenshot + change-set, so the live DOM resets).
-    if (changeSet) {
-      this.editSession.discard();
-      this.restoreToBuild();
-    }
+    // The edits are now saved as a comment (R7): reset the history to the
+    // developer build (U3 — the modified state is captured in the comment's
+    // screenshot + change-set, so the live DOM resets; non-undoable).
+    if (changeSet) this.restoreToBuild();
 
     // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
     // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really
@@ -1199,11 +1224,16 @@ export class OverlayController {
     this.editPanelElement = el;
     const target = buildEditTarget(el, this.doc);
     this.editPanel = new PropertiesPanel(this.doc, this.shell.layer, el, target, {
-      record: (op, revert) => this.recordEdit(op, revert),
+      record: (op, dom) => this.recordEdit(op, dom),
       removeEdit: (op) => this.removeEdit(op),
       undo: () => this.undoLastEdit(),
+      redo: () => this.history.redo(),
       discard: () => this.discardEdits(),
       count: () => this.editSession.size,
+      canUndo: () => this.history.canUndo(),
+      canRedo: () => this.history.canRedo(),
+      entries: () => this.history.entries(),
+      revertEdit: (key) => this.history.revertKey(key),
       onClose: () => this.closeEditor(),
       onSave: () => this.beginEditComment(el),
       // Phase 2: a permitted member session also gets "Send to agent" (save +
@@ -1223,51 +1253,42 @@ export class OverlayController {
   }
 
   /**
-   * Record one edit into the durable buffer AND register its ephemeral preview
-   * revert, keeping the two in lockstep: if the op just coalesced away to a net
-   * no-op (e.g. a value nudged back to its original), revert + drop the preview.
+   * Record one edit into the history engine (U3): the authoring surface already
+   * performed the verified DOM write; `dom` carries the redo/undo/revert-to-build
+   * closures. The engine coalesces by key, preserves the build `before`, and
+   * drops a net-no-op from the projection while still keeping the undo step.
    */
-  private recordEdit(op: ChangeOp, revert?: () => void): void {
-    this.editSession.record(op);
-    const key = opKey(op);
-    if (this.editSession.has(op)) {
-      if (revert) this.previewLog.add(key, revert);
-    } else {
-      this.previewLog.revertKey(key);
-    }
+  private recordEdit(op: ChangeOp, dom: EditDom): void {
+    this.history.record(op, dom);
   }
 
-  /** Drop a specific recorded edit and revert its ephemeral preview (toggle-off). */
+  /** Per-edit revert (edits-list row / toggle-off): restore that key to build. */
   private removeEdit(op: ChangeOp): void {
-    this.editSession.remove(op);
-    this.previewLog.revertKey(opKey(op));
+    this.history.revertKey(opKey(op));
   }
 
-  /** Footer Undo: remove the last recorded edit and revert its preview. */
+  /** Footer Undo / Cmd+Z: step back the most recent history entry. */
   private undoLastEdit(): void {
-    const op = this.editSession.undoLast();
-    if (op) this.previewLog.revertKey(opKey(op));
+    this.history.undo();
   }
 
-  /** Discard the whole buffer AND revert every ephemeral preview (R3). */
+  /** Explicit Discard all (R7): revert every edit to build (undoable) + clear prompt. */
   private discardEdits(): void {
-    this.editSession.discard();
-    this.restoreToBuild();
+    this.history.discardAll();
     // U5: an explicit discard throws away the whole in-progress buffer,
     // including any typed-but-unsaved prompt text (R7).
     this.pendingPromptText = "";
   }
 
   /**
-   * Restore the host page to its developer build by reverting every ephemeral
-   * preview (U2). The SINGLE seam for a non-undoable reset — called on discard,
-   * successful save, and teardown; U3 swaps its implementation to the history
-   * baseline without touching these call sites. NOT called on lapse (which
-   * freezes with edits visible) or Escape/close (which keep the previews so the
-   * page and the buffer never disagree — R3).
+   * The SINGLE non-undoable reset seam (U3): revert every edit's DOM to the
+   * developer build and clear the history. Called on discard-via-save, successful
+   * save, and teardown. NOT called on lapse (which freezes with edits visible) or
+   * Escape/close (which keep the previews so the page and the buffer never
+   * disagree — R3).
    */
   private restoreToBuild(): void {
-    this.previewLog.revertAll();
+    this.history.resetToBuild();
   }
 
   /**
@@ -1295,9 +1316,12 @@ export class OverlayController {
         this.inlineEdit = null;
         const next = after.replace(/\s+/g, " ").trim();
         if (next === before) return; // unchanged → record nothing
-        this.recordEdit(buildTextOp(target, before, next), () =>
-          applyTextPreview(el, before),
-        );
+        const dom: EditDom = {
+          apply: () => applyTextPreview(el, next),
+          invert: () => applyTextPreview(el, before),
+          revertToBuild: () => applyTextPreview(el, before),
+        };
+        this.recordEdit(buildTextOp(target, before, next), dom);
       },
       onCancel: () => {
         this.inlineEdit = null;
@@ -1355,7 +1379,23 @@ export class OverlayController {
     });
     this.on(this.doc, "keydown", (e) => {
       const ke = e as KeyboardEvent;
-      if (ke.key === "Escape") this.escapeStack.handle();
+      if (ke.key === "Escape") {
+        this.escapeStack.handle();
+        return;
+      }
+      // Undo/redo (R16): Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, Ctrl+Y — routed to the
+      // history engine UNLESS the reviewer is typing (a text field or an active
+      // inline text edit), where the browser's native field undo must win.
+      if (!(ke.metaKey || ke.ctrlKey)) return;
+      const key = ke.key?.toLowerCase?.() ?? "";
+      const isUndo = key === "z" && !ke.shiftKey;
+      const isRedo = (key === "z" && ke.shiftKey) || key === "y";
+      if (!isUndo && !isRedo) return;
+      if (this.inlineEdit || isTextEditingTarget(ke)) return; // native undo
+      ke.preventDefault?.();
+      if (isRedo) this.history.redo();
+      else this.history.undo();
+      this.editPanel?.resync();
     });
 
     // Clicks on the host page drive element/multi/edit selection. We listen in

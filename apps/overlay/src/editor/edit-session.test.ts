@@ -142,13 +142,16 @@ describe("EditSession", () => {
     expect(s.list()[0]?.property).toBe("font-size");
   });
 
-  it("undoLast() honours coalescing insertion order (re-edit stays in place)", () => {
+  it("undoLast() steps back the most-recent ACTION (redo-capable history, U3)", () => {
     const s = new EditSession();
-    s.record(styleOp({ property: "font-size", after: "24px" })); // slot 0
-    s.record(styleOp({ property: "color", after: "blue" })); // slot 1
-    s.record(styleOp({ property: "font-size", after: "40px" })); // re-edit slot 0
-    // The last DISTINCT edit is still `color`, not the font-size re-nudge.
-    expect(s.undoLast()?.property).toBe("color");
+    s.record(styleOp({ property: "font-size", after: "24px" }));
+    s.record(styleOp({ property: "color", after: "blue" }));
+    s.record(styleOp({ property: "font-size", after: "40px" })); // re-edit
+    // History is step-based now: the last ACTION was the font-size re-nudge, so
+    // undo steps it back (to 24px) rather than removing the color edit.
+    expect(s.undoLast()?.property).toBe("font-size");
+    expect(s.list().find((o) => o.property === "font-size")?.after).toBe("24px");
+    expect(s.list().find((o) => o.property === "color")?.after).toBe("blue");
   });
 
   it("undoLast() returns null on an empty buffer", () => {

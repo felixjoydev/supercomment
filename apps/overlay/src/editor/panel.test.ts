@@ -60,8 +60,13 @@ function mount(opts?: {
     undo: () => {
       session.undoLast();
     },
+    redo: () => session.history.redo(),
     discard: () => session.discard(),
     count: () => session.size,
+    canUndo: () => session.history.canUndo(),
+    canRedo: () => session.history.canRedo(),
+    entries: () => session.history.entries(),
+    revertEdit: (key) => session.history.revertKey(key),
     onClose: () => {
       state.closed = true;
     },
@@ -361,6 +366,37 @@ describe("PropertiesPanel — footer (N edits · Undo · Save comment)", () => {
     input.value = "40";
     input.dispatch("input", {});
     expect(q(".sc-ep-count").textContent).toBe("1 edit");
+  });
+
+  it("has a Redo button, disabled until there is something to redo (U3)", () => {
+    const { doc } = makeFakeDom();
+    const { q } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    const redo = q(".sc-ep-redo");
+    expect(redo.disabled).toBe(true);
+    const input = q(".sc-ep-ctl-font-size");
+    input.value = "40";
+    input.dispatch("input", {});
+    q(".sc-ep-undo").dispatch("click", {}); // undo → now redoable
+    expect(q(".sc-ep-redo").disabled).toBe(false);
+    q(".sc-ep-redo").dispatch("click", {});
+    expect(q(".sc-ep-redo").disabled).toBe(true);
+  });
+
+  it("the counter opens a session review list with a revert per row and Discard all (R17)", () => {
+    const { doc } = makeFakeDom();
+    const { session, q, maybe, parent } = mount({ el: makeEl(doc, "div", "box"), doc });
+    q(".sc-ep-ctl-top").value = "8";
+    q(".sc-ep-ctl-top").dispatch("input", {});
+    q(".sc-ep-ctl-bottom").value = "12";
+    q(".sc-ep-ctl-bottom").dispatch("input", {});
+    expect(session.size).toBe(2);
+    // Open the list.
+    q(".sc-ep-count").dispatch("click", {});
+    expect(parent.querySelectorAll(".sc-ep-edit-row").length).toBe(2);
+    expect(maybe(".sc-ep-edits-discard")).not.toBeNull();
+    // Revert one row → the projection drops that edit.
+    parent.querySelectorAll(".sc-ep-edit-revert")[0]!.dispatch("click", {});
+    expect(session.size).toBe(1);
   });
 
   it("Undo removes the last edit and refreshes the count", () => {

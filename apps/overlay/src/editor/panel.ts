@@ -15,9 +15,10 @@
  * Every control PRE-FILLS from the element's live computed style (requirement B),
  * applies an EPHEMERAL preview to the DOM, and records the semantic property
  * change (before→after + anchored target). The panel holds no durable state — it
- * records into the controller's cross-element {@link EditSession} via callbacks,
- * and the controller owns the ephemeral {@link PreviewLog}, so switching elements
- * or modes never loses work (G13/R7) and closing reverts the previews.
+ * records into the controller's cross-element history engine via callbacks (each
+ * edit ships its DOM redo/undo/revert-to-build closures), so switching elements
+ * or modes never loses work (G13/R7); previews persist until an explicit
+ * discard/save/exit (U2/U3).
  *
  * Text CONTENT is edited by double-clicking the element (see `inline-text.ts`),
  * not here — the panel is styling only, matching the reference. The insert-node
@@ -42,6 +43,7 @@ import {
 } from "./structural-edits.js";
 import { buildEditTarget } from "./edit-target.js";
 import { getPropertyMeta, type PropCtx } from "./property-meta.js";
+import type { EditDom, EditListRow } from "./history.js";
 import {
   createCanvasProbe,
   isTransparent,
@@ -49,18 +51,27 @@ import {
   type ColorProbe,
 } from "./color/normalize.js";
 
-/** How the controller records/reverts edits into its durable EditSession + preview log. */
+/** How the controller records edits into (and drives) its history engine (U3). */
 export interface PanelCallbacks {
-  /** Record (or coalesce) one edit, plus a thunk that reverts its ephemeral preview. */
-  record(op: ChangeOp, revert?: () => void): void;
-  /** Drop a specific recorded edit and revert its preview (an explicit toggle-off). */
+  /** Record one edit plus its DOM redo/undo/revert-to-build closures (U3). */
+  record(op: ChangeOp, dom: EditDom): void;
+  /** Per-edit revert of a specific recorded edit (edits list / toggle-off). */
   removeEdit(op: ChangeOp): void;
-  /** Undo the LAST recorded edit (footer Undo) — reverts its preview too. */
+  /** Undo the last history step (footer Undo / Cmd+Z). */
   undo(): void;
-  /** Throw away ALL in-progress edits + previews (explicit discard, R7). */
+  /** Redo the last undone step (footer Redo / Shift+Cmd+Z). */
+  redo?(): void;
+  /** Throw away ALL in-progress edits + reset to build (explicit Discard all, R7). */
   discard(): void;
   /** Current number of distinct edits, for the footer counter. */
   count(): number;
+  /** Whether undo / redo are currently possible (drives the footer button state). */
+  canUndo?(): boolean;
+  canRedo?(): boolean;
+  /** The net edits, as rows for the session review list (R17). */
+  entries?(): EditListRow[];
+  /** Revert one edit from the review list, by its history key (R17). */
+  revertEdit?(key: string): void;
   /** The reviewer closed the panel (× / Esc); previews revert, buffer is kept. */
   onClose(): void;
   /** Finalize the buffered edits as a template comment (opens the comment form). */
@@ -135,10 +146,14 @@ export class PropertiesPanel {
   private spacingMode: "padding" | "margin" = "padding";
   private spacingLinked = false;
 
-  private countEl!: HTMLElement;
+  private countEl!: HTMLButtonElement;
   private undoBtn!: HTMLButtonElement;
+  private redoBtn!: HTMLButtonElement;
   private saveBtn!: HTMLButtonElement;
   private sendBtn: HTMLButtonElement | null = null;
+  /** The session-review edits list (R17); created lazily when first opened. */
+  private editsListEl: HTMLElement | null = null;
+  private editsListOpen = false;
 
   constructor(
     private readonly doc: Document,
@@ -561,7 +576,17 @@ export class PropertiesPanel {
       position,
     };
     const revert = previewMove(this.el, neighbour, position);
-    this.cb.record(buildMoveOp(this.target, insertion, from, to), revert);
+    // Redo re-runs the move; undo AND revert-to-build restore the prior position
+    // (the engine keeps the first move's revert as the build baseline, so a
+    // coalesced sequence still nets back to the true original slot).
+    const dom: EditDom = {
+      apply: () => {
+        previewMove(this.el, neighbour, position);
+      },
+      invert: revert,
+      revertToBuild: revert,
+    };
+    this.cb.record(buildMoveOp(this.target, insertion, from, to), dom);
     this.refreshCount();
   }
 
@@ -588,14 +613,20 @@ export class PropertiesPanel {
       footer.appendChild(promptWrap);
     }
 
-    this.countEl = this.create("div", "sc-ep-count");
+    // The counter is a button that opens the session review list (R17).
+    this.countEl = this.button("sc-ep-count", "0 edits", () => this.toggleEditsList());
+    this.countEl.setAttribute("aria-haspopup", "true");
+    this.countEl.setAttribute("aria-expanded", "false");
     this.undoBtn = this.button("sc-ep-undo", "Undo", () => {
       this.cb.undo();
-      this.syncControls();
-      this.refreshCount();
+      this.resync();
+    });
+    this.redoBtn = this.button("sc-ep-redo", "Redo", () => {
+      this.cb.redo?.();
+      this.resync();
     });
     this.saveBtn = this.button("sc-ep-save", "Save comment", () => this.cb.onSave());
-    footer.append(this.countEl, this.undoBtn, this.saveBtn);
+    footer.append(this.countEl, this.undoBtn, this.redoBtn, this.saveBtn);
     // Phase 2: permitted member sessions also get "Send to agent" (save + enqueue),
     // ALONGSIDE "Save comment". Guests / non-permitted members never see it.
     if (this.cb.canSendToAgent && this.cb.onSendToAgent) {
@@ -611,7 +642,8 @@ export class PropertiesPanel {
 
   private recordStyle(property: string, after: string): void {
     const before = this.beforeFor(property);
-    const revert = this.revertFor(property);
+    const revertToBuild = this.revertFor(property); // first-write-wins build snapshot
+    const prevSnap = readInlineSnapshot(this.el, property); // state before THIS write
     // Verified apply (U2): write, read back through the U1 pipeline, escalate to
     // !important only if site CSS wins; the op records the clean value and flags
     // previewUnavailable when even the escalation loses.
@@ -619,9 +651,15 @@ export class PropertiesPanel {
       probe: this.colorProbe,
       direction: this.dirCtx().direction,
     });
+    const nextSnap = readInlineSnapshot(this.el, property); // state after THIS write
+    const dom: EditDom = {
+      apply: () => restoreInlineSnapshot(this.el, property, nextSnap),
+      invert: () => restoreInlineSnapshot(this.el, property, prevSnap),
+      revertToBuild,
+    };
     this.cb.record(
       buildStyleOp({ target: this.target, property, before, after, previewUnavailable }),
-      revert,
+      dom,
     );
     this.markDegraded(property, previewUnavailable);
     this.refreshCount();
@@ -857,8 +895,91 @@ export class PropertiesPanel {
     const n = this.cb.count();
     this.countEl.textContent = n === 1 ? "1 edit" : `${n} edits`;
     this.saveBtn.disabled = n === 0;
-    this.undoBtn.disabled = n === 0;
+    // Undo/redo track the history engine's real state (redo survives after undo,
+    // even when the net edit count is 0), falling back to the count when a
+    // caller does not expose canUndo/canRedo (e.g. the panel unit-test mock).
+    this.undoBtn.disabled = this.cb.canUndo ? !this.cb.canUndo() : n === 0;
+    this.redoBtn.disabled = this.cb.canRedo ? !this.cb.canRedo() : true;
     if (this.sendBtn) this.sendBtn.disabled = n === 0;
+    if (this.editsListOpen) this.renderEditsList();
+  }
+
+  /** Re-read every control from the live DOM and refresh the footer (post undo/redo). */
+  resync(): void {
+    this.syncControls();
+    this.refreshCount();
+  }
+
+  /**
+   * Refresh only the footer counter, undo/redo state, and open review list — NOT
+   * the control inputs — so a history event (e.g. a keyboard undo elsewhere) never
+   * clobbers a value the reviewer is actively typing. Driven by the controller's
+   * history subscription (U3).
+   */
+  refreshUi(): void {
+    this.refreshCount();
+  }
+
+  // --- Session review list (R17) -------------------------------------------
+
+  private toggleEditsList(): void {
+    this.editsListOpen = !this.editsListOpen;
+    this.countEl.setAttribute("aria-expanded", String(this.editsListOpen));
+    if (this.editsListOpen) {
+      this.renderEditsList();
+      // Focus moves into the first operable control on open (finding: popover focus).
+      const first = this.editsListEl?.querySelector?.(
+        ".sc-ep-edit-revert, .sc-ep-edits-discard",
+      ) as HTMLElement | null;
+      first?.focus?.();
+    } else {
+      this.closeEditsList();
+    }
+  }
+
+  /** Close the review list and return focus to the counter trigger. */
+  closeEditsList(): void {
+    if (!this.editsListOpen && !this.editsListEl) return;
+    this.editsListOpen = false;
+    this.countEl.setAttribute("aria-expanded", "false");
+    this.editsListEl?.remove();
+    this.editsListEl = null;
+    this.countEl.focus?.();
+  }
+
+  private renderEditsList(): void {
+    if (!this.editsListEl) {
+      this.editsListEl = this.create("div", "sc-ep-edits");
+      this.editsListEl.setAttribute("role", "list");
+      this.editsListEl.setAttribute("aria-label", "Edits this session");
+      this.root.appendChild(this.editsListEl);
+    }
+    this.editsListEl.replaceChildren?.();
+    const rows = this.cb.entries?.() ?? [];
+    for (const row of rows) {
+      const rowEl = this.create("div", "sc-ep-edit-row");
+      rowEl.setAttribute("role", "listitem");
+      const label = this.create("span", "sc-ep-edit-label");
+      label.textContent = row.label;
+      const revert = this.button("sc-ep-edit-revert", "Revert", () => {
+        this.cb.revertEdit?.(row.key);
+        this.resync();
+      });
+      revert.setAttribute("aria-label", `Revert ${row.label}`);
+      rowEl.append(label, revert);
+      this.editsListEl.appendChild(rowEl);
+    }
+    if (rows.length === 0) {
+      const empty = this.create("div", "sc-ep-edits-empty");
+      empty.textContent = "No edits yet";
+      this.editsListEl.appendChild(empty);
+    } else {
+      const discard = this.button("sc-ep-edits-discard", "Discard all", () => {
+        this.cb.discard();
+        this.resync();
+      });
+      this.editsListEl.appendChild(discard);
+    }
   }
 
   private section(title: string): HTMLElement {
