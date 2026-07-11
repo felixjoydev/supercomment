@@ -43,18 +43,23 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   // the dashboard button reflects the real persisted state on load (Queued /
   // Working / Done) instead of resetting to "Send to Claude" after a refresh.
   // RLS scopes this to the member's previews, same as the comments read above.
-  const sendStatusByComment = await getSendStatusMap(supabase, previewId);
   // Bulk sources for thread-aware unread: newest reply per thread + this member's
   // own read receipts (RLS scopes comment_read_state to the caller's member rows).
-  const latestReplyByComment = await getLatestReplyMap(supabase, previewId);
-  const lastReadByComment = await getReadReceiptMap(supabase, previewId);
   // U4: each comment's member-only "prompt to the agent" (agent_prompts, 0043),
   // so an existing prompt shows on the FIRST load, not just after an in-session
   // edit. The table's own RLS (is_preview_workspace_member) scopes this to the
   // caller's previews same as the comments read above — a real signed-in member
   // satisfies it directly, no session-linkage RPC needed (that's get_agent_prompt,
   // for the overlay's anon session, U5's concern).
-  const promptByComment = await getAgentPromptMap(supabase, previewId);
+  // All four are independent preview_id-scoped queries; run them concurrently
+  // rather than as four sequential round trips (code review finding, performance).
+  const [sendStatusByComment, latestReplyByComment, lastReadByComment, promptByComment] =
+    await Promise.all([
+      getSendStatusMap(supabase, previewId),
+      getLatestReplyMap(supabase, previewId),
+      getReadReceiptMap(supabase, previewId),
+      getAgentPromptMap(supabase, previewId),
+    ]);
 
   // The select column list is a runtime string (COMMENT_ROW_COLUMNS), so
   // PostgREST's compile-time select inference can't narrow the row type; we cast

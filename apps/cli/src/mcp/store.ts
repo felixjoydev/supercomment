@@ -504,21 +504,27 @@ export class SupabaseCommentStore implements CommentStore {
     context: CapturedContext,
   ): Promise<CapturedContext> {
     const next = { ...context };
-    if (context.screenshot) {
-      const resolved = await resolveCaptureSrc(context.screenshot, this.signer);
-      if (resolved) next.screenshot = resolved;
-    }
+    // Screenshot and reference images are independent Storage round trips;
+    // sign them concurrently rather than awaiting the screenshot before
+    // starting the (already-parallel) reference-image signing (code review
+    // finding, performance).
     const refs = context.referenceImages;
-    if (refs && refs.length > 0) {
-      // Latest-first primacy: the most recent upload is the current ask: keep
-      // it (and up to cap-1 predecessors), drop anything older.
-      const candidates = [...refs]
-        .reverse()
-        .slice(0, MAX_RESOLVED_REFERENCE_IMAGES);
-      next.referenceImages = await Promise.all(
+    // Latest-first primacy: the most recent upload is the current ask: keep
+    // it (and up to cap-1 predecessors), drop anything older.
+    const candidates =
+      refs && refs.length > 0
+        ? [...refs].reverse().slice(0, MAX_RESOLVED_REFERENCE_IMAGES)
+        : [];
+    const [resolvedScreenshot, resolvedRefs] = await Promise.all([
+      context.screenshot
+        ? resolveCaptureSrc(context.screenshot, this.signer)
+        : Promise.resolve(null),
+      Promise.all(
         candidates.map(async (src) => (await resolveCaptureSrc(src, this.signer)) ?? src),
-      );
-    }
+      ),
+    ]);
+    if (resolvedScreenshot) next.screenshot = resolvedScreenshot;
+    if (candidates.length > 0) next.referenceImages = resolvedRefs;
     return next;
   }
 
