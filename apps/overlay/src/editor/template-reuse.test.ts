@@ -171,6 +171,49 @@ describe("template cross-page reuse (R9)", () => {
     expect(result.results[0]!.reason).toBe("inapplicable");
   });
 
+  it("re-applies a same-origin image swap but never a cross-origin one (record-intent-only, U6)", () => {
+    const { doc } = makeFakeDom();
+    (doc.defaultView as unknown as { location: { origin: string } }).location = {
+      origin: "https://reviewed.example",
+    };
+    const same = doc.createElement("img");
+    same.className = "same";
+    same.setAttribute("src", "a.png");
+    const cross = doc.createElement("img");
+    cross.className = "cross";
+    cross.setAttribute("src", "b.png");
+    doc.body.append(same, cross);
+    const resolve = (t: { selector: string }): FakeElement | null =>
+      ({ ".same": same, ".cross": cross }[t.selector] ?? null);
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "s1",
+          type: "setAttr",
+          target: { selector: ".same", anchors: [] },
+          property: "src",
+          before: "a.png",
+          after: "https://reviewed.example/new.png",
+        },
+        {
+          opId: "s2",
+          type: "setAttr",
+          target: { selector: ".cross", anchors: [] },
+          property: "src",
+          before: "b.png",
+          after: "https://evil.example/track.png",
+        },
+      ],
+    };
+    const result = applyChangeSet(cs, doc as unknown as Document, {
+      resolve: resolve as unknown as (t: EditTarget, d: Document) => Element | null,
+    });
+    expect(result.applied).toBe(1); // same-origin swap re-applied
+    expect(result.skipped).toBe(1); // cross-origin swap is record-intent-only
+    expect(same.getAttribute("src")).toBe("https://reviewed.example/new.png");
+    expect(cross.getAttribute("src")).toBe("b.png"); // NEVER mutated into a viewer's DOM
+  });
+
   it("applies a uniquely-anchored edit on the same page", () => {
     const { doc: page, root } = buildDom({
       tag: "body",

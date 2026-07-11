@@ -93,6 +93,154 @@ function emptyTarget(): EditTarget {
 }
 
 // ---------------------------------------------------------------------------
+// Replace-image (swap) safety + preview (U6).
+// ---------------------------------------------------------------------------
+
+/** A private / non-public host (SSRF + localhost surface) — rejected on URL entry. */
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".localhost")) return true;
+  if (h === "::1" || h === "0.0.0.0") return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true; // link-local
+  return false;
+}
+
+export interface SwapUrlVerdict {
+  /** Safe to accept as a swap target at all (author preview + record). */
+  ok: boolean;
+  /** Same-origin as the reviewed page (safe to re-apply to OTHER viewers). */
+  sameOrigin: boolean;
+  reason?: "empty" | "invalid" | "not-https" | "private-host";
+}
+
+/**
+ * Classify a reviewer-entered swap URL (U6). For ENTRY we require https to a
+ * public host (never http, blob:, data:, javascript:, or a private/localhost
+ * host). `sameOrigin` reports whether it matches the reviewed page's origin —
+ * only same-origin URLs are re-applied to OTHER viewers; a cross-origin
+ * third-party URL is recorded as intent and previewed for the author only.
+ */
+export function classifySwapUrl(raw: string, pageOrigin?: string): SwapUrlVerdict {
+  const s = (raw ?? "").trim();
+  if (!s) return { ok: false, sameOrigin: false, reason: "empty" };
+  let u: URL;
+  try {
+    u = new URL(s, pageOrigin ?? "https://reviewed.example");
+  } catch {
+    return { ok: false, sameOrigin: false, reason: "invalid" };
+  }
+  if (u.protocol !== "https:") return { ok: false, sameOrigin: false, reason: "not-https" };
+  if (isPrivateHost(u.hostname)) return { ok: false, sameOrigin: false, reason: "private-host" };
+  let sameOrigin = false;
+  if (pageOrigin) {
+    try {
+      sameOrigin = u.host === new URL(pageOrigin).host;
+    } catch {
+      sameOrigin = false;
+    }
+  }
+  return { ok: true, sameOrigin };
+}
+
+/**
+ * Whether a swapped media `src` is safe to RE-APPLY into ANOTHER viewer's DOM
+ * (the apply-change-set gate, U6). Only same-origin https (or a relative /
+ * root-relative URL) is re-applied; a blob:/data:/javascript:/third-party URL is
+ * record-intent-only, so the recorded swap can never become an SSRF, beacon, or
+ * CSRF channel aimed at whoever opens the comment. Uploaded replacements are
+ * delivered as signed refs out of band, never as a raw src here.
+ */
+export function isReapplicableMediaSrc(src: string, pageOrigin: string): boolean {
+  const s = (src ?? "").trim();
+  if (!s) return false;
+  if (/^(blob|data|javascript|file|about|ftp):/i.test(s)) return false;
+  // Relative or root-relative (no scheme, not protocol-relative) → same-origin.
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(s);
+  if (!hasScheme && !s.startsWith("//")) return true;
+  try {
+    const u = new URL(s, pageOrigin);
+    return u.protocol === "https:" && u.host === new URL(pageOrigin).host;
+  } catch {
+    return false;
+  }
+}
+
+/** Captured original media attributes for an exact swap restore. */
+interface MediaSnapshot {
+  el: Element;
+  attr: string;
+  value: string | null;
+}
+
+export interface SwapPreview {
+  /** Restore the img + any <picture><source> children byte-identical. */
+  restore(): void;
+}
+
+/**
+ * Preview an image swap (U6): set the img's `src` to `newSrc` and NEUTRALIZE the
+ * responsive machinery that would otherwise override it — the img's own srcset +
+ * sizes, and every `<source>` child's srcset + media when the target sits inside
+ * a `<picture>` — recording each prior value for a byte-identical restore. Without
+ * this the browser re-selects a source and the swap never actually shows. Never
+ * throws; the returned `restore` puts everything back.
+ */
+export function previewSwapMedia(el: Element, newSrc: string): SwapPreview {
+  const snaps: MediaSnapshot[] = [];
+  const capture = (node: Element, attr: string): void => {
+    try {
+      snaps.push({ el: node, attr, value: node.getAttribute?.(attr) ?? null });
+    } catch {
+      /* best-effort */
+    }
+  };
+  const clear = (node: Element, attr: string): void => {
+    try {
+      node.removeAttribute?.(attr);
+    } catch {
+      /* best-effort */
+    }
+  };
+  try {
+    // Neutralize the responsive picker on the img itself.
+    capture(el, "srcset");
+    capture(el, "sizes");
+    clear(el, "srcset");
+    clear(el, "sizes");
+    // And on each <source> child when inside a <picture>.
+    const parent = el.parentElement;
+    if (parent && (parent.tagName || "").toLowerCase() === "picture") {
+      for (const child of Array.from(parent.children)) {
+        if ((child.tagName || "").toLowerCase() !== "source") continue;
+        capture(child, "srcset");
+        capture(child, "media");
+        clear(child, "srcset");
+        clear(child, "media");
+      }
+    }
+    capture(el, "src");
+    el.setAttribute?.("src", newSrc);
+  } catch {
+    /* best-effort preview */
+  }
+  return {
+    restore: () => {
+      // Restore in reverse so src lands last (after srcset/sizes are back).
+      for (const s of [...snaps].reverse()) {
+        try {
+          if (s.value == null) s.el.removeAttribute?.(s.attr);
+          else s.el.setAttribute?.(s.attr, s.value);
+        } catch {
+          /* best-effort restore */
+        }
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Non-destructive CSS previews (never move/remove real nodes — G12).
 // ---------------------------------------------------------------------------
 

@@ -39,7 +39,13 @@ import {
 } from "./style-edits.js";
 import {
   buildMoveOp,
+  buildSetVisibilityOp,
+  buildSwapMediaOp,
+  classifySwapUrl,
+  previewHide,
   previewMove,
+  previewShow,
+  previewSwapMedia,
 } from "./structural-edits.js";
 import { buildEditTarget } from "./edit-target.js";
 import { getPropertyMeta, type PropCtx } from "./property-meta.js";
@@ -100,6 +106,20 @@ export interface PanelCallbacks {
   getPromptText?(): string;
   /** U5: fires on every keystroke in the prompt field with its current value. */
   onPromptChange?(text: string): void;
+  /**
+   * U6: the reviewed page's origin, so an entered replace-image URL can be
+   * classified (same-origin URLs re-apply to other viewers; cross-origin third
+   * party is record-intent-only). Omit when unknown.
+   */
+  pageOrigin?(): string | undefined;
+  /**
+   * U6: a picked replacement-image file (as a data URL) to deliver to the agent
+   * as a signed reference (reusing the reference-image upload channel). The op
+   * records the swap intent; this carries the actual bytes safely.
+   */
+  onSwapImageFile?(dataUrl: string): void;
+  /** U6: an element was hidden — its pre-hide rect, so the controller can ghost the slot (U4). */
+  onElementHidden?(rect: { x: number; y: number; width: number; height: number }): void;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -108,8 +128,8 @@ interface Listenable {
   removeEventListener?(type: string, handler: (e: unknown) => void): void;
 }
 
-/** Which section family an element belongs to (drives contextual show/hide). */
-type Category = "text" | "container" | "other";
+/** Which section family an element belongs to (drives the contextual matrix, R6). */
+type Category = "text" | "container" | "image" | "media" | "svg" | "form" | "other";
 
 const TEXT_TAGS = new Set([
   "h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "li", "strong", "em",
@@ -120,14 +140,53 @@ const TEXT_TAGS = new Set([
 const CONTAINER_TAGS = new Set([
   "div", "section", "header", "footer", "nav", "main", "article", "aside", "ul",
   "ol", "form", "figure", "details", "dialog", "fieldset", "table", "thead",
-  "tbody", "tr", "picture", "menu",
+  "tbody", "tr", "menu",
 ]);
+const IMAGE_TAGS = new Set(["img", "picture"]);
+const MEDIA_TAGS = new Set(["video", "audio", "canvas"]);
+const FORM_TAGS = new Set(["input", "select", "textarea"]);
 
 function categoryOf(el: Element): Category {
   const tag = (el.tagName || "").toLowerCase();
+  if (IMAGE_TAGS.has(tag)) return "image";
+  if (MEDIA_TAGS.has(tag)) return "media";
+  if (tag === "svg") return "svg";
+  if (FORM_TAGS.has(tag)) return "form";
   if (TEXT_TAGS.has(tag)) return "text";
   if (CONTAINER_TAGS.has(tag)) return "container";
   return "other";
+}
+
+/** The control matrix (R6): which sections render for each element kind. */
+interface SectionMatrix {
+  type: boolean;
+  layout: boolean;
+  spacing: boolean;
+  size: boolean;
+  position: boolean;
+  image: boolean;
+  colour: false | "color" | "background-color";
+}
+
+function sectionsFor(category: Category): SectionMatrix {
+  const box = { spacing: true, size: true, position: true };
+  switch (category) {
+    case "text":
+      return { type: true, layout: false, spacing: false, size: false, position: false, image: false, colour: "color" };
+    case "container":
+      return { type: false, layout: true, ...box, image: false, colour: "background-color" };
+    case "image":
+      // Image section replaces the meaningless background-color swatch.
+      return { type: false, layout: false, ...box, image: true, colour: false };
+    case "svg":
+      // No background-color on an svg (fill/stroke are out of scope this round).
+      return { type: false, layout: false, ...box, image: false, colour: false };
+    case "media":
+    case "form":
+    case "other":
+    default:
+      return { type: false, layout: false, ...box, image: false, colour: "background-color" };
+  }
 }
 
 export class PropertiesPanel {
@@ -170,20 +229,17 @@ export class PropertiesPanel {
     this.root.setAttribute("role", "dialog");
     this.root.setAttribute("aria-label", "Edit element");
 
+    const m = sectionsFor(this.category);
     this.buildHeader();
-    if (this.category === "text") {
-      this.buildTypeSection();
-    }
-    if (this.category === "container") {
-      this.buildLayoutSection();
-    }
-    if (this.category !== "text") {
-      this.buildSpacingSection();
-      this.buildSizeSection();
-      this.buildPositionSection();
-    }
-    this.buildColourSection(this.category === "text" ? "color" : "background-color");
+    if (m.type) this.buildTypeSection();
+    if (m.layout) this.buildLayoutSection();
+    if (m.image) this.buildImageSection();
+    if (m.spacing) this.buildSpacingSection();
+    if (m.size) this.buildSizeSection();
+    if (m.position) this.buildPositionSection();
+    if (m.colour) this.buildColourSection(m.colour);
     this.buildArrangeSection();
+    this.buildVisibilitySection();
     this.buildFooter();
 
     parent.appendChild(this.root);
@@ -538,6 +594,136 @@ export class PropertiesPanel {
       const opNum = op == null ? 1 : parseFloat(op);
       opacity.value = Number.isFinite(opNum) ? String(Math.round(opNum * 100)) : "100";
     });
+  }
+
+  // --- Image (replace / fit / radius) — R6 ---------------------------------
+
+  private buildImageSection(): void {
+    const body = this.section("Image");
+
+    // Replace via URL (https + public host; cross-origin is record-intent-only).
+    const urlRow = this.create("div", "sc-ep-row sc-ep-image-url");
+    const urlInput = this.create("input", "sc-ep-hex sc-ep-ctl-image-url") as HTMLInputElement;
+    urlInput.type = "url";
+    urlInput.placeholder = "https://…";
+    urlInput.setAttribute("aria-label", "Replace image URL");
+    const applyBtn = this.button("sc-ep-btn sc-ep-image-apply", "Replace", () =>
+      this.recordSwapUrl(urlInput.value),
+    );
+    urlRow.append(urlInput, applyBtn);
+    body.appendChild(urlRow);
+
+    // Replace via file upload (bytes ride the reference-image channel to the agent).
+    const fileRow = this.create("div", "sc-ep-row sc-ep-image-file");
+    const fileLabel = this.create("label", "sc-ep-label");
+    fileLabel.textContent = "Upload";
+    const file = this.create("input", "sc-ep-file sc-ep-ctl-image-file") as HTMLInputElement;
+    file.type = "file";
+    file.setAttribute("accept", "image/*");
+    file.setAttribute("aria-label", "Replace image file");
+    this.on(file, "change", () => this.recordSwapFile(file));
+    fileRow.append(fileLabel, file);
+    body.appendChild(fileRow);
+
+    body.appendChild(
+      this.selectRow("Fit", "object-fit", [
+        { label: "Cover", value: "cover" },
+        { label: "Contain", value: "contain" },
+        { label: "Fill", value: "fill" },
+        { label: "None", value: "none" },
+        { label: "Scale down", value: "scale-down" },
+      ]),
+    );
+    body.appendChild(this.numberRow("Radius", "border-radius", { unit: "px" }));
+  }
+
+  private recordSwapUrl(raw: string): void {
+    const verdict = classifySwapUrl(raw, this.cb.pageOrigin?.());
+    if (!verdict.ok) {
+      this.markDegraded("image-url", true); // invalid / unsafe → flag, record nothing
+      return;
+    }
+    this.markDegraded("image-url", false);
+    this.recordSwap(raw.trim());
+  }
+
+  private recordSwapFile(input: HTMLInputElement): void {
+    const file = (input.files as FileList | null)?.[0];
+    if (!file) return;
+    const view = this.doc.defaultView as {
+      URL?: { createObjectURL?: (f: unknown) => string };
+      FileReader?: new () => {
+        result: unknown;
+        onload: (() => void) | null;
+        readAsDataURL(f: unknown): void;
+      };
+    } | null;
+    // Deliver the actual bytes to the agent as a signed reference (existing
+    // channel); the recorded op stays record-intent-only for other viewers.
+    try {
+      const reader = view?.FileReader ? new view.FileReader() : null;
+      if (reader) {
+        reader.onload = () => this.cb.onSwapImageFile?.(String(reader.result ?? ""));
+        reader.readAsDataURL(file);
+      }
+    } catch {
+      /* best-effort delivery */
+    }
+    const objectUrl = view?.URL?.createObjectURL?.(file);
+    if (objectUrl) this.recordSwap(objectUrl); // blob: preview → record-intent-only
+  }
+
+  private recordSwap(newSrc: string): void {
+    const before = this.el.getAttribute?.("src") ?? null;
+    // Preview now (neutralizing srcset/sizes + <picture> sources for an exact
+    // restore); the engine keeps the FIRST restore as the build baseline.
+    const preview = previewSwapMedia(this.el, newSrc);
+    const dom: EditDom = {
+      apply: () => {
+        previewSwapMedia(this.el, newSrc);
+      },
+      invert: () => preview.restore(),
+      revertToBuild: () => preview.restore(),
+    };
+    this.cb.record(buildSwapMediaOp(this.target, before, newSrc), dom);
+    this.refreshCount();
+  }
+
+  // --- Visibility (hide — R13) ---------------------------------------------
+
+  private buildVisibilitySection(): void {
+    const body = this.section("Visibility");
+    body.appendChild(
+      this.button("sc-ep-btn sc-ep-hide", "Hide element", () => this.recordHide()),
+    );
+  }
+
+  private recordHide(): void {
+    const op = buildSetVisibilityOp(this.target, true);
+    // Ghost the vacated slot (U4) using the rect captured BEFORE the element
+    // collapses to display:none.
+    this.cb.onElementHidden?.(this.rectOf());
+    const priorDisplay = previewHide(this.el); // apply now (author clicked)
+    const dom: EditDom = {
+      apply: () => {
+        previewHide(this.el);
+      },
+      invert: () => previewShow(this.el, priorDisplay),
+      revertToBuild: () => previewShow(this.el, priorDisplay),
+    };
+    this.cb.record(op, dom);
+    this.refreshCount();
+  }
+
+  /** The element's current viewport rect (best-effort; zeros without a real DOM). */
+  private rectOf(): { x: number; y: number; width: number; height: number } {
+    try {
+      const r = this.el.getBoundingClientRect?.();
+      if (r) return { x: r.x ?? r.left ?? 0, y: r.y ?? r.top ?? 0, width: r.width ?? 0, height: r.height ?? 0 };
+    } catch {
+      /* best-effort */
+    }
+    return { x: 0, y: 0, width: 0, height: 0 };
   }
 
   // --- Arrange (functional reorder, requirement F) -------------------------

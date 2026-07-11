@@ -165,6 +165,12 @@ export class OverlayController {
    */
   private pendingPromptText = "";
   /**
+   * U6: picked replacement-image files (data URLs) awaiting save-time upload; they
+   * ride the reference-image channel so the agent gets a signed ref while the
+   * change-set's swap op stays record-intent-only. Cleared on save/discard/exit.
+   */
+  private pendingSwapImages: string[] = [];
+  /**
    * The element `pendingPromptText` was typed against (code review fix,
    * julik-frontend-races): re-targeting `openEditPanel` to a DIFFERENT
    * element clears the buffer, since a prompt is a per-send instruction
@@ -280,6 +286,14 @@ export class OverlayController {
     this.editSession.history.subscribe(() => {
       this.editPanel?.refreshUi();
       this.inspector.scheduleRender();
+      // U6: clear the hidden-element ghost once no hide op remains (undo/revert).
+      if (
+        !this.history
+          .projectOps()
+          .some((o) => o.type === "setVisibility" && o.after === "hidden")
+      ) {
+        this.inspector.setGhost(null);
+      }
     });
     this.bindEvents();
   }
@@ -646,6 +660,12 @@ export class OverlayController {
     const capturedPromptText = changeSet ? this.pendingPromptText.trim() : "";
     if (changeSet) this.pendingPromptText = "";
 
+    // U6: snapshot picked replacement-image files the same way — they ride the
+    // reference-image channel to the agent (signed refs), while the change-set's
+    // swap op stays record-intent-only for other viewers.
+    const capturedSwaps = changeSet ? [...this.pendingSwapImages] : [];
+    if (changeSet) this.pendingSwapImages = [];
+
     const context = await this.captureContext(target);
 
     // U9 (R15): guarantee a per-comment, ELEMENT-scoped "before" artifact is
@@ -659,6 +679,9 @@ export class OverlayController {
 
     if (changeSet) {
       context.changeSet = changeSet;
+    }
+    if (capturedSwaps.length > 0) {
+      context.referenceImages = [...(context.referenceImages ?? []), ...capturedSwaps];
     }
 
     // U13/U7 + U17/R19: push the real raster + any reference images out-of-band
@@ -691,6 +714,10 @@ export class OverlayController {
       // prompt with this failed attempt's stale one.
       if (capturedPromptText && this.pendingPromptText === "") {
         this.pendingPromptText = capturedPromptText;
+      }
+      // U6: restore the picked swap files too, so a retry re-delivers them.
+      if (capturedSwaps.length > 0) {
+        this.pendingSwapImages = [...capturedSwaps, ...this.pendingSwapImages];
       }
       this.showSubmitError(result.message);
       return;
@@ -1252,6 +1279,21 @@ export class OverlayController {
       onPromptChange: (text) => {
         this.pendingPromptText = text;
       },
+      // U6: reviewed-page origin for the replace-image URL policy.
+      pageOrigin: () => {
+        try {
+          return (this.doc.defaultView as { location?: { origin?: string } } | null)?.location
+            ?.origin;
+        } catch {
+          return undefined;
+        }
+      },
+      // U6: a picked replacement file rides the reference-image channel to the agent.
+      onSwapImageFile: (dataUrl) => {
+        this.pendingSwapImages.push(dataUrl);
+      },
+      // U6: ghost the vacated slot when an element is hidden (U4 chrome).
+      onElementHidden: (rect) => this.inspector.setGhost(rect),
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
@@ -1294,6 +1336,8 @@ export class OverlayController {
    */
   private restoreToBuild(): void {
     this.history.resetToBuild();
+    this.pendingSwapImages = [];
+    this.inspector.setGhost(null);
   }
 
   /**

@@ -168,6 +168,16 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   white-space: nowrap;
 }
 
+/* U6: replace-image file input + URL row. */
+.sc-ep-file {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ep-ink-2);
+  max-width: 60%;
+}
+.sc-ep-image-url .sc-ep-hex { flex: 1; min-width: 0; }
+.sc-ep-image-apply { flex: 0 0 auto; }
+
 /* U2: a control whose live preview could not be verified on the reviewer's page.
    The value is still recorded for the agent; this is an honesty signal, not an
    error. Reused by U8's font-picker degradation badge. */

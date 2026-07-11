@@ -149,6 +149,29 @@ describe("PropertiesPanel — contextual sections (requirement A + user note)", 
     const { q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
     expect(q(".sc-ep-tag").textContent).toBe("H2");
   });
+
+  it("an IMAGE element shows an Image section (replace/fit/radius), not a background colour (R6, U6)", () => {
+    const { doc } = makeFakeDom();
+    const { parent } = mount({ el: makeEl(doc, "img", ""), doc });
+    expect(parent.querySelector(".sc-ep-ctl-image-url")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-image-apply")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-object-fit")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-border-radius")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-background-color")).toBeNull(); // no bg on an image
+  });
+
+  it("an SVG element shows no colour section (R6, U6)", () => {
+    const { doc } = makeFakeDom();
+    const { parent } = mount({ el: makeEl(doc, "svg", ""), doc });
+    expect(parent.querySelector(".sc-ep-ctl-background-color")).toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-color")).toBeNull();
+  });
+
+  it("every element gets a Hide control (R13, U6)", () => {
+    const { doc } = makeFakeDom();
+    const { maybe } = mount({ el: makeEl(doc, "div", "box"), doc });
+    expect(maybe(".sc-ep-hide")).not.toBeNull();
+  });
 });
 
 describe("PropertiesPanel — Type settings (text)", () => {
@@ -314,6 +337,45 @@ describe("PropertiesPanel — Position (place-self cross)", () => {
     q(".sc-ep-cross-center").dispatch("click", {});
     const op = session.list().find((o) => o.property === "place-self")!;
     expect(op.after).toBe("center center");
+  });
+});
+
+describe("PropertiesPanel — Image replace + Hide (U6)", () => {
+  it("records a swapMedia op from a valid https URL, previewing the new src", () => {
+    const { doc } = makeFakeDom();
+    const img = makeEl(doc, "img", "");
+    img.setAttribute("src", "old.png");
+    img.setAttribute("srcset", "old.png 2x");
+    const { session, q } = mount({ el: img, doc });
+    const url = q(".sc-ep-ctl-image-url");
+    url.value = "https://cdn.example.com/new.png";
+    q(".sc-ep-image-apply").dispatch("click", {});
+    const op = session.list().find((o) => o.type === "setAttr" && o.property === "src")!;
+    expect(op).toBeTruthy();
+    expect(op.after).toBe("https://cdn.example.com/new.png");
+    expect(img.getAttribute("src")).toBe("https://cdn.example.com/new.png"); // previewed
+    expect(img.getAttribute("srcset")).toBeNull(); // srcset neutralized so the swap shows
+  });
+
+  it("does not record for an unsafe URL (http / private host) and flags the control", () => {
+    const { doc } = makeFakeDom();
+    const img = makeEl(doc, "img", "");
+    const { session, q, parent } = mount({ el: img, doc });
+    q(".sc-ep-ctl-image-url").value = "http://localhost/x.png";
+    q(".sc-ep-image-apply").dispatch("click", {});
+    expect(session.list().some((o) => o.type === "setAttr")).toBe(false);
+    expect(parent.querySelector(".sc-ep-image-url")!.getAttribute("data-sc-degraded")).toBe("1");
+  });
+
+  it("Hide records a setVisibility op (R13)", () => {
+    const { doc } = makeFakeDom();
+    const el = makeEl(doc, "div", "box");
+    const { session, q } = mount({ el, doc });
+    q(".sc-ep-hide").dispatch("click", {});
+    const op = session.list().find((o) => o.type === "setVisibility")!;
+    expect(op).toBeTruthy();
+    expect(op.after).toBe("hidden");
+    expect(op.before).toBe("visible");
   });
 });
 

@@ -12,6 +12,9 @@ import {
   previewShow,
   previewOrder,
   previewMove,
+  previewSwapMedia,
+  classifySwapUrl,
+  isReapplicableMediaSrc,
 } from "./structural-edits.js";
 import { makeFakeDom, type FakeElement } from "../test/dom-double.js";
 
@@ -165,5 +168,77 @@ describe("previewMove — real reorder + exact revert (requirement F)", () => {
       revert = previewMove(orphan as unknown as Element, null, "before");
     }).not.toThrow();
     expect(() => revert()).not.toThrow();
+  });
+});
+
+describe("classifySwapUrl — replace-image URL policy (U6)", () => {
+  it("accepts https to a public host and flags same-origin", () => {
+    expect(classifySwapUrl("https://cdn.example.com/a.png")).toMatchObject({ ok: true });
+    expect(
+      classifySwapUrl("https://reviewed.example/a.png", "https://reviewed.example"),
+    ).toMatchObject({ ok: true, sameOrigin: true });
+    expect(
+      classifySwapUrl("https://third.party/a.png", "https://reviewed.example"),
+    ).toMatchObject({ ok: true, sameOrigin: false });
+  });
+
+  it("rejects http, javascript:, and private/localhost hosts", () => {
+    expect(classifySwapUrl("http://x.com/a.png").reason).toBe("not-https");
+    expect(classifySwapUrl("javascript:alert(1)").reason).toBe("not-https");
+    expect(classifySwapUrl("https://localhost/a.png").reason).toBe("private-host");
+    expect(classifySwapUrl("https://127.0.0.1/a.png").reason).toBe("private-host");
+    expect(classifySwapUrl("https://192.168.1.5/a.png").reason).toBe("private-host");
+    expect(classifySwapUrl("").reason).toBe("empty");
+  });
+});
+
+describe("isReapplicableMediaSrc — never re-apply a hostile swap to other viewers (U6)", () => {
+  const origin = "https://reviewed.example";
+  it("re-applies same-origin https and relative URLs only", () => {
+    expect(isReapplicableMediaSrc("https://reviewed.example/a.png", origin)).toBe(true);
+    expect(isReapplicableMediaSrc("/assets/a.png", origin)).toBe(true);
+    expect(isReapplicableMediaSrc("a.png", origin)).toBe(true);
+  });
+  it("is record-intent-only for cross-origin, blob:, and data: URLs", () => {
+    expect(isReapplicableMediaSrc("https://third.party/a.png", origin)).toBe(false);
+    expect(isReapplicableMediaSrc("blob:https://reviewed.example/abc", origin)).toBe(false);
+    expect(isReapplicableMediaSrc("data:image/png;base64,AAAA", origin)).toBe(false);
+    expect(isReapplicableMediaSrc("http://reviewed.example/a.png", origin)).toBe(false);
+  });
+});
+
+describe("previewSwapMedia — neutralize responsive machinery + exact restore (U6)", () => {
+  it("neutralizes the img srcset/sizes, sets src, and restores byte-identical", () => {
+    const { doc } = makeFakeDom();
+    const img = doc.createElement("img");
+    img.setAttribute("src", "old.png");
+    img.setAttribute("srcset", "old.png 1x, old@2x.png 2x");
+    img.setAttribute("sizes", "100vw");
+    const p = previewSwapMedia(img as unknown as Element, "new.png");
+    expect(img.getAttribute("src")).toBe("new.png");
+    expect(img.getAttribute("srcset")).toBeNull(); // neutralized so the swap shows
+    expect(img.getAttribute("sizes")).toBeNull();
+    p.restore();
+    expect(img.getAttribute("src")).toBe("old.png");
+    expect(img.getAttribute("srcset")).toBe("old.png 1x, old@2x.png 2x");
+    expect(img.getAttribute("sizes")).toBe("100vw");
+  });
+
+  it("also neutralizes each <picture><source> child and restores them", () => {
+    const { doc } = makeFakeDom();
+    const picture = doc.createElement("picture");
+    const source = doc.createElement("source");
+    source.setAttribute("srcset", "old.avif");
+    source.setAttribute("media", "(min-width: 800px)");
+    const img = doc.createElement("img");
+    img.setAttribute("src", "old.png");
+    picture.append(source, img);
+    doc.body.appendChild(picture);
+    const p = previewSwapMedia(img as unknown as Element, "new.png");
+    expect(source.getAttribute("srcset")).toBeNull();
+    expect(source.getAttribute("media")).toBeNull();
+    p.restore();
+    expect(source.getAttribute("srcset")).toBe("old.avif");
+    expect(source.getAttribute("media")).toBe("(min-width: 800px)");
   });
 });

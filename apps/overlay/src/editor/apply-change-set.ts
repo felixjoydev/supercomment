@@ -23,7 +23,12 @@ import { isInsertableTag, isSafeAttr } from "@supercomment/shared";
 
 import { resolveAnchors } from "../capture/reanchor.js";
 import { applyStylePreview, applyTextPreview } from "./style-edits.js";
-import { previewHide, previewMove, previewShow } from "./structural-edits.js";
+import {
+  isReapplicableMediaSrc,
+  previewHide,
+  previewMove,
+  previewShow,
+} from "./structural-edits.js";
 
 /**
  * U5: how many times the MutationObserver may re-assert a real DOM move before it
@@ -85,6 +90,20 @@ export interface ApplyResult {
  * "guess" an ambiguous target across pages, R9). Only an anchor-less target
  * (e.g. an area/text edit) uses the best-effort selector.
  */
+/** The reviewed page's origin, for the media-swap re-apply gate (U6). */
+function originOf(doc: Document): string {
+  try {
+    const loc =
+      (doc.defaultView as { location?: { origin?: string; href?: string } } | null)?.location ??
+      (doc as { location?: { origin?: string; href?: string } }).location;
+    if (loc?.origin) return loc.origin;
+    if (loc?.href) return new URL(loc.href).origin;
+  } catch {
+    /* fall through */
+  }
+  return "https://reviewed.invalid";
+}
+
 function defaultResolve(target: EditTarget, doc: Document): Element | null {
   if (target.anchors && target.anchors.length > 0) {
     return resolveAnchors(target.anchors, doc).element;
@@ -217,6 +236,17 @@ function bindOp(
       // M1: never let a saved change-set set an event handler / javascript:-URL
       // attribute on a viewer's element (stored-DOM-XSS). Skip the op instead.
       if (!isSafeAttr(prop, op.after as string)) return null;
+      // U6: a media swap (src/srcset) must never re-apply a raw cross-origin /
+      // blob: / data: URL into ANOTHER viewer's DOM — that would be an SSRF /
+      // beacon / CSRF channel aimed at whoever opens the comment. Only a
+      // same-origin https src re-applies; anything else is record-intent-only
+      // (the author saw the preview; uploaded files arrive as signed refs).
+      if (
+        (prop === "src" || prop === "srcset") &&
+        !isReapplicableMediaSrc(op.after as string, originOf(doc))
+      ) {
+        return null;
+      }
       const prev = el.getAttribute?.(prop);
       return {
         apply: () => {
