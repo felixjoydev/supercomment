@@ -279,6 +279,61 @@ describe("summarizeChangeSet (U16, R14)", () => {
     expect(summarizeChangeSet(context)).not.toContain("preview unavailable");
   });
 
+  it("annotates a font-family op with the chosen font identity (U7)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1.hero", anchors: [] },
+            property: "font-family",
+            before: "system-ui, sans-serif",
+            after: "Inter, sans-serif",
+            font: { family: "Inter", source: "google", weights: ["400", "700"] },
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context)!;
+    expect(prose).toContain("font-family system-ui, sans-serif→Inter, sans-serif on h1.hero");
+    expect(prose).toContain("[font Inter, google, weights 400/700]");
+  });
+
+  it("orders the font note before the preview caveat, and omits weights when absent (U7)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "p", anchors: [] },
+            property: "font-family",
+            before: null,
+            after: "Grifter, sans-serif",
+            font: { family: "Grifter", source: "upload" },
+            previewUnavailable: true,
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context)!;
+    expect(prose).toContain("[font Grifter, upload]");
+    expect(prose).not.toContain("weights");
+    // font note precedes the trailing preview caveat
+    expect(prose.indexOf("[font Grifter, upload]")).toBeLessThan(
+      prose.indexOf("preview unavailable"),
+    );
+  });
+
   it("returns null when there is no change-set", () => {
     expect(
       summarizeChangeSet({

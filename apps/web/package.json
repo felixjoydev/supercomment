@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node scripts/copy-overlay.mjs",
+    "prebuild": "node scripts/copy-overlay.mjs && node scripts/build-fonts-catalog.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

@@ -59,6 +59,21 @@ describe("buildStyleOp", () => {
     const b = buildStyleOp({ target, property: "color", before: "a", after: "b" });
     expect(a.opId).not.toBe(b.opId);
   });
+
+  it("threads the chosen font identity through a font-family edit (U7)", () => {
+    const op = buildStyleOp({
+      target,
+      property: "font-family",
+      before: "system-ui, sans-serif",
+      after: "Inter, sans-serif",
+      font: { family: "Inter", source: "google", weights: ["400", "700"] },
+    });
+    expect(op.font).toEqual({ family: "Inter", source: "google", weights: ["400", "700"] });
+
+    // A plain style edit carries no font identity.
+    const plain = buildStyleOp({ target, property: "color", before: "a", after: "b" });
+    expect(plain.font).toBeUndefined();
+  });
 });
 
 describe("buildTextOp", () => {

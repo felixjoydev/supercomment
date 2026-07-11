@@ -167,6 +167,35 @@ describe("redactChangeSet (U8)", () => {
     // Pure: the input is not mutated.
     expect(cs.ops[0]!.after).toBe(`Contact ${SECRET}`);
   });
+
+  it("scrubs the font-identity family + raw stack, keeping source/weights (U7)", () => {
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "o1",
+          type: "setStyle",
+          target: { selector: "h1", anchors: [] },
+          property: "font-family",
+          before: "sans-serif",
+          after: `${SECRET}, sans-serif`,
+          font: {
+            family: `${SECRET}`,
+            source: "upload",
+            weights: ["400", "700"],
+            rawStack: `${SECRET}, sans-serif`,
+          },
+        },
+      ],
+    };
+
+    const out = redactChangeSet(cs);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    // Structure (enumerated source + weights) survives.
+    expect(out.ops[0]!.font!.source).toBe("upload");
+    expect(out.ops[0]!.font!.weights).toEqual(["400", "700"]);
+    // Pure: the input is not mutated.
+    expect(cs.ops[0]!.font!.family).toBe(`${SECRET}`);
+  });
 });
 
 describe("redactContextChangeSet (U8)", () => {

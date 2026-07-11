@@ -13,7 +13,7 @@
  * The pure op-builders are unit-tested here; the EditTarget (selector + anchors +
  * source) is assembled by the capture layer and passed in at wire time (U13).
  */
-import type { ChangeOp, DeviceSurface, EditTarget } from "@supercomment/shared";
+import type { ChangeOp, DeviceSurface, EditTarget, FontIdentity } from "@supercomment/shared";
 
 import type { ColorProbe, Rgba } from "./color/normalize.js";
 import { getPropertyMeta, type PropCtx } from "./property-meta.js";
@@ -46,6 +46,12 @@ export interface StyleEditInput {
   state?: "default" | "hover" | "focus";
   /** The live preview could not be verified on the reviewer's page (U2). */
   previewUnavailable?: boolean;
+  /**
+   * Chosen font identity for a `font-family` edit (U7): which font the reviewer
+   * picked (family + provenance + weights) so the agent installs it the repo's
+   * way. The font picker (U8) supplies this; ordinary style edits leave it unset.
+   */
+  font?: FontIdentity;
 }
 
 /** Build a `setStyle` op from a style edit. */
@@ -61,6 +67,7 @@ export function buildStyleOp(input: StyleEditInput): ChangeOp {
     ...(input.responsive ? { responsive: input.responsive } : {}),
     ...(input.state ? { state: input.state } : {}),
     ...(input.previewUnavailable ? { previewUnavailable: true } : {}),
+    ...(input.font ? { font: input.font } : {}),
   };
 }
 

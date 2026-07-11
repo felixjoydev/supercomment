@@ -77,6 +77,27 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // U7: the font catalog is fetched cross-origin by the overlay running on
+        // an arbitrary HOST page, so it MUST carry `Access-Control-Allow-Origin`
+        // or every catalog fetch fails and the font picker is dead on every host.
+        // The generic `/sc/:file*` rule above sends immutable year-long caching
+        // and NO ACAO; this MORE-SPECIFIC rule is ordered AFTER it so its headers
+        // win on the shared `Cache-Control` key (Next applies later matching rules
+        // last) and it adds the ACAO the generic rule lacks. Unlike the immutable,
+        // content-hashed bundle, the catalog is a stable path whose contents
+        // change between deploys, so it must revalidate rather than cache forever.
+        // VERIFY IN REAL ENV (U17): a cross-origin fetch of /sc/fonts-catalog.json
+        // returns `Access-Control-Allow-Origin: *` and `must-revalidate`.
+        source: "/sc/fonts-catalog.json",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          {
+            key: "Cache-Control",
+            value: "public, max-age=3600, must-revalidate",
+          },
+        ],
+      },
+      {
         // Clickjacking defense (security review, finding 1): no SuperComment
         // dashboard page should ever be framed. This is what stops a malicious
         // site from iframing /cli-auth and clickjacking "Authorize CLI" to ship

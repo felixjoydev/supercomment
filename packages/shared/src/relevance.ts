@@ -189,7 +189,24 @@ export function summarizeChangeSet(
 }
 
 function describeOp(op: ChangeOp): string {
-  return `${describeOpBody(op)}${previewCaveat(op)}`;
+  return `${describeOpBody(op)}${fontSuffix(op)}${previewCaveat(op)}`;
+}
+
+/**
+ * A trailing font-identity note for a `font-family` op (U7): the chosen family,
+ * where it came from (page / google / upload), and its weights, so the agent
+ * installs the font the repo's way rather than inferring from the raw stack.
+ * Kept out of the op body so it composes with the setStyle line and the preview
+ * caveat. Empty when the op carries no font identity.
+ */
+function fontSuffix(op: ChangeOp): string {
+  const f = op.font;
+  if (!f) return "";
+  const parts = [f.family, f.source];
+  if (f.weights && f.weights.length > 0) {
+    parts.push(`weights ${f.weights.join("/")}`);
+  }
+  return ` [font ${parts.join(", ")}]`;
 }
 
 function describeOpBody(op: ChangeOp): string {

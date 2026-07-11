@@ -101,6 +101,33 @@ export const newNodeSchema = z
   });
 export type NewNode = z.infer<typeof newNodeSchema>;
 
+/**
+ * Font identity for a `font-family` setStyle op (U7). Additive + optional (older
+ * comments omit it). The `after` value already carries the CSS stack the agent
+ * writes; this describes WHICH font the reviewer chose so the agent installs it
+ * the repo's way (add a `next/font` import, an `@font-face`, a Google `<link>`,
+ * or wire the uploaded file) rather than guessing from the raw stack.
+ *
+ * `family` is a human display name — framework-mangled artifacts (`next/font`'s
+ * `__Inter_abc123` / `_Fallback` variants) are normalized before they land here.
+ * When a name was normalized, `rawStack` preserves the true computed stack so the
+ * agent can still map it back to the source, per the U7 "never record a mangled
+ * artifact without the raw stack alongside it" rule.
+ */
+export const fontIdentitySchema = z.object({
+  /** Human display family name, e.g. "Inter" (mangled artifacts normalized out). */
+  family: z.string().min(1),
+  /** Provenance: already rendered on the page, the Google catalog, or an upload. */
+  source: z.enum(["page", "google", "upload"]),
+  /** Storage ref for an uploaded font file (U9), present only when source=upload. */
+  fileRef: z.string().optional(),
+  /** Weights the family offers (numeric strings or a variable range like "100 900"). */
+  weights: z.array(z.string()).optional(),
+  /** The raw computed font-family stack, kept when `family` was normalized. */
+  rawStack: z.string().optional(),
+});
+export type FontIdentity = z.infer<typeof fontIdentitySchema>;
+
 /** One direct-manipulation edit, expressed as intent (not a DOM mutation). */
 export const changeOpSchema = z.object({
   /** Stable id for this op within the change-set. */
@@ -124,6 +151,12 @@ export const changeOpSchema = z.object({
    * it); never affects how the op is applied.
    */
   previewUnavailable: z.boolean().optional(),
+  /**
+   * Chosen font identity for a `font-family` setStyle op (U7). Additive + optional;
+   * describes which font the reviewer picked (family + provenance + weights) so the
+   * agent installs it the repo's way. Never changes how the op is applied.
+   */
+  font: fontIdentitySchema.optional(),
   /** Breakpoint this edit applies at (default = base / current viewport). */
   responsive: deviceSurfaceSchema.optional(),
   /** Pseudo-state this edit applies to. */

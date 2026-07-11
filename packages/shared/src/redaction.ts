@@ -137,9 +137,10 @@ export function redactSecrets(text: string): string {
 
 /**
  * Redact secret/PII-shaped runs from a single visual change-set op's FREE-TEXT
- * (U8): the before/after values, the nearest design token, and any inserted-node
- * text or attribute values. Structure — op type, target selector/anchors/source,
- * property name, breakpoint/state — is untouched (it carries no free text).
+ * (U8): the before/after values, the nearest design token, the font-identity
+ * family/raw-stack (U7), and any inserted-node text or attribute values.
+ * Structure — op type, target selector/anchors/source, property name, font
+ * source/weights, breakpoint/state — is untouched (it carries no free text).
  * Returns a NEW op; pure + idempotent.
  */
 function redactOp(op: ChangeOp): ChangeOp {
@@ -147,6 +148,15 @@ function redactOp(op: ChangeOp): ChangeOp {
   if (typeof next.before === "string") next.before = redactSecrets(next.before);
   if (typeof next.after === "string") next.after = redactSecrets(next.after);
   if (next.valueToken) next.valueToken = redactSecrets(next.valueToken);
+  // Font identity carries reviewer-typed free text (a family name, the raw
+  // computed stack) — scrub it like any other value (U7). Structure (source,
+  // weights, fileRef) is enumerated / a storage ref and stays intact.
+  if (next.font) {
+    const font = { ...next.font };
+    font.family = redactSecrets(font.family);
+    if (typeof font.rawStack === "string") font.rawStack = redactSecrets(font.rawStack);
+    next.font = font;
+  }
   if (next.node) {
     const node = { ...next.node };
     if (typeof node.text === "string") node.text = redactSecrets(node.text);

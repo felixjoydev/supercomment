@@ -442,6 +442,51 @@ describe("visual change-set + comment kind", () => {
     if (withoutMarker.success) expect(withoutMarker.data.previewUnavailable).toBeUndefined();
   });
 
+  it("accepts the additive font identity on a font-family op (U7)", () => {
+    const withFont = changeOpSchema.safeParse({
+      opId: "op-font",
+      type: "setStyle",
+      target: { selector: "h1", anchors: [{ type: "id", value: "hero" }] },
+      property: "font-family",
+      before: "system-ui, sans-serif",
+      after: "Inter, sans-serif",
+      font: {
+        family: "Inter",
+        source: "google",
+        weights: ["400", "700"],
+        rawStack: "__Inter_abc123, sans-serif",
+      },
+    });
+    expect(withFont.success).toBe(true);
+    if (withFont.success) {
+      expect(withFont.data.font?.family).toBe("Inter");
+      expect(withFont.data.font?.source).toBe("google");
+    }
+
+    // Older ops without the field still parse.
+    const withoutFont = changeOpSchema.safeParse({
+      opId: "op-nofont",
+      type: "setStyle",
+      target: { selector: "h1", anchors: [] },
+      property: "font-size",
+      before: "16px",
+      after: "18px",
+    });
+    expect(withoutFont.success).toBe(true);
+    if (withoutFont.success) expect(withoutFont.data.font).toBeUndefined();
+
+    // An unknown font source is rejected.
+    const badSource = changeOpSchema.safeParse({
+      opId: "op-badfont",
+      type: "setStyle",
+      target: { selector: "h1", anchors: [] },
+      property: "font-family",
+      after: "Inter",
+      font: { family: "Inter", source: "cdn" },
+    });
+    expect(badSource.success).toBe(false);
+  });
+
   it("carries a concrete insertion point + node for insertNode", () => {
     // Covers AE5: an add-element edit hands the agent a concrete insertion point.
     const result = changeOpSchema.safeParse(styleChangeSet.ops[1]);
