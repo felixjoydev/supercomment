@@ -75,6 +75,12 @@ export interface MarkerComment {
    * `context.referenceImages`; absent/empty for comments without any.
    */
   referenceImages?: string[];
+  /** The current viewer authored this comment (drives the author edit/delete gate, 0050). */
+  isOwn?: boolean;
+  /** This comment has been sent to the agent (freezes author edit/delete). */
+  isSent?: boolean;
+  /** This comment has at least one reply (freezes author edit/delete). */
+  hasReplies?: boolean;
 }
 
 /**

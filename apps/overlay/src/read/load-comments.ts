@@ -49,6 +49,9 @@ export interface RawReviewCommentRow {
   status_changed_at?: string | null;
   latest_reply_at?: string | null;
   last_read_at?: string | null;
+  /** Added in 0050: the author edit/delete gate signals. */
+  is_own?: boolean;
+  is_sent?: boolean;
 }
 
 /** A typed existing comment loaded back onto the live deploy. */
@@ -74,6 +77,9 @@ export interface ReviewComment {
   unread: boolean;
   latestReplyAt: string | null;
   lastReadAt: string | null;
+  /** Author edit/delete gate (0050): caller authored it, and whether it was sent. */
+  isOwn?: boolean;
+  isSent?: boolean;
 }
 
 /**
@@ -156,6 +162,10 @@ function mapRow(row: RawReviewCommentRow): ReviewComment {
     path: row.path ?? null,
     latestReplyAt: row.latest_reply_at ?? null,
     lastReadAt: row.last_read_at ?? null,
+    // Only present when true so an unchanged mapped shape survives for older
+    // rows / tests; the client gate reads a missing flag as false.
+    ...(row.is_own === true ? { isOwn: true } : {}),
+    ...(row.is_sent === true ? { isSent: true } : {}),
     unread: isThreadUnread({
       createdAt: row.created_at ?? "",
       statusChangedAt: row.status_changed_at ?? null,
@@ -192,6 +202,11 @@ export function toExistingMarkers(
       status: c.status,
       createdAt: c.createdAt,
       referenceImages: readReferenceImages(c.context),
+      // Only carry the gate signals when truthy so older comments / tests that
+      // omit them keep an unchanged content shape (the gate reads them as false).
+      ...(c.isOwn ? { isOwn: true } : {}),
+      ...(c.isSent ? { isSent: true } : {}),
+      ...(c.latestReplyAt !== null ? { hasReplies: true } : {}),
     },
   }));
 }

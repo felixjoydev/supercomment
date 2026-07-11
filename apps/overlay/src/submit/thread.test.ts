@@ -127,6 +127,19 @@ describe("SessionThreadClient", () => {
     });
   });
 
+  it("edits the author's own comment via edit_review_comment (note + images, 0050)", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true }) as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await client().editComment("c1", "new note", ["prev/a.png"])).toBe(true);
+    const [url, opts] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/rest/v1/rpc/edit_review_comment");
+    expect(JSON.parse(opts.body as string)).toEqual({
+      p_comment_id: "c1",
+      p_note: "new note",
+      p_image_refs: ["prev/a.png"],
+    });
+  });
+
   it("lists replies selecting image_refs for display (R19)", async () => {
     const fetchMock = vi.fn(
       async () => ({ ok: true, json: async () => [] }) as unknown as Response,

@@ -13,6 +13,7 @@ import {
   makeFakeDom,
   makeRect,
   type FakeDocument,
+  type FakeElement,
 } from "../test/dom-double.js";
 
 function marker(n: number, x: number, y: number): MarkerInput {
@@ -335,6 +336,9 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
       resolve: async () => true,
       deleteReply: async () => true,
       deleteThread: async () => true,
+      editComment: async () => true,
+      markRead: async () => true,
+      markUnread: async () => true,
       signCapture: async (path: string) => `https://signed.example/${path}`,
     } as unknown as ThreadClient;
     return { thread, listedFor: () => listed };
@@ -462,6 +466,81 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     });
     layer.showPopover([1], { x: 100, y: 100 });
     expect(parent.querySelector(".sc-reply-attach")).toBeNull();
+  });
+
+  // --- Author edit/delete gate (0050) ---
+  function manageLayer(
+    content: Record<string, unknown>,
+    role: "guest" | "member",
+  ) {
+    const { thread } = stubThread();
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      thread,
+      { displayName: "Ada", role },
+    );
+    layer.add({ number: 1, rect: makeRect(100, 100, 10, 10), content: content as never });
+    layer.showPopover([1], { x: 100, y: 100 });
+    const items = (parent.querySelectorAll(".sc-act-menu-item") as ArrayLike<FakeElement>);
+    return { parent, itemText: Array.from(items).map((e) => e.textContent) };
+  }
+
+  it("shows Edit + Delete on the author's own untouched comment (0050)", () => {
+    const { itemText } = manageLayer(
+      { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open", isOwn: true },
+      "guest",
+    );
+    expect(itemText).toContain("Edit comment");
+    expect(itemText).toContain("Delete comment");
+  });
+
+  it("explains the lock (no edit) on the author's SENT comment", () => {
+    const { parent, itemText } = manageLayer(
+      { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open", isOwn: true, isSent: true },
+      "guest",
+    );
+    expect(itemText).not.toContain("Edit comment");
+    const note = parent.querySelector(".sc-act-menu-note");
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toMatch(/agent/i);
+  });
+
+  it("locks (replied) the author's comment once someone replies", () => {
+    const { parent, itemText } = manageLayer(
+      { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open", isOwn: true, hasReplies: true },
+      "guest",
+    );
+    expect(itemText).not.toContain("Delete comment");
+    expect(parent.querySelector(".sc-act-menu-note")!.textContent).toMatch(/repl/i);
+  });
+
+  it("shows no manage menu for a guest viewing someone else's comment", () => {
+    const { parent } = manageLayer(
+      { id: "c1", note: "hi", authorDisplayName: "Ada", status: "open", isOwn: false },
+      "guest",
+    );
+    expect(parent.querySelector(".sc-act-more")).toBeNull();
+  });
+
+  it("keeps the owner delete override for a member on an engaged comment", () => {
+    const { itemText } = manageLayer(
+      {
+        id: "c1",
+        note: "hi",
+        authorDisplayName: "Ada",
+        status: "open",
+        isOwn: false,
+        isSent: true,
+        hasReplies: true,
+      },
+      "member",
+    );
+    expect(itemText).toContain("Delete comment"); // owner override survives engagement
+    expect(itemText).not.toContain("Edit comment"); // a member never edits another's words
   });
 
   it("hides the delete-thread menu from a guest, but still allows reply + mark-done", () => {

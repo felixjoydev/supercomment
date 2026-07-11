@@ -47,6 +47,15 @@ export interface ThreadClient {
   markRead(commentId: string): Promise<boolean>;
   markUnread(commentId: string): Promise<boolean>;
   /**
+   * Edit the author's OWN comment (note + reference images, 0050). The RPC
+   * enforces author + untouched-by-others; false on any failure.
+   */
+  editComment(
+    commentId: string,
+    note: string,
+    imageRefs?: string[],
+  ): Promise<boolean>;
+  /**
    * Sign a private `captures` object PATH into a temporary, directly-loadable
    * URL for the popover (reviewer reference images + reply images, R19). Null on
    * any failure — a broken image must never break the popover.
@@ -126,6 +135,18 @@ export class SessionThreadClient implements ThreadClient {
 
   async markUnread(commentId: string): Promise<boolean> {
     return this.rpcOk("mark_thread_unread", { p_comment_id: commentId });
+  }
+
+  async editComment(
+    commentId: string,
+    note: string,
+    imageRefs: string[] = [],
+  ): Promise<boolean> {
+    return this.rpcOk("edit_review_comment", {
+      p_comment_id: commentId,
+      p_note: note,
+      p_image_refs: imageRefs,
+    });
   }
 
   /**

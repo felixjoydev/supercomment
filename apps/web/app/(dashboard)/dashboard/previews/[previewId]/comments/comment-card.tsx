@@ -1,13 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 
+import { commentModifyGate, modifyLockLabel } from '@supercomment/shared';
 import type { CommentView } from '@/lib/comments/types';
 import { severityLabel, intentLabel, trustLabel, statusLabel } from '@/lib/comments/labels';
 import { createClient } from '@/lib/supabase/client';
 import { ContextDetail } from './context-detail';
 import { CaptureThumb, ReferenceGallery } from './capture-image';
+import { CommentEditor } from './comment-editor';
 import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
@@ -39,6 +41,22 @@ export function CommentCard({
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [viewerEmail, setViewerEmail] = useState<string | null>(null);
+
+  // The viewer's email identifies their OWN comment (member emails are unique;
+  // display_name === email for members), mirroring the reply-delete `mine` check.
+  useEffect(() => {
+    let active = true;
+    void createClient()
+      .auth.getUser()
+      .then(({ data }) => {
+        if (active) setViewerEmail(data.user?.email ?? null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function deleteThread() {
     setDeleting(true);
@@ -78,6 +96,17 @@ export function CommentCard({
   const dismissed = comment.status === 'dismissed';
   const muted = resolved || dismissed;
 
+  // Author edit/delete gate (0050): a member editing/deleting their OWN comment
+  // while it is untouched by others. The RPCs stay the authority.
+  const isOwn =
+    comment.trustLevel === 'member' && !!viewerEmail && comment.author === viewerEmail;
+  const modify = commentModifyGate({
+    isOwn,
+    status: comment.status,
+    hasReplies: comment.latestReplyAt != null,
+    isSent: comment.sendStatus != null,
+  });
+
   const cardClass = [
     'comment-card',
     `sev-${comment.severity}`,
@@ -116,9 +145,20 @@ export function CommentCard({
             {muted && <span className="badge">{statusLabel(comment.status)}</span>}
           </div>
 
-          <p className={dismissed ? 'comment-note is-dismissed' : 'comment-note'}>
-            {comment.note}
-          </p>
+          {editing ? (
+            <CommentEditor
+              comment={comment}
+              onSaved={(updated) => {
+                onLocalUpdate(updated);
+                setEditing(false);
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <p className={dismissed ? 'comment-note is-dismissed' : 'comment-note'}>
+              {comment.note}
+            </p>
+          )}
 
           <div className="comment-byline">
             {comment.author ?? 'Unknown'}
@@ -143,10 +183,12 @@ export function CommentCard({
             />
           )}
 
-          <ReferenceGallery
-            refs={comment.context?.referenceImages}
-            number={comment.number}
-          />
+          {!editing && (
+            <ReferenceGallery
+              refs={comment.context?.referenceImages}
+              number={comment.number}
+            />
+          )}
 
           {muted && comment.resolvedSummary && (
             <p className="comment-outcome">
@@ -201,6 +243,17 @@ export function CommentCard({
               />
             )}
 
+            {isOwn && modify.canModify && !editing && (
+              <button type="button" className="text-btn" onClick={() => setEditing(true)}>
+                Edit
+              </button>
+            )}
+            {isOwn && !modify.canModify && (
+              <span className="comment-lock-note" title="Edit/delete is locked">
+                {modifyLockLabel(modify.lockReason)}
+              </span>
+            )}
+
             {canMutate &&
               (confirmDelete ? (
                 <span className="delete-confirm">
@@ -226,7 +279,7 @@ export function CommentCard({
                   type="button"
                   className="text-btn is-danger"
                   onClick={() => setConfirmDelete(true)}
-                  title="Delete this whole thread (owner only)"
+                  title="Delete this comment (author of an untouched comment, or the workspace owner)"
                 >
                   Delete
                 </button>

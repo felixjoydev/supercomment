@@ -10,7 +10,12 @@
  * content so a reviewer can READ the thread on the live deploy, not just see
  * numbered pins.
  */
-import { isValidCaptureImage, resolveCaptureSrc } from "@supercomment/shared";
+import {
+  commentModifyGate,
+  isValidCaptureImage,
+  modifyLockLabel,
+  resolveCaptureSrc,
+} from "@supercomment/shared";
 
 import type { MarkerComment, Rect, ScreenshotUploader } from "../core/types.js";
 import {
@@ -548,17 +553,40 @@ export class MarkerLayer {
     });
     actions.appendChild(done);
 
-    // Delete a whole thread is owner-only; only members can be the owner, so the
-    // action is hidden from guests entirely (a client can never wipe a thread).
-    if (this.currentUser?.role === "member") {
-      actions.appendChild(this.buildThreadMenu(m, entry));
-    }
+    // Manage menu: author edit/delete (gated), owner delete override, or a
+    // locked-reason hint. Null when there is nothing to offer.
+    const menu = this.buildManageMenu(m, entry);
+    if (menu) actions.appendChild(menu);
     return actions;
   }
 
-  /** The "..." menu with a two-click "Delete thread" confirm (owner-gated by RPC). */
-  private buildThreadMenu(m: PlacedMarker, entry: HTMLElement): HTMLElement {
-    const commentId = m.content!.id!;
+  /**
+   * The "···" manage menu (0050): the AUTHOR's Edit + Delete while their comment
+   * is untouched by others (commentModifyGate), a member's owner-delete override
+   * (RPC-enforced), or a short locked-reason hint for a guest author whose
+   * comment is frozen. Returns null when there is nothing to offer.
+   */
+  private buildManageMenu(
+    m: PlacedMarker,
+    entry: HTMLElement,
+  ): HTMLElement | null {
+    const commentId = m.content?.id;
+    if (!commentId) return null;
+    const gate = commentModifyGate({
+      isOwn: !!m.content?.isOwn,
+      status: m.content?.status ?? "open",
+      hasReplies: !!m.content?.hasReplies,
+      isSent: !!m.content?.isSent,
+    });
+    const isMember = this.currentUser?.role === "member";
+    const showEdit = gate.canModify;
+    // Author-untouched delete, OR a member's owner override (the RPC enforces
+    // owner-or-author-untouched; a non-owner member's attempt fails with a flash).
+    const showDelete = gate.canModify || isMember;
+    // A guest author whose comment is frozen: explain rather than silently hide.
+    const showLock = !!m.content?.isOwn && !gate.canModify && !isMember;
+    if (!showEdit && !showDelete && !showLock) return null;
+
     const wrap = this.doc.createElement("div");
     wrap.className = "sc-act-more-wrap";
     const btn = this.doc.createElement("button");
@@ -570,41 +598,179 @@ export class MarkerLayer {
     const menu = this.doc.createElement("div");
     menu.className = "sc-act-menu";
     menu.hidden = true;
-    const del = this.doc.createElement("button");
-    del.type = "button";
-    del.className = "sc-act-menu-item is-danger";
-    del.textContent = "Delete thread";
-    let armed = false;
-    del.addEventListener("click", async () => {
-      if (!armed) {
-        armed = true;
-        del.textContent = "Click again to delete";
-        return;
-      }
-      del.disabled = true;
-      const ok = await this.thread!.deleteThread(commentId);
-      if (ok) {
-        this.removeMarker(m.number);
-        this.closePopover();
-      } else {
-        del.disabled = false;
-        armed = false;
-        del.textContent = "Delete thread";
+
+    if (showEdit) {
+      const edit = this.doc.createElement("button");
+      edit.type = "button";
+      edit.className = "sc-act-menu-item";
+      edit.textContent = "Edit comment";
+      edit.addEventListener("click", () => {
         menu.hidden = true;
-        this.flash(entry, "Only the workspace owner can delete a thread.");
-      }
-    });
-    menu.appendChild(del);
+        this.openCommentEditor(m, entry);
+      });
+      menu.appendChild(edit);
+    }
+
+    if (showDelete) {
+      const del = this.doc.createElement("button");
+      del.type = "button";
+      del.className = "sc-act-menu-item is-danger";
+      del.textContent = "Delete comment";
+      let armed = false;
+      del.addEventListener("click", async () => {
+        if (!armed) {
+          armed = true;
+          del.textContent = "Click again to delete";
+          return;
+        }
+        del.disabled = true;
+        const ok = await this.thread!.deleteThread(commentId);
+        if (ok) {
+          this.removeMarker(m.number);
+          this.closePopover();
+        } else {
+          del.disabled = false;
+          armed = false;
+          del.textContent = "Delete comment";
+          menu.hidden = true;
+          this.flash(entry, "Couldn't delete this comment.");
+        }
+      });
+      menu.appendChild(del);
+    }
+
+    if (showLock) {
+      const lock = this.doc.createElement("div");
+      lock.className = "sc-act-menu-note";
+      lock.textContent = `Can't edit or delete. ${modifyLockLabel(gate.lockReason)}`;
+      menu.appendChild(lock);
+    }
+
     btn.addEventListener("click", () => {
       menu.hidden = !menu.hidden;
-      if (menu.hidden) {
-        armed = false;
-        del.textContent = "Delete thread";
+    });
+    wrap.append(btn, menu);
+    return wrap;
+  }
+
+  /**
+   * Inline editor for the author's own comment (0050): a note textarea plus a
+   * reference-image composer (existing images removable, new ones attachable).
+   * On save it uploads new images, calls editComment, and updates the read view
+   * in place. Best-effort: a failed save keeps the editor open with a notice.
+   */
+  private openCommentEditor(m: PlacedMarker, entry: HTMLElement): void {
+    const commentId = m.content?.id;
+    if (!commentId || !this.thread) return;
+    if (entry.querySelector(".sc-comment-edit")) return; // already editing
+
+    const noteEl = entry.querySelector(".sc-comment-note") as HTMLElement | null;
+    const galleryEl = entry.querySelector(".sc-ref-gallery") as HTMLElement | null;
+    const setShown = (el: HTMLElement | null, shown: boolean) => {
+      if (el) el.style.display = shown ? "" : "none";
+    };
+    setShown(noteEl, false);
+    setShown(galleryEl, false);
+
+    const form = this.doc.createElement("div");
+    form.className = "sc-comment-edit";
+
+    const input = this.doc.createElement("textarea") as HTMLTextAreaElement;
+    input.className = "sc-reply-input sc-edit-input";
+    input.value = m.content?.note ?? "";
+    input.setAttribute("aria-label", "Edit comment");
+
+    // Existing reference images the author keeps (removable) + newly attached.
+    const kept = [...(m.content?.referenceImages ?? [])];
+    const pending: string[] = [];
+    const thumbs = this.doc.createElement("div");
+    thumbs.className = "sc-compose-thumbs";
+    void this.fillEditThumbs(kept, thumbs);
+
+    const row = this.doc.createElement("div");
+    row.className = "sc-edit-actions";
+    if (this.uploader) row.appendChild(this.buildAttachControl(pending, thumbs));
+    const save = this.doc.createElement("button");
+    save.type = "button";
+    save.className = "sc-btn-primary sc-edit-save";
+    save.textContent = "Save";
+    const cancel = this.doc.createElement("button");
+    cancel.type = "button";
+    cancel.className = "sc-btn-secondary sc-edit-cancel";
+    cancel.textContent = "Cancel";
+
+    const restore = () => {
+      form.remove();
+      setShown(noteEl, true);
+      setShown(galleryEl, true);
+    };
+    cancel.addEventListener("click", () => restore());
+
+    save.addEventListener("click", async () => {
+      const note = input.value.trim();
+      if (!note) {
+        this.flash(form, "A comment needs a note.");
+        return;
+      }
+      save.disabled = true;
+      const newRefs = await this.uploadComposeImages(pending);
+      const refs = [...kept, ...newRefs];
+      const ok = await this.thread!.editComment(commentId, note, refs);
+      save.disabled = false;
+      if (!ok) {
+        this.flash(form, "Couldn't save. Try again.");
+        return;
+      }
+      // Reflect the edit in the marker content + the read view in place.
+      if (m.content) {
+        m.content.note = note;
+        m.content.referenceImages = refs.length > 0 ? refs : undefined;
+      }
+      if (noteEl) noteEl.textContent = note;
+      galleryEl?.remove();
+      form.remove();
+      setShown(noteEl, true);
+      if (refs.length > 0 && noteEl?.parentElement) {
+        const g = this.buildReferenceGallery(refs);
+        noteEl.parentElement.insertBefore(g, noteEl.nextSibling);
       }
     });
-    wrap.appendChild(btn);
-    wrap.appendChild(menu);
-    return wrap;
+
+    row.append(save, cancel);
+    form.append(input, thumbs, row);
+    entry.insertBefore(form, noteEl ?? null);
+    input.focus?.();
+  }
+
+  /** Signed, removable thumbnails of a comment's EXISTING reference images (edit mode). */
+  private async fillEditThumbs(kept: string[], thumbs: HTMLElement): Promise<void> {
+    const thread = this.thread;
+    if (!thread) return;
+    const signer = (_bucket: string, path: string) => thread.signCapture(path);
+    const refs = [...kept];
+    await Promise.all(
+      refs.map(async (ref) => {
+        const url = await resolveCaptureSrc(ref, signer);
+        if (!url) return;
+        const chip = this.doc.createElement("div");
+        chip.className = "sc-compose-thumb";
+        const img = this.doc.createElement("img") as HTMLImageElement;
+        img.src = url;
+        img.alt = "Reference image";
+        const remove = this.doc.createElement("button");
+        remove.type = "button";
+        remove.className = "sc-compose-remove";
+        remove.textContent = "×";
+        remove.setAttribute("aria-label", "Remove image");
+        remove.addEventListener("click", () => {
+          const i = kept.indexOf(ref);
+          if (i >= 0) kept.splice(i, 1);
+          chip.remove();
+        });
+        chip.append(img, remove);
+        thumbs.appendChild(chip);
+      }),
+    );
   }
 
   /** Load and render the thread's replies into `container` (best-effort). */

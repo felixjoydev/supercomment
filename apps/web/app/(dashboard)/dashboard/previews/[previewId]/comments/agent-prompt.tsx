@@ -100,6 +100,19 @@ export function AgentPrompt({
     if (next.length > 0) setPending((p) => [...p, ...next]);
   }
 
+  async function deletePrompt() {
+    setBusy(true);
+    setError(null);
+    // Empty body + no images clears the row via set_agent_prompt's delete path.
+    const result = await saveAgentPrompt(createClient(), comment.id, '', []);
+    setBusy(false);
+    if (!result.ok) {
+      setError('Could not delete the prompt.');
+      return;
+    }
+    onLocalUpdate({ ...commentRef.current, privatePrompt: result.prompt });
+  }
+
   async function save() {
     setBusy(true);
     setError(null);
@@ -236,14 +249,26 @@ export function AgentPrompt({
       ) : (
         <span className="agent-prompt-none">No prompt to the agent yet.</span>
       )}
-      <button
-        type="button"
-        className="text-btn"
-        onClick={openEditor}
-        title="Add a private instruction for the agent"
-      >
-        {prompt ? 'Edit prompt' : 'Add prompt'}
-      </button>
+      <span className="agent-prompt-actions">
+        <button
+          type="button"
+          className="text-btn"
+          onClick={openEditor}
+          title="Add a private instruction for the agent"
+        >
+          {prompt ? 'Edit prompt' : 'Add prompt'}
+        </button>
+        {prompt ? (
+          <button
+            type="button"
+            className="text-btn is-danger"
+            onClick={() => void deletePrompt()}
+            title="Delete this prompt"
+          >
+            Delete
+          </button>
+        ) : null}
+      </span>
     </div>
   );
 }

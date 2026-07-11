@@ -1278,6 +1278,24 @@ a.tile:active {
   text-decoration-color: var(--ink-3);
 }
 
+/* Inline comment editor (0050): note + reference-image composer. */
+.comment-edit {
+  margin: 4px 0 2px;
+  display: grid;
+  gap: 8px;
+}
+.comment-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+/* "Why can't I edit/delete" hint in the comment toolbar. */
+.comment-lock-note {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
 .comment-byline {
   margin-top: 5px;
   font-size: 12.5px;

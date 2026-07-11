@@ -258,11 +258,38 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   text-align: left;
   cursor: pointer;
 }
+.sc-act-menu-item:hover {
+  background: var(--soft);
+}
 .sc-act-menu-item.is-danger {
   color: #c0392b;
 }
 .sc-act-menu-item.is-danger:hover {
   background: rgba(192, 57, 43, 0.1);
+}
+/* Non-clickable "why can't I edit/delete" hint in the manage menu (0050). */
+.sc-act-menu-note {
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+/* Inline comment editor (0050): note textarea + reference-image composer. */
+.sc-comment-edit {
+  display: grid;
+  gap: 8px;
+}
+.sc-edit-input {
+  min-height: 54px;
+}
+.sc-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sc-edit-save {
+  margin-left: auto;
 }
 
 .sc-reply-list {
