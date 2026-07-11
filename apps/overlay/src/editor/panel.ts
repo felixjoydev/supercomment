@@ -1458,6 +1458,43 @@ export class PropertiesPanel {
   }
 
   /**
+   * U13: record a committed drag-reorder as a `moveNode` (the same anchored op the
+   * Arrange buttons produce). The inspector resolves the drop slot to a reference
+   * sibling + before/after + true DOM indices; this moves the node in the DOM
+   * (ephemeral preview) and records the intent, no-op-guarded so a drop where the
+   * element already sits records nothing.
+   */
+  applyReorder(c: {
+    from: number;
+    to: number;
+    referenceIndex: number;
+    position: "before" | "after";
+  }): void {
+    const parent = this.el.parentElement;
+    if (!parent) return;
+    const reference = parent.children[c.referenceIndex] ?? null;
+    if (!reference || reference === this.el || c.referenceIndex === c.from) return;
+    // Already adjacent on the requested side (true-index) → no move to record.
+    if (c.position === "before" && c.referenceIndex === c.from + 1) return;
+    if (c.position === "after" && c.referenceIndex === c.from - 1) return;
+    const insertion: InsertionPoint = {
+      parent: buildEditTarget(parent, this.doc),
+      reference: buildEditTarget(reference, this.doc),
+      position: c.position,
+    };
+    const revert = previewMove(this.el, reference, c.position);
+    const dom: EditDom = {
+      apply: () => {
+        previewMove(this.el, reference, c.position);
+      },
+      invert: revert,
+      revertToBuild: revert,
+    };
+    this.cb.record(buildMoveOp(this.target, insertion, c.from, c.to), dom);
+    this.refreshCount();
+  }
+
+  /**
    * Refresh only the footer counter, undo/redo state, and open review list — NOT
    * the control inputs — so a history event (e.g. a keyboard undo elsewhere) never
    * clobbers a value the reviewer is actively typing. Driven by the controller's

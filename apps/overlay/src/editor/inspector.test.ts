@@ -231,3 +231,85 @@ describe("InspectorLayer resize handles (U12)", () => {
     expect(inline.q(".sc-inspect-handle-e")!.style.display).toBe("none");
   });
 });
+
+describe("InspectorLayer drag-to-reorder (U13)", () => {
+  function mount() {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const committed: Array<{ from: number; to: number; referenceIndex: number; position: string }> = [];
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement, {
+      onReorderCommit: (c) => committed.push(c),
+    });
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, committed, q };
+  }
+
+  /** A vertical stack (double defaults to axis "column"): a,b,c at y 0/50/100. */
+  function stack(doc: ReturnType<typeof makeFakeDom>["doc"]) {
+    const container = doc.createElement("div");
+    container.id = "par";
+    const a = doc.createElement("div"); a.id = "a";
+    const b = doc.createElement("div"); b.id = "b"; // dragged (index 1)
+    const c = doc.createElement("div"); c.id = "c";
+    container.append(a, b, c);
+    setRectProvider((el) => {
+      switch ((el as FakeElement).id) {
+        case "par": return makeRect(0, 0, 100, 150);
+        case "a": return makeRect(0, 0, 100, 50);
+        case "b": return makeRect(0, 50, 100, 50);
+        case "c": return makeRect(0, 100, 100, 50);
+        default: return makeRect(0, 0, 0, 0);
+      }
+    });
+    return { container, a, b, c };
+  }
+
+  it("drops after the last card and records a moveNode with true DOM indices", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    // Drag down over c's lower half (y 130 > c center 125) → after c (index 2).
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 50, clientY: 130 });
+    expect(committed).toEqual([{ from: 1, to: 3, referenceIndex: 2, position: "after" }]);
+  });
+
+  it("shows the insertion line during the drag and hides it after drop", () => {
+    const { doc, inspector, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    expect(q(".sc-inspect-insertion")!.style.display).not.toBe("none");
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 50, clientY: 130 });
+    expect(q(".sc-inspect-insertion")!.style.display).toBe("none");
+  });
+
+  it("a drop in a non-sibling region (outside the container) records nothing", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 400, clientY: 400 }); // outside
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 400, clientY: 400 });
+    expect(committed).toEqual([]);
+  });
+
+  it("pointercancel mid-drag aborts with no record and hides the line", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    expect(inspector.isDragging()).toBe(true);
+    (doc as unknown as FakeElement).dispatch("pointercancel", {});
+    expect(inspector.isDragging()).toBe(false);
+    expect(committed).toEqual([]);
+    expect(q(".sc-inspect-insertion")!.style.display).toBe("none");
+  });
+});

@@ -341,6 +341,28 @@ describe("PropertiesPanel — Colour + opacity", () => {
   });
 });
 
+describe("PropertiesPanel — drag-reorder (U13)", () => {
+  it("applyReorder records a moveNode with the drop's true DOM indices", () => {
+    const { doc } = makeFakeDom();
+    const { el } = withSiblings(doc, "div"); // el = middle child (index 1) of 3
+    const { session, panel } = mount({ el, doc });
+    panel.applyReorder({ from: 1, to: 3, referenceIndex: 2, position: "after" });
+    const op = session.list().find((o) => o.type === "moveNode")!;
+    expect(op).toBeDefined();
+    expect(op.order).toEqual({ from: 1, to: 3 });
+    expect(op.insertion?.position).toBe("after");
+  });
+
+  it("applyReorder is a no-op when the element already sits at the slot", () => {
+    const { doc } = makeFakeDom();
+    const { el } = withSiblings(doc, "div"); // el index 1
+    const { session, panel } = mount({ el, doc });
+    // "before" the sibling at index 2 == where index-1 already is → nothing recorded.
+    panel.applyReorder({ from: 1, to: 2, referenceIndex: 2, position: "before" });
+    expect(session.list().some((o) => o.type === "moveNode")).toBe(false);
+  });
+});
+
 describe("PropertiesPanel — Layout (container) implies display:flex", () => {
   it("recording a flex-direction also records display:flex for a coherent change-set", () => {
     const { doc } = makeFakeDom();

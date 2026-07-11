@@ -117,4 +117,31 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
 .sc-inspect-handle-se { cursor: nwse-resize; }
 .sc-inspect-handle-ne,
 .sc-inspect-handle-sw { cursor: nesw-resize; }
+
+/* U13: the drag-to-reorder grip (top-left of the box) + the live insertion line. */
+.sc-inspect-reorder-grip {
+  position: fixed;
+  margin: -11px 0 0 0;
+  padding: 0 5px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--ep-accent, #8b6dff);
+  border-radius: 4px;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  z-index: 4;
+}
+.sc-inspect-reorder-grip:active { cursor: grabbing; }
+.sc-inspect-insertion {
+  position: fixed;
+  background: var(--ep-accent, #8b6dff);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  z-index: 4;
+}
 `;

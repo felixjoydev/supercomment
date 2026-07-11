@@ -236,6 +236,8 @@ export class OverlayController {
       // U12: a committed drag-resize records width+height into the OPEN edit
       // panel as one history step (the handles only show while editing).
       onResizeCommit: (dims) => this.editPanel?.applyResize(dims.width, dims.height),
+      // U13: a committed drag-reorder records a moveNode into the open panel.
+      onReorderCommit: (c) => this.editPanel?.applyReorder(c),
     });
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
     this.guestEmailStore = new GuestEmailStore(config.previewKey, config.storage);
@@ -1153,6 +1155,12 @@ export class OverlayController {
     if (this.liveRefreshTimer) return; // already scheduled within the window
     this.liveRefreshTimer = setTimeout(() => {
       this.liveRefreshTimer = null;
+      // U13: a live comment refresh mid-drag would re-measure + repaint pins under
+      // the pointer and can disturb the gesture; defer it until the drag ends.
+      if (this.inspector.isDragging()) {
+        this.scheduleLiveRefresh();
+        return;
+      }
       void this.reloadComments();
       this.refreshOpenThreadReplies();
     }, 250);
@@ -1558,12 +1566,12 @@ export class OverlayController {
         this.inlineEdit = null;
       },
     });
-    // U12: a live drag-resize cancels on Escape (gesture layer only) — the panel
-    // and its buffer stay intact.
+    // U12/U13: a live drag (resize or reorder) cancels on Escape (gesture layer
+    // only) — the panel and its buffer stay intact.
     this.escapeStack.register({
       priority: ESCAPE_PRIORITY.gesture,
-      isActive: () => this.inspector.isResizing(),
-      close: () => this.inspector.abortResize(),
+      isActive: () => this.inspector.isDragging(),
+      close: () => this.inspector.abortDrag(),
     });
     this.escapeStack.register({
       priority: ESCAPE_PRIORITY.selection,

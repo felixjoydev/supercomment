@@ -40,6 +40,25 @@ import {
   type ResizeResult,
   type ResizeModifiers,
 } from "./interact/resize.js";
+import {
+  inFlowCandidates,
+  resolveSlot,
+  type RawSibling,
+  type Candidate,
+  type Slot,
+} from "./interact/reorder.js";
+import { layoutContextFor } from "./layout-context.js";
+
+/** A committed drag-reorder handed to the controller to record as a moveNode. */
+export interface ReorderCommit {
+  /** The dragged element's current DOM index (order.from). */
+  from: number;
+  /** The slot's true DOM insert index (order.to). */
+  to: number;
+  /** The reference sibling's DOM index the drop anchors to. */
+  referenceIndex: number;
+  position: "before" | "after";
+}
 
 /** A viewport-space rectangle (CSS px), straight from getBoundingClientRect. */
 interface ViewRect {
@@ -175,12 +194,30 @@ export class InspectorLayer {
     gesture: Gesture;
   } | null = null;
 
+  // U13 — drag-to-reorder: a grip on the box, an insertion line, the drag state.
+  private readonly reorderGrip: HTMLElement;
+  private readonly insertionLine: HTMLElement;
+  private readonly onReorderCommit?: (c: ReorderCommit) => void;
+  private reorder: {
+    el: Element;
+    parent: Element;
+    from: number;
+    candidates: Candidate[];
+    axis: ReturnType<typeof layoutContextFor>["axis"];
+    container: ViewRect;
+    inlineOpacity: InlineSnapshot;
+    slot: Slot | null;
+    gesture: Gesture;
+  } | null = null;
+
   constructor(
     private readonly doc: Document,
     parent: HTMLElement,
     opts: {
       /** Record the committed size (one gesture step); the controller wires it. */
       onResizeCommit?: (dims: ResizeResult) => void;
+      /** Record a committed drag-reorder as a moveNode; the controller wires it. */
+      onReorderCommit?: (c: ReorderCommit) => void;
       /** Read box metrics for handle applicability + scale (default: live DOM). */
       readMetrics?: (el: Element) => BoxMetrics;
     } = {},
@@ -194,6 +231,7 @@ export class InspectorLayer {
     this.ghost = this.node("div", "sc-inspect-ghost");
     this.hideNode(this.ghost);
     this.onResizeCommit = opts.onResizeCommit;
+    this.onReorderCommit = opts.onReorderCommit;
     this.readMetrics = opts.readMetrics ?? ((el) => liveMetrics(el));
     for (const h of HANDLES) {
       const node = this.node("div", `sc-inspect-handle sc-inspect-handle-${h}`);
@@ -201,6 +239,12 @@ export class InspectorLayer {
       this.wireHandle(h, node);
       this.handles.set(h, node);
     }
+    this.reorderGrip = this.node("div", "sc-inspect-reorder-grip");
+    this.reorderGrip.setAttribute("aria-label", "Drag to reorder");
+    this.reorderGrip.textContent = "⠿";
+    this.reorderGrip.addEventListener("pointerdown", (e) => this.beginReorder(e as PointerEvent));
+    this.insertionLine = this.node("div", "sc-inspect-insertion");
+    this.hideNode(this.insertionLine);
     this.wireDragListeners();
   }
 
@@ -224,14 +268,25 @@ export class InspectorLayer {
 
   /** Hide the inspector (nothing hovered / selected). */
   hide(): void {
-    this.abortResize();
+    this.abortDrag();
     this.current = null;
     this.resizable = false;
     this.clearHover();
     this.detach();
   }
 
-  /** Is a resize drag currently live? (drives the gesture Escape layer). */
+  /** Is a resize OR reorder drag currently live? (drives the gesture Escape layer). */
+  isDragging(): boolean {
+    return this.resize != null || this.reorder != null;
+  }
+
+  /** Cancel any live drag (resize / reorder), restoring cleanly (no record). */
+  abortDrag(): void {
+    this.resize?.gesture.cancel();
+    this.reorder?.gesture.cancel();
+  }
+
+  /** Is a resize drag currently live? (test seam / narrower predicate). */
   isResizing(): boolean {
     return this.resize != null;
   }
@@ -296,6 +351,7 @@ export class InspectorLayer {
       this.hideNode(this.badge);
       this.hideNode(this.dims);
       this.hideHandles();
+      this.hideNode(this.reorderGrip);
     } else {
       this.place(this.box, rect.x, rect.y);
       this.box.style.width = `${rect.width}px`;
@@ -315,6 +371,18 @@ export class InspectorLayer {
       this.showNode(this.dims);
 
       this.renderHandles(el, rect);
+      this.renderReorderGrip(el, rect);
+    }
+
+    // The insertion line follows the live reorder slot (drawn in viewport coords).
+    if (this.reorder?.slot) {
+      const line = this.reorder.slot.line;
+      this.place(this.insertionLine, line.x, line.y);
+      this.insertionLine.style.width = `${line.width}px`;
+      this.insertionLine.style.height = `${line.height}px`;
+      this.showNode(this.insertionLine);
+    } else {
+      this.hideNode(this.insertionLine);
     }
 
     // Spacing pills (real-env; empty without getComputedStyle).
@@ -348,7 +416,15 @@ export class InspectorLayer {
 
   private attach(): void {
     if (this.attached) return;
-    this.container.append(this.badge, this.box, this.dims, this.ghost, ...this.handles.values());
+    this.container.append(
+      this.badge,
+      this.box,
+      this.dims,
+      this.ghost,
+      this.insertionLine,
+      this.reorderGrip,
+      ...this.handles.values(),
+    );
     this.attached = true;
   }
 
@@ -439,15 +515,23 @@ export class InspectorLayer {
     };
     doc.addEventListener?.("pointermove", (e) => {
       const r = this.resize;
-      if (!r) return;
-      const ev = e as { shiftKey?: boolean; altKey?: boolean };
-      r.mods = { aspect: !!ev.shiftKey, center: !!ev.altKey };
-      r.gesture.move(pointOf(e));
+      if (r) {
+        const ev = e as { shiftKey?: boolean; altKey?: boolean };
+        r.mods = { aspect: !!ev.shiftKey, center: !!ev.altKey };
+        r.gesture.move(pointOf(e));
+      }
+      this.reorder?.gesture.move(pointOf(e));
     });
-    doc.addEventListener?.("pointerup", (e) => this.resize?.gesture.up(pointOf(e)));
-    doc.addEventListener?.("pointercancel", () => this.resize?.gesture.cancel());
+    doc.addEventListener?.("pointerup", (e) => {
+      this.resize?.gesture.up(pointOf(e));
+      this.reorder?.gesture.up(pointOf(e));
+    });
+    doc.addEventListener?.("pointercancel", () => {
+      this.resize?.gesture.cancel();
+      this.reorder?.gesture.cancel();
+    });
     const view = this.doc.defaultView as { addEventListener?: (t: string, cb: () => void) => void } | null;
-    view?.addEventListener?.("blur", () => this.resize?.gesture.cancel());
+    view?.addEventListener?.("blur", () => this.abortDrag());
   }
 
   private beginResize(handle: Handle, e: PointerEvent): void {
@@ -509,6 +593,101 @@ export class InspectorLayer {
     this.resize = null;
     this.lastDims = null;
     if (commit && dims) this.onResizeCommit?.(dims);
+    this.scheduleRender();
+  }
+
+  // --- Drag-to-reorder (U13) ------------------------------------------------
+
+  /** Show the reorder grip only while editing, and only when there's a slot to move to. */
+  private renderReorderGrip(el: Element, rect: ViewRect): void {
+    if (!this.resizable || (!this.reorder && !this.canReorder(el))) {
+      this.hideNode(this.reorderGrip);
+      return;
+    }
+    // Anchored just outside the box's top-left so it never covers content.
+    this.place(this.reorderGrip, rect.x, rect.y);
+    this.showNode(this.reorderGrip);
+  }
+
+  /** True when `el` has at least one in-flow sibling to reorder around. */
+  private canReorder(el: Element): boolean {
+    const parent = el.parentElement;
+    if (!parent) return false;
+    const { siblings, from } = this.siblingsOf(el, parent);
+    return inFlowCandidates(siblings, from).length >= 1;
+  }
+
+  /** Measure `el`'s siblings (true DOM indices + computed flow context). */
+  private siblingsOf(el: Element, parent: Element): { siblings: RawSibling[]; from: number } {
+    const children = Array.from(parent.children);
+    const siblings: RawSibling[] = children.map((child, index) => ({
+      index,
+      rect: readRect(child),
+      position: readComputedValue(child, "position") ?? "static",
+      display: readComputedValue(child, "display") ?? "block",
+    }));
+    return { siblings, from: children.indexOf(el) };
+  }
+
+  private beginReorder(e: PointerEvent): void {
+    const el = this.current;
+    if (!el || this.reorder || this.resize || !this.resizable) return;
+    const parent = el.parentElement;
+    const container = parent ? readRect(parent) : null;
+    if (!parent || !container) return;
+    const { siblings, from } = this.siblingsOf(el, parent);
+    const candidates = inFlowCandidates(siblings, from);
+    if (candidates.length === 0) return;
+    (e as { preventDefault?: () => void }).preventDefault?.();
+    (e as { stopPropagation?: () => void }).stopPropagation?.();
+    const gesture = new Gesture(
+      {
+        onMove: (p) => this.onReorderMove(p),
+        onCommit: () => this.finishReorder(true),
+        onAbort: () => this.finishReorder(false),
+      },
+      { activationDistance: 5 },
+    );
+    this.reorder = {
+      el,
+      parent,
+      from,
+      candidates,
+      axis: layoutContextFor(el).axis,
+      container,
+      inlineOpacity: readInlineSnapshot(el, "opacity"),
+      slot: null,
+      gesture,
+    };
+    (e.target as { setPointerCapture?: (id: number) => void } | null)?.setPointerCapture?.(
+      (e as { pointerId?: number }).pointerId ?? 0,
+    );
+    // Lift the dragged element slightly so the drop target reads clearly.
+    applyStylePreview(el, "opacity", "0.5");
+    gesture.down(pointOf(e));
+  }
+
+  private onReorderMove(p: Point): void {
+    const r = this.reorder;
+    if (!r) return;
+    r.slot = resolveSlot(r.candidates, r.axis, p, r.container);
+    this.scheduleRender();
+  }
+
+  private finishReorder(commit: boolean): void {
+    const r = this.reorder;
+    if (!r) return;
+    const slot = r.slot;
+    restoreInlineSnapshot(r.el, "opacity", r.inlineOpacity); // clear the lift
+    this.reorder = null;
+    if (commit && slot && slot.referenceIndex != null) {
+      this.onReorderCommit?.({
+        from: r.from,
+        to: slot.insertIndex,
+        referenceIndex: slot.referenceIndex,
+        position: slot.position,
+      });
+    }
     this.scheduleRender();
   }
 }
