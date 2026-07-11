@@ -7,7 +7,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("SessionAgentEnqueuer", () => {
   const base = { supabaseUrl: "https://x.supabase.co", supabaseAnonKey: "anon" };
 
-  it("calls send_comment_to_agent with the comment id + current token and returns true", async () => {
+  it("calls the RPC caller with the comment id + current token and returns true", async () => {
     const calls: Array<{ id: string; token: string }> = [];
     const enq = new SessionAgentEnqueuer({
       ...base,
@@ -38,7 +38,7 @@ describe("SessionAgentEnqueuer", () => {
       ...base,
       getAccessToken: () => "t",
       rpc: async () => {
-        throw new Error("send_comment_to_agent failed (403): not_permitted");
+        throw new Error("set_comment_lane failed (403): not_permitted");
       },
     });
     expect(await enq.enqueue("c1")).toBe(false);
@@ -62,12 +62,13 @@ describe("SessionAgentEnqueuer", () => {
     ).toThrow();
   });
 
-  // U3 (0044): with no injected `rpc`, the real fetch-based caller hits
-  // send_comment_to_agent (not the old enqueue_review_comment) and always
-  // sends p_confirm_guest: true — the overlay's "Send to agent" footer button
-  // only ever enqueues a member-authored template (see enqueue.ts's class doc
-  // for why this is a safe no-op on this call site, not a bypassed gate).
-  it("the default fetch-based RPC caller posts to send_comment_to_agent with p_confirm_guest: true", async () => {
+  // U5 (0052): with no injected `rpc`, the real fetch-based caller hits
+  // set_comment_lane (moving the comment to the ready_for_agent lane, which is
+  // the agent's pull queue now) and always sends p_confirm_guest: true — the
+  // overlay's "Move to Ready for agent" footer button only ever moves a
+  // member-authored template (see enqueue.ts's class doc for why this is a
+  // safe no-op on this call site, not a bypassed gate).
+  it("the default fetch-based RPC caller posts to set_comment_lane(ready_for_agent) with p_confirm_guest: true", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true }) as unknown as Response);
     vi.stubGlobal("fetch", fetchMock);
 
@@ -76,10 +77,11 @@ describe("SessionAgentEnqueuer", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://x.supabase.co/rest/v1/rpc/send_comment_to_agent");
+    expect(url).toBe("https://x.supabase.co/rest/v1/rpc/set_comment_lane");
     expect((opts.headers as Record<string, string>).Authorization).toBe("Bearer tok-abc");
     expect(JSON.parse(opts.body as string)).toEqual({
       p_comment_id: "c1",
+      p_lane: "ready_for_agent",
       p_confirm_guest: true,
     });
   });

@@ -45,16 +45,15 @@ describe("R23 guest-confirm gate (canEnqueue / requiresGuestConfirm)", () => {
   });
 });
 
-describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_to_agent (U3)", () => {
-  // Mirrors app/api/send-to-claude/route.ts's POST-U3 decision logic: the
-  // route no longer runs canEnqueue() client-side before inserting — it
-  // ALWAYS calls the send_comment_to_agent RPC (passing p_confirm_guest
-  // through) and maps the RPC's own rejection back onto the same HTTP shape
-  // this route has always returned: SQLSTATE P0002 (guest_confirm_required)
-  // -> 409, 42501 (not_authorized / send_to_agent_forbidden) -> 403. The RPC
-  // returns `setof comment_queue`, so `data` comes back as an array on
-  // success (see 0044's header note on the claim_next_queue_item /
-  // set_agent_prompt PostgREST gotcha this return shape avoids).
+describe("server send path (mocked) honors the R23/R11 gate via set_comment_lane (U5)", () => {
+  // Mirrors app/api/send-to-claude/route.ts's POST-U5 decision logic: "Send to
+  // agent" IS the lane move now. The route ALWAYS calls the set_comment_lane
+  // RPC (p_lane='ready_for_agent', passing p_confirm_guest through) and maps
+  // the RPC's own rejection back onto the same HTTP shape: SQLSTATE P0002
+  // (guest_confirm_required) -> 409, 42501 (not_authorized /
+  // send_to_agent_forbidden) -> 403, P0001 (comment no longer open) -> 409.
+  // On success the RPC returns the new lane text (a scalar), and NO
+  // comment_queue row is written — the ready_for_agent lane is the queue.
   function fakeRpc(result: { data?: unknown; error?: { code: string; message: string } | null }) {
     const rpc = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null });
     return { rpc, _rpc: rpc };
@@ -65,8 +64,9 @@ describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_
     confirmGuest: boolean,
     supabase: ReturnType<typeof fakeRpc>,
   ) {
-    const { data, error } = await supabase.rpc("send_comment_to_agent", {
+    const { data, error } = await supabase.rpc("set_comment_lane", {
       p_comment_id: c.id,
+      p_lane: "ready_for_agent",
       p_confirm_guest: confirmGuest,
     });
     if (error) {
@@ -76,43 +76,49 @@ describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_
       if (error.code === "42501") {
         return { status: 403 as const, reason: "send_to_agent_forbidden" as const };
       }
+      if (error.code === "P0001") {
+        return { status: 409 as const, reason: "comment_not_open" as const };
+      }
       return { status: 500 as const };
     }
-    const row = Array.isArray(data) ? data[0] : data;
-    return { status: 201 as const, data: row };
+    const lane = typeof data === "string" ? data : "ready_for_agent";
+    return { status: 201 as const, lane };
   }
 
-  it("MEMBER comment enqueues directly (RPC returns a pending queue row)", async () => {
-    const supabase = fakeRpc({ data: [{ id: "q1", status: "pending" }] });
+  it("MEMBER comment moves straight to ready_for_agent (RPC returns the new lane)", async () => {
+    const supabase = fakeRpc({ data: "ready_for_agent" });
     const r = await sendViaRpc({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
     expect(r.status).toBe(201);
     expect(supabase._rpc).toHaveBeenCalledTimes(1);
-    expect((r as { data: { status: string } }).data.status).toBe("pending");
+    expect((r as { lane: string }).lane).toBe("ready_for_agent");
+    // No comment_queue row: the RPC is called with the lane args, not a queue insert.
+    expect(supabase._rpc).toHaveBeenCalledWith("set_comment_lane", {
+      p_comment_id: "c1",
+      p_lane: "ready_for_agent",
+      p_confirm_guest: false,
+    });
   });
 
-  it("a re-send that hits the RPC's dedup path still returns 201 with the existing row (no 200/deduped:true distinction; accepted, documented since U3)", async () => {
-    // send_comment_to_agent's ON CONFLICT ... DO NOTHING dedup path returns
-    // the pre-existing active row as an ordinary success, not a distinct
-    // shape — this route no longer has a way to tell "fresh insert" from
-    // "already queued" apart without a further RPC change, and nothing reads
-    // the old `deduped` field today (code review finding, api-contract).
-    const supabase = fakeRpc({ data: [{ id: "q1", status: "pending" }] });
+  it("a re-send is idempotent and still returns 201 with the lane (no dedup distinction)", async () => {
+    // set_comment_lane just re-sets the lane (and re-confirms a guest raster);
+    // there is no comment_queue and thus no fresh-insert-vs-already-queued
+    // shape to distinguish — every send is an ordinary 201.
+    const supabase = fakeRpc({ data: "ready_for_agent" });
     const r = await sendViaRpc({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
     expect(r.status).toBe(201);
-    expect((r as { data: { status: string; deduped?: boolean } }).data.deduped).toBeUndefined();
+    expect((r as { lane: string; deduped?: boolean }).deduped).toBeUndefined();
   });
 
   it("GUEST comment without confirm is rejected with 409 (RPC raises guest_confirm_required / P0002)", async () => {
     const supabase = fakeRpc({ error: { code: "P0002", message: "guest_confirm_required" } });
     const r = await sendViaRpc({ id: "c2", previewId: "p1", trustLevel: "guest" }, false, supabase);
     expect(r.status).toBe(409);
-    // Unlike the pre-U3 client-side gate, the RPC is still CALLED (it is the
-    // one enforcing the gate now) — it just rejects.
+    // The RPC is still CALLED (it is the one enforcing the gate now) — it just rejects.
     expect(supabase._rpc).toHaveBeenCalledTimes(1);
   });
 
-  it("GUEST comment WITH explicit confirm enqueues", async () => {
-    const supabase = fakeRpc({ data: [{ id: "q3", status: "pending" }] });
+  it("GUEST comment WITH explicit confirm moves to ready_for_agent", async () => {
+    const supabase = fakeRpc({ data: "ready_for_agent" });
     const r = await sendViaRpc({ id: "c3", previewId: "p1", trustLevel: "guest" }, true, supabase);
     expect(r.status).toBe(201);
     expect(supabase._rpc).toHaveBeenCalledTimes(1);
@@ -122,6 +128,13 @@ describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_
     const supabase = fakeRpc({ error: { code: "42501", message: "send_to_agent_forbidden" } });
     const r = await sendViaRpc({ id: "c4", previewId: "p1", trustLevel: "member" }, false, supabase);
     expect(r.status).toBe(403);
+  });
+
+  it("a resolved/dismissed comment can no longer be sent (RPC raises comment_not_open / P0001 -> 409)", async () => {
+    const supabase = fakeRpc({ error: { code: "P0001", message: "comment_not_open" } });
+    const r = await sendViaRpc({ id: "c5", previewId: "p1", trustLevel: "member" }, false, supabase);
+    expect(r.status).toBe(409);
+    expect((r as { reason?: string }).reason).toBe("comment_not_open");
   });
 });
 

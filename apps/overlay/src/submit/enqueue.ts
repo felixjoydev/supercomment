@@ -4,13 +4,13 @@
  *
  * After the editor folds a change-set into a `template` comment, a permitted
  * MEMBER session can hand it to the coding agent. This calls the
- * `send_comment_to_agent` RPC (0044/U3) with the reviewer's anon SESSION JWT;
- * the RPC server-side re-verifies the caller holds a live member review
- * session whose member is granted send-to-agent, then atomically inserts a
- * comment_queue row, stamps a point-in-time snapshot of the live agent_prompt
- * onto it (R7), and (guest-authored comments only) records a member-only
- * confirm marker (R11). The client never asserts its own permission — the
- * footer button is UX only.
+ * `set_comment_lane` RPC (0052) with the reviewer's anon SESSION JWT to move
+ * the comment into the `ready_for_agent` lane — which IS the agent's pull
+ * queue (U5). The RPC server-side re-verifies the caller holds a live member
+ * review session whose member is granted send-to-agent, and (guest-authored
+ * comments only) records the member-only reference-image confirm marker (R11).
+ * No comment_queue row is written anymore; the lane is the queue. The client
+ * never asserts its own permission — the footer button is UX only.
  *
  * `p_confirm_guest` is passed as `true` unconditionally here rather than
  * threaded from the caller: the "Send to agent" footer button only ever
@@ -31,7 +31,7 @@
  */
 import type { AgentEnqueuer } from "../core/types.js";
 
-/** Calls send_comment_to_agent with the current session token. Injectable. */
+/** Calls set_comment_lane(ready_for_agent) with the current session token. Injectable. */
 export type EnqueueRpcCaller = (
   commentId: string,
   accessToken: string,
@@ -83,7 +83,7 @@ function makeFetchEnqueueCaller(
 ): EnqueueRpcCaller {
   const base = supabaseUrl.replace(/\/+$/, "");
   return async (commentId, accessToken) => {
-    const res = await fetch(`${base}/rest/v1/rpc/send_comment_to_agent`, {
+    const res = await fetch(`${base}/rest/v1/rpc/set_comment_lane`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -91,14 +91,18 @@ function makeFetchEnqueueCaller(
         Authorization: `Bearer ${accessToken}`,
       },
       // See the class doc above for why p_confirm_guest is unconditionally
-      // true on this call site (the comment being enqueued is always
+      // true on this call site (the comment being moved is always
       // member-authored, so the guest-confirm gate is a no-op here).
-      body: JSON.stringify({ p_comment_id: commentId, p_confirm_guest: true }),
+      body: JSON.stringify({
+        p_comment_id: commentId,
+        p_lane: "ready_for_agent",
+        p_confirm_guest: true,
+      }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new Error(
-        `send_comment_to_agent failed (${res.status}): ${text || res.statusText}`,
+        `set_comment_lane failed (${res.status}): ${text || res.statusText}`,
       );
     }
   };
