@@ -304,6 +304,32 @@ describe("PropertiesPanel — Colour + opacity", () => {
     expect(session.list().some((o) => o.property === "opacity")).toBe(false);
   });
 
+  it("records valueToken when a color pick matches a page design token (U11)", () => {
+    const { doc, win } = makeFakeDom();
+    // Minimal CSSOM: a stylesheet declaring --brand, resolved on the element.
+    const brandStyle = {
+      length: 1,
+      item: (i: number) => (i === 0 ? "--brand" : ""),
+      getPropertyValue: (n: string) => (n === "--brand" ? "#123456" : ""),
+    };
+    (doc as unknown as { styleSheets: unknown }).styleSheets = {
+      length: 1,
+      0: { cssRules: { length: 1, 0: { style: brandStyle } } },
+    };
+    (win as unknown as { getComputedStyle: unknown }).getComputedStyle = () => ({
+      getPropertyValue: (n: string) => (n === "--brand" ? "#123456" : ""),
+      fontFamily: "",
+    });
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    q(".sc-ep-ctl-color").dispatch("click", {});
+    const hex = parent.querySelector(".sc-ep-colorhex")!;
+    hex.value = "#123456";
+    hex.dispatch("change", {});
+    const op = session.list().find((o) => o.property === "color")!;
+    expect(op.after).toBe("rgb(18, 52, 86)");
+    expect(op.valueToken).toBe("--brand");
+  });
+
   it("records opacity as a 0–1 fraction from the percent field", () => {
     const { doc } = makeFakeDom();
     const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });

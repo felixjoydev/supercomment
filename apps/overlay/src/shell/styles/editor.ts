@@ -920,6 +920,18 @@ export const EDITOR_STYLES = `/* Visual editor — properties panel (editor rede
   padding: 0;
 }
 
+/* U11: a chip shown when a color pick matches a page design token. */
+.sc-ep-token-chip {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ep-accent);
+  background: rgba(139, 109, 255, 0.14);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
 .sc-edit-panel :focus-visible {
   outline: 2px solid var(--ep-accent);
   outline-offset: 1px;

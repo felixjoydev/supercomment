@@ -189,7 +189,17 @@ export function summarizeChangeSet(
 }
 
 function describeOp(op: ChangeOp): string {
-  return `${describeOpBody(op)}${fontSuffix(op)}${previewCaveat(op)}`;
+  return `${describeOpBody(op)}${fontSuffix(op)}${tokenSuffix(op)}${previewCaveat(op)}`;
+}
+
+/**
+ * A trailing design-token note (U11): when an edit's value matched a page CSS
+ * custom property, tell the agent to change the TOKEN (`use token --brand-500`)
+ * rather than hard-code the raw value. Kept out of the op body so it composes with
+ * every op type. Empty when the op carries no token.
+ */
+function tokenSuffix(op: ChangeOp): string {
+  return op.valueToken ? ` (use token ${op.valueToken})` : "";
 }
 
 /**

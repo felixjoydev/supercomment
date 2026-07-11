@@ -334,6 +334,31 @@ describe("summarizeChangeSet (U16, R14)", () => {
     );
   });
 
+  it("names a matched design token so the agent edits the token, not the value (U11)", () => {
+    const context: CapturedContext = {
+      selector: "x",
+      anchors: [],
+      url: "https://x",
+      consoleErrors: [],
+      changeSet: {
+        ops: [
+          {
+            opId: "o1",
+            type: "setStyle",
+            target: { selector: "h1", anchors: [] },
+            property: "color",
+            before: "rgb(0, 0, 0)",
+            after: "rgb(51, 102, 204)",
+            valueToken: "--brand-500",
+          },
+        ],
+      },
+    };
+    const prose = summarizeChangeSet(context)!;
+    expect(prose).toContain("color rgb(0, 0, 0)→rgb(51, 102, 204) on h1");
+    expect(prose).toContain("(use token --brand-500)");
+  });
+
   it("returns null when there is no change-set", () => {
     expect(
       summarizeChangeSet({

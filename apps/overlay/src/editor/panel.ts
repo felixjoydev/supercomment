@@ -65,10 +65,12 @@ import {
   rgbaToHex6,
   rgbaToHex8,
   rgbaToCss,
+  canonicalColor,
   type ColorProbe,
 } from "./color/normalize.js";
 import { ColorPicker } from "./color/picker.js";
 import { extractPalette } from "./color/palette.js";
+import { buildTokenIndex, matchToken, type TokenDecl } from "./tokens.js";
 
 /** How the controller records edits into (and drives) its history engine (U3). */
 export interface PanelCallbacks {
@@ -668,8 +670,9 @@ export class PropertiesPanel {
       initial: this.currentColorCss(property),
       palette: extractPalette(this.doc, { probe: this.colorProbe }),
       recents: this.cb.colorRecents?.() ?? [],
-      onChange: (css) => {
-        this.recordStyle(property, css);
+      matchToken: (css) => this.matchColorToken(css),
+      onChange: (css, valueToken) => {
+        this.recordStyle(property, css, valueToken ? { valueToken } : {});
         this.refreshColorButton(property);
       },
       onClose: () => {
@@ -1004,7 +1007,7 @@ export class PropertiesPanel {
 
   // --- Recording -----------------------------------------------------------
 
-  private recordStyle(property: string, after: string): void {
+  private recordStyle(property: string, after: string, opts: { valueToken?: string } = {}): void {
     const before = this.beforeFor(property);
     const revertToBuild = this.revertFor(property); // first-write-wins build snapshot
     const prevSnap = readInlineSnapshot(this.el, property); // state before THIS write
@@ -1022,11 +1025,45 @@ export class PropertiesPanel {
       revertToBuild,
     };
     this.cb.record(
-      buildStyleOp({ target: this.target, property, before, after, previewUnavailable }),
+      buildStyleOp({
+        target: this.target,
+        property,
+        before,
+        after,
+        previewUnavailable,
+        ...(opts.valueToken ? { valueToken: opts.valueToken } : {}),
+      }),
       dom,
     );
     this.markDegraded(property, previewUnavailable);
     this.refreshCount();
+  }
+
+  // --- Design tokens (U11) --------------------------------------------------
+
+  /** The page's custom-property index, built lazily on first color pick. */
+  private tokenIndex: TokenDecl[] | null = null;
+
+  /** Match a color value to a page design token resolved ON this element, or null. */
+  private matchColorToken(css: string): string | null {
+    this.tokenIndex ??= buildTokenIndex(this.doc);
+    if (this.tokenIndex.length === 0) return null;
+    return matchToken(this.tokenIndex, css, {
+      normalize: (v) => canonicalColor(v, this.colorProbe),
+      resolveOnElement: (name) => this.resolveCustomProp(name),
+    });
+  }
+
+  /** The element-scoped resolved value of a custom property (theme-correct). */
+  private resolveCustomProp(name: string): string {
+    try {
+      const win = this.doc.defaultView as
+        | { getComputedStyle?: (e: Element) => { getPropertyValue?: (p: string) => string } }
+        | undefined;
+      return win?.getComputedStyle?.(this.el)?.getPropertyValue?.(name)?.trim() ?? "";
+    } catch {
+      return "";
+    }
   }
 
   /**
