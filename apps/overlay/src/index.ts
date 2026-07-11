@@ -41,6 +41,7 @@ import { SessionCommentSubmitter } from "./submit/session.js";
 import { makeSetGuestEmail } from "./submit/email.js";
 import { makeKeepAlive } from "./submit/keepalive.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
+import { SessionAgentPromptWriter } from "./submit/agent-prompt.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { SessionThreadClient } from "./submit/thread.js";
 import {
@@ -311,10 +312,21 @@ async function activateSession(
     getAccessToken,
   });
 
-  // Phase 2: the editor's "Send to agent" enqueues a saved template via the same
-  // session creds; the enqueue_review_comment RPC re-verifies the member session
-  // + grant server-side. Only actually offered when the session carries the grant.
+  // Phase 2 (now U3): the editor's "Send to agent" enqueues a saved template via
+  // the same session creds; the send_comment_to_agent RPC re-verifies the member
+  // session + grant server-side. Only actually offered when the session carries
+  // the grant.
   const enqueuer = new SessionAgentEnqueuer({
+    supabaseUrl,
+    supabaseAnonKey,
+    getAccessToken,
+  });
+
+  // U5: writes a member-authored prompt for the agent (set_agent_prompt) right
+  // after a template comment is created, before any enqueue, using the same
+  // session creds. The RPC re-verifies a MEMBER session server-side; the
+  // panel's own isMember gate (sourced from session.role below) is UX only.
+  const agentPromptWriter = new SessionAgentPromptWriter({
     supabaseUrl,
     supabaseAnonKey,
     getAccessToken,
@@ -344,6 +356,9 @@ async function activateSession(
     // Phase 2: carry the member's send-to-agent grant into the editor footer.
     canSendToAgent: session.canSendToAgent === true,
     enqueuer,
+    // U5: the editor footer's member-only "Prompt for agent" field writes
+    // through this seam right after its comment is created.
+    agentPromptWriter,
     // Comment threads (0033): reply / mark-done / delete from the pin popover.
     threadClient: new SessionThreadClient({
       supabaseUrl,

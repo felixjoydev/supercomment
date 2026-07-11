@@ -45,51 +45,83 @@ describe("R23 guest-confirm gate (canEnqueue / requiresGuestConfirm)", () => {
   });
 });
 
-describe("server enqueue path (mocked) honors the R23 gate", () => {
-  // Mirrors app/api/send-to-claude/route.ts decision logic against a mocked
-  // Supabase insert builder.
-  function fakeInsert() {
-    const insert = vi.fn().mockReturnValue({
-      select: () => ({ maybeSingle: () => Promise.resolve({ data: { id: "q1", status: "pending" }, error: null }) }),
-    });
-    return { from: () => ({ insert }), _insert: insert };
+describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_to_agent (U3)", () => {
+  // Mirrors app/api/send-to-claude/route.ts's POST-U3 decision logic: the
+  // route no longer runs canEnqueue() client-side before inserting — it
+  // ALWAYS calls the send_comment_to_agent RPC (passing p_confirm_guest
+  // through) and maps the RPC's own rejection back onto the same HTTP shape
+  // this route has always returned: SQLSTATE P0002 (guest_confirm_required)
+  // -> 409, 42501 (not_authorized / send_to_agent_forbidden) -> 403. The RPC
+  // returns `setof comment_queue`, so `data` comes back as an array on
+  // success (see 0044's header note on the claim_next_queue_item /
+  // set_agent_prompt PostgREST gotcha this return shape avoids).
+  function fakeRpc(result: { data?: unknown; error?: { code: string; message: string } | null }) {
+    const rpc = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null });
+    return { rpc, _rpc: rpc };
   }
 
-  async function enqueueIfAllowed(
+  async function sendViaRpc(
     c: Pick<CommentView, "trustLevel"> & { id: string; previewId: string },
     confirmGuest: boolean,
-    supabase: ReturnType<typeof fakeInsert>,
+    supabase: ReturnType<typeof fakeRpc>,
   ) {
-    const gate = canEnqueue(c, confirmGuest);
-    if (!gate.ok) return { status: 409 as const, reason: gate.reason };
-    const res = await supabase
-      .from()
-      .insert({ preview_id: c.previewId, comment_id: c.id, status: "pending" })
-      .select("id, status")
-      .maybeSingle();
-    return { status: 201 as const, data: res.data };
+    const { data, error } = await supabase.rpc("send_comment_to_agent", {
+      p_comment_id: c.id,
+      p_confirm_guest: confirmGuest,
+    });
+    if (error) {
+      if (error.code === "P0002") {
+        return { status: 409 as const, reason: "guest_confirm_required" as const };
+      }
+      if (error.code === "42501") {
+        return { status: 403 as const, reason: "send_to_agent_forbidden" as const };
+      }
+      return { status: 500 as const };
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return { status: 201 as const, data: row };
   }
 
-  it("MEMBER comment enqueues directly (inserts a pending queue row)", async () => {
-    const supabase = fakeInsert();
-    const r = await enqueueIfAllowed({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
+  it("MEMBER comment enqueues directly (RPC returns a pending queue row)", async () => {
+    const supabase = fakeRpc({ data: [{ id: "q1", status: "pending" }] });
+    const r = await sendViaRpc({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
     expect(r.status).toBe(201);
-    expect(supabase._insert).toHaveBeenCalledTimes(1);
+    expect(supabase._rpc).toHaveBeenCalledTimes(1);
     expect((r as { data: { status: string } }).data.status).toBe("pending");
   });
 
-  it("GUEST comment without confirm is rejected with 409 and never inserts", async () => {
-    const supabase = fakeInsert();
-    const r = await enqueueIfAllowed({ id: "c2", previewId: "p1", trustLevel: "guest" }, false, supabase);
+  it("a re-send that hits the RPC's dedup path still returns 201 with the existing row (no 200/deduped:true distinction; accepted, documented since U3)", async () => {
+    // send_comment_to_agent's ON CONFLICT ... DO NOTHING dedup path returns
+    // the pre-existing active row as an ordinary success, not a distinct
+    // shape — this route no longer has a way to tell "fresh insert" from
+    // "already queued" apart without a further RPC change, and nothing reads
+    // the old `deduped` field today (code review finding, api-contract).
+    const supabase = fakeRpc({ data: [{ id: "q1", status: "pending" }] });
+    const r = await sendViaRpc({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
+    expect(r.status).toBe(201);
+    expect((r as { data: { status: string; deduped?: boolean } }).data.deduped).toBeUndefined();
+  });
+
+  it("GUEST comment without confirm is rejected with 409 (RPC raises guest_confirm_required / P0002)", async () => {
+    const supabase = fakeRpc({ error: { code: "P0002", message: "guest_confirm_required" } });
+    const r = await sendViaRpc({ id: "c2", previewId: "p1", trustLevel: "guest" }, false, supabase);
     expect(r.status).toBe(409);
-    expect(supabase._insert).not.toHaveBeenCalled();
+    // Unlike the pre-U3 client-side gate, the RPC is still CALLED (it is the
+    // one enforcing the gate now) — it just rejects.
+    expect(supabase._rpc).toHaveBeenCalledTimes(1);
   });
 
   it("GUEST comment WITH explicit confirm enqueues", async () => {
-    const supabase = fakeInsert();
-    const r = await enqueueIfAllowed({ id: "c3", previewId: "p1", trustLevel: "guest" }, true, supabase);
+    const supabase = fakeRpc({ data: [{ id: "q3", status: "pending" }] });
+    const r = await sendViaRpc({ id: "c3", previewId: "p1", trustLevel: "guest" }, true, supabase);
     expect(r.status).toBe(201);
-    expect(supabase._insert).toHaveBeenCalledTimes(1);
+    expect(supabase._rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("a member without can_send_to_agent granted is rejected with 403 (RPC raises 42501)", async () => {
+    const supabase = fakeRpc({ error: { code: "42501", message: "send_to_agent_forbidden" } });
+    const r = await sendViaRpc({ id: "c4", previewId: "p1", trustLevel: "member" }, false, supabase);
+    expect(r.status).toBe(403);
   });
 });
 

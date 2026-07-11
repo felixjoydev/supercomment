@@ -34,6 +34,7 @@ function mk(over: Partial<CommentView>): CommentView {
     latestReplyAt: over.latestReplyAt ?? null,
     lastReadAt: over.lastReadAt ?? null,
     unread: over.unread ?? false,
+    privatePrompt: over.privatePrompt ?? null,
     ...over,
   };
 }
@@ -90,6 +91,36 @@ describe("reconcileUnread", () => {
       statusChangedAt: "2026-07-04T13:00:00.000Z", // reopened after the receipt
     });
     expect(reconcileUnread(existing, incoming).unread).toBe(true);
+  });
+
+  it("carries forward sendStatus and privatePrompt, which the raw broadcast row never carries", () => {
+    const existing = mk({
+      id: "a",
+      sendStatus: "pending",
+      privatePrompt: { body: "check the spacing", authorDisplayName: "Alice" },
+    });
+    // A freshly broadcast row (via toCommentView) always defaults these to
+    // null since neither has a join on the raw comments row.
+    const incoming = mk({ id: "a", sendStatus: null, privatePrompt: null });
+    const merged = reconcileUnread(existing, incoming);
+    expect(merged.sendStatus).toBe("pending");
+    expect(merged.privatePrompt).toEqual({ body: "check the spacing", authorDisplayName: "Alice" });
+  });
+
+  it("prefers the incoming sendStatus/privatePrompt when the broadcast actually carries one", () => {
+    const existing = mk({
+      id: "a",
+      sendStatus: "pending",
+      privatePrompt: { body: "old prompt", authorDisplayName: "Alice" },
+    });
+    const incoming = mk({
+      id: "a",
+      sendStatus: "done",
+      privatePrompt: { body: "new prompt", authorDisplayName: "Bob" },
+    });
+    const merged = reconcileUnread(existing, incoming);
+    expect(merged.sendStatus).toBe("done");
+    expect(merged.privatePrompt).toEqual({ body: "new prompt", authorDisplayName: "Bob" });
   });
 });
 

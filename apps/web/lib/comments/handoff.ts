@@ -17,7 +17,7 @@
  * on the server / in node tests; they only touch storage when called in-browser.
  */
 
-import type { CapturedContext } from "@supercomment/shared";
+import { sourceRefFromContext, type CapturedContext } from "@supercomment/shared";
 import type { CommentView } from "./types";
 
 /** Default for the per-preview "include file:line in AI hand-offs" toggle. */
@@ -27,15 +27,11 @@ export const INCLUDE_SOURCE_DEFAULT = true;
  * Format a comment's captured source location as a `file:line` reference (or
  * `file` alone when only the file is known). Returns null when the comment has
  * no build-time source stamp (no plugin / production / non-React app).
+ *
+ * Moved to `@supercomment/shared` (U11) so `apps/cli` can reuse the exact same
+ * formatting; re-exported here so existing web imports keep working unchanged.
  */
-export function sourceRefFromContext(
-  context: CapturedContext | null | undefined,
-): string | null {
-  const react = context?.react;
-  const file = react?.sourceFile;
-  if (!file) return null;
-  return react?.sourceLine ? `${file}:${react.sourceLine}` : file;
-}
+export { sourceRefFromContext };
 
 /**
  * The `file:line` to attach to the AI hand-off: present only when the comment

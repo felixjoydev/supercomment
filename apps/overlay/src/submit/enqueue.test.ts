@@ -1,11 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 import { SessionAgentEnqueuer } from "./enqueue.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("SessionAgentEnqueuer", () => {
   const base = { supabaseUrl: "https://x.supabase.co", supabaseAnonKey: "anon" };
 
-  it("calls enqueue_review_comment with the comment id + current token and returns true", async () => {
+  it("calls send_comment_to_agent with the comment id + current token and returns true", async () => {
     const calls: Array<{ id: string; token: string }> = [];
     const enq = new SessionAgentEnqueuer({
       ...base,
@@ -36,7 +38,7 @@ describe("SessionAgentEnqueuer", () => {
       ...base,
       getAccessToken: () => "t",
       rpc: async () => {
-        throw new Error("enqueue_review_comment failed (403): not_permitted");
+        throw new Error("send_comment_to_agent failed (403): not_permitted");
       },
     });
     expect(await enq.enqueue("c1")).toBe(false);
@@ -58,5 +60,36 @@ describe("SessionAgentEnqueuer", () => {
           getAccessToken: () => "t",
         }),
     ).toThrow();
+  });
+
+  // U3 (0044): with no injected `rpc`, the real fetch-based caller hits
+  // send_comment_to_agent (not the old enqueue_review_comment) and always
+  // sends p_confirm_guest: true — the overlay's "Send to agent" footer button
+  // only ever enqueues a member-authored template (see enqueue.ts's class doc
+  // for why this is a safe no-op on this call site, not a bypassed gate).
+  it("the default fetch-based RPC caller posts to send_comment_to_agent with p_confirm_guest: true", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true }) as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enq = new SessionAgentEnqueuer({ ...base, getAccessToken: () => "tok-abc" });
+    expect(await enq.enqueue("c1")).toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://x.supabase.co/rest/v1/rpc/send_comment_to_agent");
+    expect((opts.headers as Record<string, string>).Authorization).toBe("Bearer tok-abc");
+    expect(JSON.parse(opts.body as string)).toEqual({
+      p_comment_id: "c1",
+      p_confirm_guest: true,
+    });
+  });
+
+  it("the default fetch-based RPC caller returns false (via enqueue) on a non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 403, statusText: "Forbidden", text: async () => "not_permitted" }) as unknown as Response),
+    );
+    const enq = new SessionAgentEnqueuer({ ...base, getAccessToken: () => "t" });
+    expect(await enq.enqueue("c1")).toBe(false);
   });
 });

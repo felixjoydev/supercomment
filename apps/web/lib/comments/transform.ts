@@ -60,6 +60,9 @@ export function toCommentView(
     authorEmail: extras?.authorEmail ?? null,
     latestReplyAt,
     lastReadAt,
+    // Hydrated separately from agent_prompts in getCommentsForPreview (U4), same
+    // pattern as sendStatus above; a freshly broadcast row carries no such join.
+    privatePrompt: null,
     unread: isThreadUnread({
       createdAt: n.createdAt,
       statusChangedAt: n.statusChangedAt,

@@ -12,6 +12,7 @@ import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
 import { SendToClaudeButton } from './send-to-claude-button';
 import { GuestEmail } from './guest-email';
+import { AgentPrompt } from './agent-prompt';
 
 const spring = { type: 'spring', duration: 0.45, bounce: 0 } as const;
 
@@ -147,6 +148,10 @@ export function CommentCard({
               {resolved ? 'Resolution: ' : 'Reason: '}
               {comment.resolvedSummary}
             </p>
+          )}
+
+          {canMutate && (
+            <AgentPrompt comment={comment} canMutate={canMutate} onLocalUpdate={onLocalUpdate} />
           )}
 
           <CommentThread

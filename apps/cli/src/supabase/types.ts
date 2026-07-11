@@ -22,3 +22,14 @@ export interface DbListResult {
   data: unknown[] | null;
   error: unknown;
 }
+
+/**
+ * The Storage API's `createSignedUrl` result envelope (U7). Mirrors the real
+ * `@supabase/supabase-js` `storage.from(bucket).createSignedUrl(path, expiresIn)`
+ * response shape exactly (see `apps/web`'s `capture-image.tsx`, the existing
+ * dashboard signer): `data` and `error` are mutually exclusive.
+ */
+export interface DbSignedUrlResult {
+  data: { signedUrl: string } | null;
+  error: unknown;
+}

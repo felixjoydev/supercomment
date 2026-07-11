@@ -4,9 +4,12 @@ import {
   capturedContextSchema,
   newCommentInputSchema,
   listOpenCommentsOutputSchema,
+  getCommentOutputSchema,
   resolveCommentInputSchema,
   visualChangeSetSchema,
   changeOpSchema,
+  mcpCommentSchema,
+  mcpPrivatePromptSchema,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -237,6 +240,59 @@ describe("MCP tool I/O schemas", () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // U8 — governanceDocs envelope-level field (R14/R18, envelope-contract slot 3)
+  // -------------------------------------------------------------------------
+
+  it("accepts governanceDocs pointers on listOpenCommentsOutput", () => {
+    const result = listOpenCommentsOutputSchema.safeParse({
+      comments: [{ ...baseComment, trustLevel: "member" }],
+      governanceDocs: ["AGENTS.md", "docs/design-guidelines.md"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toEqual([
+        "AGENTS.md",
+        "docs/design-guidelines.md",
+      ]);
+    }
+  });
+
+  it("omits (not defaults) governanceDocs on listOpenCommentsOutput when absent", () => {
+    const result = listOpenCommentsOutputSchema.safeParse({ comments: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toBeUndefined();
+      expect("governanceDocs" in result.data).toBe(false);
+    }
+  });
+
+  it("accepts governanceDocs pointers on getCommentOutput", () => {
+    const result = getCommentOutputSchema.safeParse({
+      comment: { ...baseComment, trustLevel: "member" },
+      governanceDocs: ["CLAUDE.md"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toEqual(["CLAUDE.md"]);
+    }
+  });
+
+  it("omits governanceDocs on getCommentOutput when absent, and never carries maturity", () => {
+    const result = getCommentOutputSchema.safeParse({
+      comment: { ...baseComment, trustLevel: "member" },
+      // A stray `maturity` key (U9's separate slot-4 concern) must never be
+      // a recognized field of THIS envelope — only governanceDocs crosses
+      // this boundary.
+      maturity: "mature",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.governanceDocs).toBeUndefined();
+      expect("maturity" in result.data).toBe(false);
+    }
+  });
+
   it("parses a resolveCommentInput payload", () => {
     const result = resolveCommentInputSchema.safeParse({
       number: 3,
@@ -463,5 +519,93 @@ describe("visual change-set — stored-DOM-XSS rejection (M1)", () => {
       after: "A helpful tooltip",
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Private prompt + reference confirm (U1: R4, R5, R8, R12, R18)
+// ---------------------------------------------------------------------------
+
+describe("mcpCommentSchema — privatePrompt / referenceConfirmed", () => {
+  it("parses a comment with NO privatePrompt/referenceConfirmed (backward compatible, the common no-prompt path)", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.privatePrompt).toBeUndefined();
+      expect(result.data.referenceConfirmed).toBeUndefined();
+    }
+  });
+
+  it("parses a comment WITH a privatePrompt and referenceConfirmed", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: {
+        body: "Keep the CTA copy, just fix the mobile overflow.",
+        authorDisplayName: "Ada",
+      },
+      referenceConfirmed: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.privatePrompt?.body).toBe(
+        "Keep the CTA copy, just fix the mobile overflow.",
+      );
+      expect(result.data.privatePrompt?.authorDisplayName).toBe("Ada");
+      expect(result.data.referenceConfirmed).toBe(true);
+    }
+  });
+
+  it("distinguishes an ABSENT prompt from an EMPTY/whitespace one — both valid, not the same state", () => {
+    const absent = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+    });
+    const empty = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: { body: "", authorDisplayName: "Ada" },
+    });
+    const whitespace = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      privatePrompt: { body: "   ", authorDisplayName: "Ada" },
+    });
+    expect(absent.success).toBe(true);
+    expect(empty.success).toBe(true);
+    expect(whitespace.success).toBe(true);
+    if (absent.success && empty.success && whitespace.success) {
+      expect(absent.data.privatePrompt).toBeUndefined();
+      expect(empty.data.privatePrompt).toBeDefined();
+      expect(empty.data.privatePrompt?.body).toBe("");
+      expect(whitespace.data.privatePrompt?.body).toBe("   ");
+      // Absent and empty are different states even though a downstream
+      // consumer (U6) may choose to treat both as "no block to emit".
+      expect(absent.data.privatePrompt).not.toEqual(empty.data.privatePrompt);
+    }
+  });
+
+  it("mcpPrivatePromptSchema requires both body and authorDisplayName", () => {
+    expect(
+      mcpPrivatePromptSchema.safeParse({ body: "do the thing" }).success,
+    ).toBe(false);
+    expect(
+      mcpPrivatePromptSchema.safeParse({
+        body: "do the thing",
+        authorDisplayName: "Ada",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a non-boolean referenceConfirmed", () => {
+    const result = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      referenceConfirmed: "yes",
+    });
+    expect(result.success).toBe(false);
   });
 });

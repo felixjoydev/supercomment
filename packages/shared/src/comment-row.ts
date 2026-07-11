@@ -29,6 +29,7 @@ import {
   type CommentKind,
   type CommentStatus,
   type Intent,
+  type McpPrivatePrompt,
   type Severity,
   type TrustLevel,
 } from "./schema.js";
@@ -116,6 +117,19 @@ export interface NormalizedCommentRow {
   resolvedBy: string | null;
   resolvedSummary: string | null;
   createdAt: string;
+  /**
+   * Member-only private prompt (R1-R5). NOT sourced from this `comments`
+   * row — merged in by `withPrivateExtras` from a separate member-only table
+   * (see `CommentPrivateExtras`). Absent until a caller (U6) supplies it.
+   */
+  privatePrompt?: McpPrivatePrompt;
+  /**
+   * Member confirm marker for a guest reference/screenshot (R11). NOT
+   * sourced from this `comments` row — merged in by `withPrivateExtras` from
+   * a separate member-only table (see `CommentPrivateExtras`). Absent until a
+   * caller (U7) supplies it.
+   */
+  referenceConfirmed?: boolean;
 }
 
 /**
@@ -144,5 +158,46 @@ export function normalizeCommentRow(row: CommentRow): NormalizedCommentRow {
     resolvedBy: row.resolved_by ?? null,
     resolvedSummary: row.resolved_summary ?? null,
     createdAt: row.created_at,
+  };
+}
+
+/**
+ * Member-only private-prompt and reference-confirm data (R1-R5, R11). Both
+ * live in a NEW member-only table introduced alongside this feature (see U2's
+ * migration), NOT columns on this `comments` row — a member-only value must
+ * never ride the `comments`-row realtime broadcast that guests subscribe to.
+ * U6/U7 batch-fetch these separately, keyed by comment id, and pass them to
+ * `withPrivateExtras` to merge onto the normalized row in one place rather
+ * than each call site spreading fields ad hoc.
+ */
+export interface CommentPrivateExtras {
+  privatePrompt?: McpPrivatePrompt;
+  referenceConfirmed?: boolean;
+}
+
+/**
+ * Merge U2's member-only extras onto an already-normalized row. Pure and
+ * additive: a missing/empty `extras` leaves the row exactly as
+ * `normalizeCommentRow` produced it. `apps/cli/src/mcp/store.ts`'s
+ * `rowToMcpComment` calls this after batch-fetching a comment's prompt/marker
+ * (U6/U7). The dashboard's `toCommentView` (apps/web/lib/comments/transform.ts)
+ * does NOT call this seam — it hand-rolls `privatePrompt: null` directly and
+ * relies on a separate later merge in `getCommentsForPreview`
+ * (apps/web/lib/data/comments.ts), since its extras arrive from a different
+ * batch-fetch shape (a `Map` keyed by comment id, not per-row).
+ */
+export function withPrivateExtras(
+  row: NormalizedCommentRow,
+  extras?: CommentPrivateExtras,
+): NormalizedCommentRow {
+  if (!extras) return row;
+  return {
+    ...row,
+    ...(extras.privatePrompt !== undefined
+      ? { privatePrompt: extras.privatePrompt }
+      : {}),
+    ...(extras.referenceConfirmed !== undefined
+      ? { referenceConfirmed: extras.referenceConfirmed }
+      : {}),
   };
 }

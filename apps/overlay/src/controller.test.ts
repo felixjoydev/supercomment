@@ -19,6 +19,7 @@ import type {
   ScreenshotUploader,
   FileReaderFn,
   AgentEnqueuer,
+  AgentPromptWriter,
   ExistingCommentMarker,
 } from "./core/types.js";
 import type { ReviewComment } from "./read/load-comments.js";
@@ -90,6 +91,8 @@ function makeController(opts?: {
   onExit?: () => void;
   canSendToAgent?: boolean;
   enqueuer?: AgentEnqueuer;
+  agentPromptWriter?: AgentPromptWriter;
+  currentUser?: { displayName: string; role: string };
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -103,6 +106,8 @@ function makeController(opts?: {
     ...(opts?.onExit ? { onExit: opts.onExit } : {}),
     ...(opts?.canSendToAgent ? { canSendToAgent: true } : {}),
     ...(opts?.enqueuer ? { enqueuer: opts.enqueuer } : {}),
+    ...(opts?.agentPromptWriter ? { agentPromptWriter: opts.agentPromptWriter } : {}),
+    ...(opts?.currentUser ? { currentUser: opts.currentUser } : {}),
     doc: doc as unknown as Document,
     storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
   });
@@ -333,6 +338,240 @@ describe("OverlayController — send to agent (Phase 2)", () => {
     await flush();
     expect(submitter.payloads[0]!.kind).toBe("template");
     expect(enqueued).toEqual([]); // Save must not enqueue
+  });
+});
+
+describe("OverlayController — agent prompt (U5, AE5)", () => {
+  class IdSubmitter implements CommentSubmitter {
+    payloads: NewCommentInput[] = [];
+    submit(payload: NewCommentInput): SubmitResult {
+      this.payloads.push(payload);
+      return { ok: true, number: this.payloads.length, id: `cmt-${this.payloads.length}` };
+    }
+  }
+
+  function editHero(controller: OverlayController, doc: FakeDocument, q: (s: string) => FakeElement | null) {
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+  }
+
+  it("renders the prompt field for a member session, not for a guest session", () => {
+    const member = makeController({ currentUser: { displayName: "Ada", role: "member" } });
+    editHero(member.controller, member.doc, member.q);
+    expect(member.q(".sc-ep-prompt")).not.toBeNull();
+
+    const guest = makeController({ currentUser: { displayName: "Gus", role: "guest" } });
+    editHero(guest.controller, guest.doc, guest.q);
+    expect(guest.q(".sc-ep-prompt")).toBeNull();
+  });
+
+  it("writes the captured prompt via agentPromptWriter after the comment is created and BEFORE enqueue", async () => {
+    const enqueued: string[] = [];
+    const written: Array<{ id: string; text: string }> = [];
+    const enqueuer: AgentEnqueuer = {
+      enqueue: async (id) => {
+        enqueued.push(id);
+        return true;
+      },
+    };
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async (id, text) => {
+        // Ordering assertion: nothing has been enqueued yet at write time.
+        expect(enqueued).toEqual([]);
+        written.push({ id, text });
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      canSendToAgent: true,
+      enqueuer,
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    editHero(controller, doc, q);
+    q(".sc-ep-prompt")!.value = "Make the button pop";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-send")!.dispatch("click", {});
+    q("textarea")!.value = "note";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(written).toEqual([{ id: "cmt-1", text: "Make the button pop" }]);
+    expect(enqueued).toEqual(["cmt-1"]);
+  });
+
+  it("'Save comment' alone still writes a typed prompt (independent of enqueueToAgent)", async () => {
+    const written: Array<{ id: string; text: string }> = [];
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async (id, text) => {
+        written.push({ id, text });
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    editHero(controller, doc, q);
+    q(".sc-ep-prompt")!.value = "Prompt without sending";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-save")!.dispatch("click", {}); // Save, not Send
+    q("textarea")!.value = "note";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(written).toEqual([{ id: "cmt-1", text: "Prompt without sending" }]);
+  });
+
+  it("skips the write entirely when no prompt text was typed (no pointless round trip)", async () => {
+    let calls = 0;
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async () => {
+        calls++;
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    editHero(controller, doc, q);
+    q(".sc-ep-save")!.dispatch("click", {});
+    q("textarea")!.value = "note only";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(calls).toBe(0);
+  });
+
+  it("an ordinary (non-template) comment never picks up a stale prompt from an earlier closed-but-unsaved edit session", async () => {
+    let calls = 0;
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async () => {
+        calls++;
+        return true;
+      },
+    };
+    const submitter = new IdSubmitter();
+    const { controller, doc, q } = makeController({
+      submitter,
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    // Type a prompt, then abandon the edit panel via Esc (buffer preserved,
+    // G13/R7) instead of saving/discarding it.
+    editHero(controller, doc, q);
+    q(".sc-ep-prompt")!.value = "Leftover prompt";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    controller.cancelSelection();
+
+    // Now make an ORDINARY element-mode comment (no changeSet at all).
+    const el = hostEl(doc, "p", "Paragraph");
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    q("textarea")!.value = "unrelated comment";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(calls).toBe(0);
+  });
+
+  it("code review fix: re-targeting to a DIFFERENT element clears the pending prompt; reopening the SAME element preserves it", () => {
+    const { controller, doc, q } = makeController({
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    const hero = hostEl(doc, "h1", "Hero");
+    const para = hostEl(doc, "p", "Paragraph");
+    controller.changeMode("edit");
+
+    controller.handleEditClick(hero as unknown as Element);
+    q(".sc-ep-prompt")!.value = "For the hero";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+
+    // Esc closes the panel UI but preserves the buffer (G13/R7) — reopening
+    // the SAME element must still show the typed text.
+    controller.cancelSelection();
+    controller.handleEditClick(hero as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe("For the hero");
+
+    // Re-targeting to a DIFFERENT element must NOT silently carry the prior
+    // element's prompt along — it should read empty for the new target.
+    controller.handleEditClick(para as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe("");
+  });
+
+  it("code review fix: a slow first save's async gap does not let a second element's prompt leak onto (or get clobbered by) it", async () => {
+    // A submitter whose completion this test controls, to interleave a second
+    // edit-and-save session while the first one's submit() is still pending.
+    let resolveFirst!: (r: SubmitResult) => void;
+    let submitCount = 0;
+    const written: Array<{ id: string; text: string }> = [];
+    class DeferredSubmitter implements CommentSubmitter {
+      submit(): Promise<SubmitResult> {
+        submitCount++;
+        if (submitCount === 1) {
+          return new Promise((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve({ ok: true, number: submitCount, id: `cmt-${submitCount}` });
+      }
+    }
+    const agentPromptWriter: AgentPromptWriter = {
+      write: async (id, text) => {
+        written.push({ id, text });
+        return true;
+      },
+    };
+    const { controller, doc, q } = makeController({
+      submitter: new DeferredSubmitter(),
+      agentPromptWriter,
+      currentUser: { displayName: "Ada", role: "member" },
+    });
+    const hero = hostEl(doc, "h1", "Hero");
+    const para = hostEl(doc, "p", "Paragraph");
+    controller.changeMode("edit");
+
+    // Session 1: type a prompt for the hero and start saving (submit() hangs).
+    controller.handleEditClick(hero as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "64";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    q(".sc-ep-prompt")!.value = "For the hero";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-save")!.dispatch("click", {});
+    q("textarea")!.value = "note 1";
+    const firstSubmit = q(".sc-btn-primary")!.dispatch("click", {});
+
+    // While session 1 is still awaiting, re-target to the paragraph and start
+    // a second, independent save with its OWN prompt text.
+    await flush();
+    controller.handleEditClick(para as unknown as Element);
+    expect(q(".sc-ep-prompt")!.value).toBe(""); // session 1's text must not leak here
+    q(".sc-ep-ctl-font-size")!.value = "20";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    q(".sc-ep-prompt")!.value = "For the paragraph";
+    q(".sc-ep-prompt")!.dispatch("input", {});
+    q(".sc-ep-save")!.dispatch("click", {});
+    q("textarea")!.value = "note 2";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // Now let session 1's submit resolve.
+    resolveFirst({ ok: true, number: 1, id: "cmt-1" });
+    await firstSubmit;
+    await flush();
+
+    // Each save's prompt must be attributed to its OWN comment id — neither
+    // dropped nor cross-attributed to the other.
+    expect(written.sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: "cmt-1", text: "For the hero" },
+      { id: "cmt-2", text: "For the paragraph" },
+    ]);
   });
 });
 

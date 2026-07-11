@@ -31,6 +31,11 @@ import {
 import { assertAllowedSupabaseUrl } from "../config/supabase-url.js";
 import pkg from "../../package.json";
 import { findRepoLink, applyRepoLink } from "../config/repo-link.js";
+import { dirname } from "node:path";
+import {
+  buildRepoDiscoverySeam,
+  type RepoAnchor,
+} from "./repo-discovery.js";
 import { decodeJwtExp } from "../auth/identity.js";
 import {
   RefreshingTokenSource,
@@ -160,12 +165,22 @@ export async function runMcpServer(): Promise<void> {
   // which preview's comments this session reads, so different repos map to
   // different projects without a global switch. Credentials stay from the global
   // binding. Best-effort: a link-file problem never blocks the server.
+  // U12: anchor the repo-discovery seam to the SAME repo-link resolution used
+  // above (never a second, possibly-divergent lookup). `null` means no repo
+  // maps to this launch at all (no supercomment.json found, or an env
+  // binding is in use) — the seam then always degrades (see repo-discovery.ts).
+  let discoveryAnchor: RepoAnchor | null = null;
+
   const envBinding = bindingFromEnv(process.env);
   if (!envBinding) {
     try {
       const found = await findRepoLink(process.cwd());
       if (found) {
         binding = applyRepoLink(binding, found.link);
+        discoveryAnchor = {
+          repoRoot: dirname(found.path),
+          anchoredPreviewId: found.link.previewId,
+        };
         logStderr(
           `repo link ${found.path} -> preview ${binding.previewId}` +
             (found.link.project ? ` (${found.link.project})` : ""),
@@ -254,7 +269,19 @@ export async function runMcpServer(): Promise<void> {
     version: SERVER_VERSION,
   });
 
-  registerTools(server, store);
+  // Probe the filesystem AT MOST ONCE here (U12): the seam's `discover()` is
+  // then a pure, synchronous lookup for the lifetime of the process, safe to
+  // call on every tool read without re-probing (R18). A construction failure
+  // must never block the server — fall back to the always-degraded seam.
+  let discovery;
+  try {
+    discovery = await buildRepoDiscoverySeam(discoveryAnchor);
+  } catch (err) {
+    logStderr(`repo discovery probe failed (degrading): ${errorMessage(err)}`);
+    discovery = await buildRepoDiscoverySeam(null);
+  }
+
+  registerTools(server, store, discovery);
   logStderr(
     "tools registered: list_open_comments, get_all_open, get_comment, " +
       "resolve_comment, dismiss_comment, list_projects, use_project",

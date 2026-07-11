@@ -131,6 +131,24 @@ export class OverlayController {
   private confirmModal: ConfirmModal | null = null;
   /** The visual-editor properties panel (U9); open only while editing an element. */
   private editPanel: PropertiesPanel | null = null;
+  /**
+   * U5: the properties-panel footer's in-progress "prompt for agent" text
+   * (member sessions only — the panel never renders the field for a guest, so
+   * this stays empty for one). Lives on the controller (not the panel) so it
+   * survives the panel closing/reopening across an edit session, mirroring
+   * where `editSession`/`previewLog` live. Bound to a comment only once one is
+   * actually created in `completeSubmit` — there is no id to bind to earlier.
+   */
+  private pendingPromptText = "";
+  /**
+   * The element `pendingPromptText` was typed against (code review fix,
+   * julik-frontend-races): re-targeting `openEditPanel` to a DIFFERENT
+   * element clears the buffer, since a prompt is a per-send instruction
+   * about "what I'm about to save", not a cross-element accumulator like
+   * `editSession` — closing the panel and reopening the SAME element still
+   * preserves it. `null` when no element has been targeted yet.
+   */
+  private editPanelElement: Element | null = null;
   /** A selection + draft waiting on a guest name before submission. */
 
   /** Responsive device-mode (top-level controllers only; null in the iframe child). */
@@ -569,6 +587,26 @@ export class OverlayController {
     const name = this.guestStore.get();
     if (!name) return; // still no name -> stay blocked
 
+    // U13: fold the visual change-set into a `template` comment. ONLY a submit
+    // that came from the editor's "Save as comment" carries the buffer — an
+    // ordinary comment made while edits happen to be buffered must not absorb
+    // them. Computed HERE, synchronously and before any await (moved up from
+    // after captureContext — toChangeSet() does no I/O), so the change-set
+    // read and the prompt-buffer snapshot below both happen atomically before
+    // a concurrently-dispatched second edit-and-save can mutate either one
+    // out from under this call (code review fix, julik-frontend-races).
+    const changeSet = asTemplate ? this.editSession.toChangeSet() : null;
+
+    // U5 (R1-R3/R6): snapshot the private prompt into a LOCAL variable now,
+    // synchronously, rather than reading `this.pendingPromptText` after the
+    // async work below resolves — a second edit-and-save session started
+    // while this one is in flight (openEditPanel re-targets, or the user
+    // types a new prompt) mutates the SAME shared field, so reading it late
+    // could pick up the wrong session's text or read it after it was already
+    // cleared. Gated on `changeSet` (a TEMPLATE save), same as the write below.
+    const capturedPromptText = changeSet ? this.pendingPromptText.trim() : "";
+    if (changeSet) this.pendingPromptText = "";
+
     const context = await this.captureContext(target);
 
     // U9 (R15): guarantee a per-comment, ELEMENT-scoped "before" artifact is
@@ -580,13 +618,6 @@ export class OverlayController {
     const element = primaryElementOf(target);
     await attachBeforeArtifact(context, element);
 
-    // U13: fold the visual change-set into a `template` comment. ONLY a submit
-    // that came from the editor's "Save as comment" carries the buffer — an
-    // ordinary comment made while edits happen to be buffered must not absorb
-    // them. captureContext already rastered the MODIFIED DOM (previews are still
-    // applied at submit, before any framework revert — G6), so the screenshot is
-    // the modified state (R17).
-    const changeSet = asTemplate ? this.editSession.toChangeSet() : null;
     if (changeSet) {
       context.changeSet = changeSet;
     }
@@ -615,6 +646,13 @@ export class OverlayController {
       // U13/G5: SURFACE the rejection instead of swallowing it, and PRESERVE the
       // draft + edit buffer so the reviewer can trim/retry (rate_limited /
       // payload_too_large) or reload (no_review_session). Never cancel here.
+      // The prompt snapshot captured above is restored the same way, UNLESS a
+      // second edit-and-save session has already typed something new into the
+      // buffer in the meantime — never clobber a newer, still-in-progress
+      // prompt with this failed attempt's stale one.
+      if (capturedPromptText && this.pendingPromptText === "") {
+        this.pendingPromptText = capturedPromptText;
+      }
       this.showSubmitError(result.message);
       return;
     }
@@ -644,10 +682,36 @@ export class OverlayController {
     // ride a subsequent unrelated comment.
     if (changeSet) this.editSession.discard();
 
-    // Phase 2: the editor's "Send to agent" action also enqueues the saved
-    // template. Best-effort — a failed enqueue never breaks the save (the member
-    // can still send it from the dashboard). The enqueue_review_comment RPC
-    // re-verifies the member session + send-to-agent grant server-side.
+    // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
+    // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really
+    // is the editor footer's save/send) — same as the enqueue gate below — so
+    // an ORDINARY comment made via a different mode can never pick up a stale
+    // prompt left over from an earlier edit session that was closed (Esc) but
+    // never saved/discarded. Written AFTER the comment is created (there is no
+    // id to bind to any earlier) and BEFORE the enqueue call, so a snapshot
+    // taken by send_comment_to_agent (0044) already sees the live prompt.
+    // Deliberately independent of `enqueueToAgent`: a plain "Save comment"
+    // alone still persists a typed prompt, so it can be sent later from the
+    // dashboard by anyone with the grant. Uses the SNAPSHOT captured at the
+    // top of this call, not a fresh read of `this.pendingPromptText` (which a
+    // concurrently-dispatched second session may have already overwritten or
+    // cleared — code review fix, julik-frontend-races).
+    if (changeSet && result.id) {
+      const promptText = capturedPromptText;
+      if (promptText && this.config.agentPromptWriter) {
+        await this.config.agentPromptWriter.write(result.id, promptText);
+      }
+      // No clear here: `this.pendingPromptText` was already reset at capture
+      // time (top of this call). Clearing it again here would wrongly wipe
+      // out a SECOND session's in-progress typing if one started while this
+      // save was still in flight.
+    }
+
+    // Phase 2 (now U3): the editor's "Send to agent" action also enqueues the
+    // saved template. Best-effort — a failed enqueue never breaks the save
+    // (the member can still send it from the dashboard). The
+    // send_comment_to_agent RPC re-verifies the member session +
+    // send-to-agent grant server-side.
     if (enqueueToAgent && changeSet && result.id && this.config.enqueuer) {
       await this.config.enqueuer.enqueue(result.id);
     }
@@ -748,6 +812,16 @@ export class OverlayController {
   /** True when the current reviewer is a guest (the email gate applies to them). */
   private isGuest(): boolean {
     return this.config.currentUser?.role === "guest";
+  }
+
+  /**
+   * U5: true when the current reviewer is a workspace MEMBER — the inverse of
+   * {@link isGuest}. Derived from `currentUser.role` (no parallel role field);
+   * absent `currentUser` (tunnel/standalone/tests) is treated as "not a guest",
+   * matching `isGuest()`'s own default.
+   */
+  private isMemberSession(): boolean {
+    return !this.isGuest();
   }
 
   /**
@@ -1099,6 +1173,14 @@ export class OverlayController {
     // UI-only teardown of any prior panel — previews for already-edited elements
     // persist (cumulative visual) since the reviewer is still in the session.
     this.dismissEditPanel();
+    // Code review fix (julik-frontend-races): re-targeting to a genuinely
+    // DIFFERENT element clears any typed-but-unsaved prompt text — it should
+    // not silently carry over and attach itself to whatever gets saved next.
+    // Reopening the SAME element (e.g. after an Esc) preserves it.
+    if (this.editPanelElement !== null && this.editPanelElement !== el) {
+      this.pendingPromptText = "";
+    }
+    this.editPanelElement = el;
     const target = buildEditTarget(el, this.doc);
     this.editPanel = new PropertiesPanel(this.doc, this.shell.layer, el, target, {
       record: (op, revert) => this.recordEdit(op, revert),
@@ -1112,6 +1194,13 @@ export class OverlayController {
       // enqueue). Guests / non-permitted members see only "Save comment".
       canSendToAgent: this.config.canSendToAgent === true,
       onSendToAgent: () => this.beginEditComment(el, { enqueue: true }),
+      // U5: any workspace member (independent of the send-to-agent grant) gets
+      // the private "Prompt for agent" field; a guest session never does.
+      isMember: this.isMemberSession(),
+      getPromptText: () => this.pendingPromptText,
+      onPromptChange: (text) => {
+        this.pendingPromptText = text;
+      },
     });
     // The in-page inspector locks onto the selected element while editing.
     this.inspector.show(el);
@@ -1148,6 +1237,9 @@ export class OverlayController {
   private discardEdits(): void {
     this.editSession.discard();
     this.previewLog.revertAll();
+    // U5: an explicit discard throws away the whole in-progress buffer,
+    // including any typed-but-unsaved prompt text (R7).
+    this.pendingPromptText = "";
   }
 
   /**

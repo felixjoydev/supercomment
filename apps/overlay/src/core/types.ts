@@ -193,13 +193,34 @@ export interface ScreenshotUploader {
  *
  * The editor footer's "Send to agent" action (member sessions with the grant)
  * folds the change-set into a `template` comment AND enqueues it. The enqueue
- * goes through the `enqueue_review_comment` RPC, which server-side re-verifies
- * the caller's member review session + send-to-agent grant (the footer button is
- * UX only). Returns false on any failure (never throws) so a failed enqueue can't
- * break the save. Absent (guest / tunnel / tests) the action just saves.
+ * goes through the `send_comment_to_agent` RPC (0044/U3), which server-side
+ * re-verifies the caller's member review session + send-to-agent grant (the
+ * footer button is UX only). Returns false on any failure (never throws) so a
+ * failed enqueue can't break the save. Absent (guest / tunnel / tests) the
+ * action just saves.
  */
 export interface AgentEnqueuer {
   enqueue(commentId: string): Promise<boolean>;
+}
+
+/**
+ * U5 SEAM — member-authored "prompt for the agent" write path.
+ *
+ * The editor footer's prompt field (any workspace MEMBER session, R1-R3/R6 —
+ * independent of whether that member also holds the send-to-agent grant)
+ * captures a private instruction for the coding agent. Right after the
+ * template comment it's attached to is created, this writes it via
+ * `set_agent_prompt` (0043/U2) with the reviewer's session creds. The RPC
+ * itself re-verifies a MEMBER session server-side (a guest is rejected there);
+ * this seam's own UI gating (isMember on the panel) is the same "server is the
+ * real gate, client gating is UX only" shape as `AgentEnqueuer`. Returns false
+ * on any failure (never throws) so a failed prompt write can never break the
+ * underlying comment save. Absent (guest / tunnel / tests) the prompt just
+ * isn't persisted server-side (the field itself already never renders for a
+ * non-member session either way).
+ */
+export interface AgentPromptWriter {
+  write(commentId: string, body: string): Promise<boolean>;
 }
 
 /**
@@ -237,6 +258,13 @@ export interface OverlayConfig {
    * / tunnel / tests) the action just saves the comment.
    */
   enqueuer?: AgentEnqueuer;
+  /**
+   * U5: writes a member-authored prompt for the agent (set_agent_prompt) right
+   * after a template comment is created, before it is (optionally) enqueued.
+   * Wired in embedded activation with the reviewer's session creds; absent
+   * (guest / tunnel / tests) a typed prompt simply isn't persisted server-side.
+   */
+  agentPromptWriter?: AgentPromptWriter;
   /**
    * Reply / resolve / delete client for a comment thread (0033). Wired in embedded
    * activation with the reviewer's session creds; absent (tunnel / tests) the

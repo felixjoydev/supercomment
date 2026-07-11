@@ -4,6 +4,7 @@ import {
   coerceCommentContext,
   commentRowSchema,
   COMMENT_ROW_COLUMNS,
+  withPrivateExtras,
   type CommentRow,
 } from "./comment-row.js";
 
@@ -94,5 +95,37 @@ describe("COMMENT_ROW_COLUMNS + commentRowSchema", () => {
   it("validates a minimal row and rejects a malformed one", () => {
     expect(commentRowSchema.safeParse(baseRow).success).toBe(true);
     expect(commentRowSchema.safeParse({ ...baseRow, trust_level: "boss" }).success).toBe(false);
+  });
+});
+
+describe("withPrivateExtras (U1: R1-R5, R11)", () => {
+  it("is a no-op when extras are omitted, leaving normalizeCommentRow's output untouched", () => {
+    const n = normalizeCommentRow(baseRow);
+    const merged = withPrivateExtras(n);
+    expect(merged).toEqual(n);
+    expect(merged.privatePrompt).toBeUndefined();
+    expect(merged.referenceConfirmed).toBeUndefined();
+  });
+
+  it("merges a privatePrompt and referenceConfirmed onto the normalized row", () => {
+    const n = normalizeCommentRow(baseRow);
+    const merged = withPrivateExtras(n, {
+      privatePrompt: { body: "sharpen this", authorDisplayName: "Ada" },
+      referenceConfirmed: true,
+    });
+    expect(merged.privatePrompt).toEqual({
+      body: "sharpen this",
+      authorDisplayName: "Ada",
+    });
+    expect(merged.referenceConfirmed).toBe(true);
+    // The rest of the row is untouched.
+    expect(merged.id).toBe(n.id);
+  });
+
+  it("merges partial extras (one field set, the other omitted) independently", () => {
+    const n = normalizeCommentRow(baseRow);
+    const merged = withPrivateExtras(n, { referenceConfirmed: false });
+    expect(merged.referenceConfirmed).toBe(false);
+    expect(merged.privatePrompt).toBeUndefined();
   });
 });
