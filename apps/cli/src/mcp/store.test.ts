@@ -25,6 +25,9 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     context: { selector: "x", anchors: [], url: "https://x", consoleErrors: [] },
     status: "open",
     fidelity: "live",
+    // Default to the agent's work queue so the default listOpenComments (U12,
+    // lane=ready_for_agent) includes these rows; lane-specific tests override.
+    lane: "ready_for_agent",
     is_stale: false,
     resolved_by: null,
     resolved_summary: null,
@@ -46,7 +49,7 @@ function mcp(number: number, trust: "member" | "guest", status: McpComment["stat
     status,
     fidelity: "live",
     kind: "comment",
-    lane: "backlog",
+    lane: "ready_for_agent",
     isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: trust,
@@ -120,6 +123,21 @@ function fakeClient(opts: {
               return {
                 eq(c2: string, v2: unknown) {
                   return {
+                    // Third .eq() = the lane filter (U12): the store adds
+                    // .eq("lane", L) after .eq("status","open") for a specific
+                    // lane. Filter open rows by that lane here.
+                    eq(c3: string, v3: unknown) {
+                      return {
+                        order: async () => ({
+                          data: source.filter(
+                            (r) =>
+                              r.status === "open" &&
+                              (c3 === "lane" ? r.lane === v3 : true),
+                          ),
+                          error: null,
+                        }),
+                      };
+                    },
                     order: async () => ({
                       data: source.filter((r) => r.status === "open"),
                       error: null,
