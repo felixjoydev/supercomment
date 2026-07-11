@@ -92,6 +92,35 @@ describe("commentSchema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("defaults lane to 'backlog' when omitted (existing comments unaffected)", () => {
+    const result = commentSchema.safeParse(baseComment);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.lane).toBe("backlog");
+      expect(result.data.reviewSummary).toBeUndefined();
+    }
+  });
+
+  it("parses an in_review comment carrying an agent review summary", () => {
+    const result = commentSchema.safeParse({
+      ...baseComment,
+      lane: "in_review",
+      reviewSummary: "Capped the button width and wrapped the label.",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.lane).toBe("in_review");
+      expect(result.data.reviewSummary).toBe(
+        "Capped the button width and wrapped the label.",
+      );
+    }
+  });
+
+  it("rejects an invalid lane value", () => {
+    const result = commentSchema.safeParse({ ...baseComment, lane: "shipping" });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("capturedContextSchema", () => {
@@ -677,5 +706,19 @@ describe("mcpCommentSchema — privatePrompt / referenceConfirmed", () => {
       referenceConfirmed: "yes",
     });
     expect(result.success).toBe(false);
+  });
+
+  it("carries lane through the commentSchema extension (default backlog)", () => {
+    const dflt = mcpCommentSchema.safeParse({ ...baseComment, trustLevel: "member" });
+    expect(dflt.success).toBe(true);
+    if (dflt.success) expect(dflt.data.lane).toBe("backlog");
+
+    const explicit = mcpCommentSchema.safeParse({
+      ...baseComment,
+      trustLevel: "member",
+      lane: "ready_for_agent",
+    });
+    expect(explicit.success).toBe(true);
+    if (explicit.success) expect(explicit.data.lane).toBe("ready_for_agent");
   });
 });

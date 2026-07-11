@@ -98,6 +98,7 @@ function makeComment(opts: {
     status: opts.status ?? "open",
     fidelity: opts.fidelity ?? "live",
     kind: "comment",
+    lane: "backlog",
     isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: opts.trustLevel,

@@ -46,6 +46,7 @@ function mcp(number: number, trust: "member" | "guest", status: McpComment["stat
     status,
     fidelity: "live",
     kind: "comment",
+    lane: "backlog",
     isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: trust,

@@ -24,9 +24,11 @@ import {
   commentStatusSchema,
   captureFidelitySchema,
   commentKindSchema,
+  commentLaneSchema,
   type CapturedContext,
   type CaptureFidelity,
   type CommentKind,
+  type CommentLane,
   type CommentStatus,
   type Intent,
   type McpPrivatePrompt,
@@ -42,8 +44,8 @@ import {
  */
 export const COMMENT_ROW_COLUMNS =
   "id, preview_id, number, author_participant, trust_level, intent, severity, " +
-  "note, path, context, status, status_changed_at, fidelity, kind, is_stale, " +
-  "resolved_by, resolved_summary, created_at";
+  "note, path, context, status, status_changed_at, fidelity, kind, lane, " +
+  "review_summary, is_stale, resolved_by, resolved_summary, created_at";
 
 /**
  * A raw `comments` row as returned by PostgREST (REST select) or the broadcast
@@ -67,6 +69,11 @@ export const commentRowSchema = z.object({
   status_changed_at: z.string().nullable().optional(),
   fidelity: captureFidelitySchema.nullable().optional(),
   kind: commentKindSchema.nullable().optional(),
+  // `lane` is NOT NULL in the DB so a REST select always carries it, but the
+  // broadcast trigger payload may predate it — nullable/optional + a `backlog`
+  // default in the normalizer, mirroring kind/fidelity/is_stale.
+  lane: commentLaneSchema.nullable().optional(),
+  review_summary: z.string().nullable().optional(),
   is_stale: z.boolean().nullable().optional(),
   resolved_by: z.string().nullable().optional(),
   resolved_summary: z.string().nullable().optional(),
@@ -113,6 +120,10 @@ export interface NormalizedCommentRow {
   statusChangedAt: string | null;
   fidelity: CaptureFidelity;
   kind: CommentKind;
+  /** Workflow lane while open (defaults to `backlog`). See `commentLaneSchema`. */
+  lane: CommentLane;
+  /** Agent's "what changed" note recorded on the in_review promotion, or null. */
+  reviewSummary: string | null;
   isStale: boolean;
   resolvedBy: string | null;
   resolvedSummary: string | null;
@@ -154,6 +165,8 @@ export function normalizeCommentRow(row: CommentRow): NormalizedCommentRow {
     statusChangedAt: row.status_changed_at ?? null,
     fidelity: row.fidelity ?? "live",
     kind: row.kind ?? "comment",
+    lane: row.lane ?? "backlog",
+    reviewSummary: row.review_summary ?? null,
     isStale: row.is_stale ?? false,
     resolvedBy: row.resolved_by ?? null,
     resolvedSummary: row.resolved_summary ?? null,

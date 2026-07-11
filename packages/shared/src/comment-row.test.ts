@@ -37,6 +37,8 @@ describe("normalizeCommentRow", () => {
     const n = normalizeCommentRow(baseRow);
     expect(n.fidelity).toBe("live");
     expect(n.kind).toBe("comment");
+    expect(n.lane).toBe("backlog");
+    expect(n.reviewSummary).toBeNull();
     expect(n.isStale).toBe(false);
     expect(n.authorParticipant).toBe("part-1");
     expect(n.resolvedBy).toBeNull();
@@ -49,10 +51,14 @@ describe("normalizeCommentRow", () => {
       ...baseRow,
       fidelity: "snapshot",
       kind: "template",
+      lane: "ready_for_agent",
+      review_summary: "raised the CTA to text-lg",
       is_stale: true,
     });
     expect(n.fidelity).toBe("snapshot");
     expect(n.kind).toBe("template");
+    expect(n.lane).toBe("ready_for_agent");
+    expect(n.reviewSummary).toBe("raised the CTA to text-lg");
     expect(n.isStale).toBe(true);
   });
 
@@ -85,8 +91,9 @@ describe("COMMENT_ROW_COLUMNS + commentRowSchema", () => {
   it("lists the load-bearing columns", () => {
     for (const col of [
       "id", "preview_id", "number", "author_participant", "trust_level",
-      "note", "context", "status", "fidelity", "kind", "is_stale",
-      "resolved_by", "resolved_summary", "created_at",
+      "note", "context", "status", "fidelity", "kind", "lane",
+      "review_summary", "is_stale", "resolved_by", "resolved_summary",
+      "created_at",
     ]) {
       expect(COMMENT_ROW_COLUMNS).toContain(col);
     }
@@ -95,6 +102,8 @@ describe("COMMENT_ROW_COLUMNS + commentRowSchema", () => {
   it("validates a minimal row and rejects a malformed one", () => {
     expect(commentRowSchema.safeParse(baseRow).success).toBe(true);
     expect(commentRowSchema.safeParse({ ...baseRow, trust_level: "boss" }).success).toBe(false);
+    expect(commentRowSchema.safeParse({ ...baseRow, lane: "ready_for_agent" }).success).toBe(true);
+    expect(commentRowSchema.safeParse({ ...baseRow, lane: "shipping" }).success).toBe(false);
   });
 });
 

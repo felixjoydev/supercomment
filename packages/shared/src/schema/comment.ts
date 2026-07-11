@@ -6,6 +6,7 @@ import {
   commentStatusSchema,
   captureFidelitySchema,
   commentKindSchema,
+  commentLaneSchema,
 } from "./enums.js";
 import { capturedContextSchema } from "./change-set.js";
 
@@ -42,6 +43,19 @@ export const commentSchema = z.object({
   fidelity: captureFidelitySchema,
   /** `comment` (ordinary) or `template` (carries a visual change-set), R11. */
   kind: commentKindSchema.default("comment"),
+  /**
+   * Workflow lane while open (backlog|ready_for_agent|in_review). "Done" is
+   * `status='resolved'` and "Dismissed" is `status='dismissed'`, never a lane —
+   * see `commentLaneSchema`. Defaults to `backlog` so existing rows/payloads
+   * that predate the column stay valid.
+   */
+  lane: commentLaneSchema.default("backlog"),
+  /**
+   * The agent's short "what changed" note, recorded when a comment is promoted
+   * to `in_review` (mark_comment_in_review). Shown to the reviewer on the
+   * Ready-for-review card. Absent until an in_review promotion supplies one.
+   */
+  reviewSummary: z.string().optional(),
   /** Set when re-anchoring can no longer resolve the element on the live deploy (R13). */
   isStale: z.boolean().default(false),
   /** Who resolved/dismissed it (member user id), when applicable. */
