@@ -18,6 +18,7 @@ import {
 } from "@supercomment/shared";
 
 import type { MarkerComment, Rect, ScreenshotUploader } from "../core/types.js";
+import { displayLaneOf, laneLabelFor, audienceOf } from "../core/lane.js";
 import {
   clusterMarkers,
   partitionByViewport,
@@ -190,6 +191,14 @@ export class MarkerLayer {
         .filter((m) => m.content?.status === "resolved")
         .map((m) => m.number),
     );
+    // U10: an OPEN comment's workflow lane, for a lane-tinted pin (a resolved /
+    // dismissed pin already has its own treatment, so it gets no lane class).
+    const laneByNumber = new Map<number, string>();
+    for (const m of this.markers) {
+      const status = m.content?.status;
+      if (status === "resolved" || status === "dismissed") continue;
+      laneByNumber.set(m.number, m.content?.lane ?? "backlog");
+    }
 
     const clusters = clusterMarkers(visible, this.thresholdPx);
     for (const cluster of clusters) {
@@ -205,6 +214,8 @@ export class MarkerLayer {
         if (templateNumbers.has(n)) cls += " sc-template";
         if (staleNumbers.has(n)) cls += " sc-stale";
         if (resolvedNumbers.has(n)) cls += " sc-resolved";
+        const lane = laneByNumber.get(n);
+        if (lane) cls += ` sc-lane-${lane}`;
         el.className = cls;
       }
       el.style.left = `${cluster.point.x}px`;
@@ -391,6 +402,15 @@ export class MarkerLayer {
       tag.textContent = "Template · visual edit";
       entry.appendChild(tag);
     }
+
+    // U10: the workflow lane, audience-aware (a reviewer never sees the internal
+    // pipeline names). Shown for every comment so a reviewer can see whether
+    // their feedback is Open, In progress, Ready for review, or Done.
+    const lane = displayLaneOf(m.content);
+    const laneChip = this.doc.createElement("div");
+    laneChip.className = `sc-comment-lane sc-lane-${lane}`;
+    laneChip.textContent = laneLabelFor(lane, audienceOf(this.currentUser?.role));
+    entry.appendChild(laneChip);
 
     const noteText = m.content?.note ?? "";
     if (noteText) {

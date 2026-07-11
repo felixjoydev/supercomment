@@ -11,6 +11,7 @@ import type {
   NewCommentInput,
   CapturedContext,
   CommentKind,
+  CommentLane,
   ElementAnchor,
   DeviceSurface,
 } from "@supercomment/shared";
@@ -69,6 +70,17 @@ export interface MarkerComment {
   createdAt?: string;
   /** `template` = a visual-edit comment; drives the distinct marker treatment (R11). */
   kind?: CommentKind;
+  /**
+   * Workflow lane while open (0054/U10): drives the pin's lane treatment, the
+   * popover lane chip, and the member lane controls. Absent → treated as
+   * backlog. "Done"/"Dismissed" are projected from `status`, never a lane value.
+   */
+  lane?: CommentLane;
+  /**
+   * The agent's "what changed" note, set when a comment was promoted to
+   * in_review; shown to the reviewer on the Ready-for-review pin. Absent when none.
+   */
+  reviewSummary?: string;
   /**
    * Reviewer-uploaded reference images ("what I want", R19) — `captures` bucket
    * object PATHS, signed on demand for the popover (U12 read). Carried from

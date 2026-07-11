@@ -19,9 +19,16 @@
  * customer origin) cannot run in this sandbox — only arg/row mapping is tested.
  */
 import { pagePathOf, isThreadUnread } from "@supercomment/shared";
-import type { DeviceSurface, ElementAnchor } from "@supercomment/shared";
+import type { CommentLane, DeviceSurface, ElementAnchor } from "@supercomment/shared";
 
 import type { ExistingCommentMarker, Rect } from "../core/types.js";
+
+/** Coerce a raw lane string to the typed enum (older rows / bad data → backlog). */
+function coerceLane(value: unknown): CommentLane {
+  return value === "ready_for_agent" || value === "in_review"
+    ? value
+    : "backlog";
+}
 
 /**
  * Positional arguments `list_review_comments` expects (mirrors
@@ -52,6 +59,9 @@ export interface RawReviewCommentRow {
   /** Added in 0050: the author edit/delete gate signals. */
   is_own?: boolean;
   is_sent?: boolean;
+  /** Added in 0054: workflow lane + the agent's "what changed" summary. */
+  lane?: string;
+  review_summary?: string | null;
 }
 
 /** A typed existing comment loaded back onto the live deploy. */
@@ -80,6 +90,14 @@ export interface ReviewComment {
   /** Author edit/delete gate (0050): caller authored it, and whether it was sent. */
   isOwn?: boolean;
   isSent?: boolean;
+  /**
+   * Workflow lane (0054); drives pin treatment + lane controls (U10). Optional
+   * so pre-0054 rows / test fixtures without it stay valid — mapRow always
+   * supplies it (default backlog) on the real read path.
+   */
+  lane?: CommentLane;
+  /** The agent's "what changed" note, shown on Ready-for-review items (0054). */
+  reviewSummary?: string | null;
 }
 
 /**
@@ -166,6 +184,12 @@ function mapRow(row: RawReviewCommentRow): ReviewComment {
     // rows / tests; the client gate reads a missing flag as false.
     ...(row.is_own === true ? { isOwn: true } : {}),
     ...(row.is_sent === true ? { isSent: true } : {}),
+    // Present on the real read path (0054 always returns lane); omitted for
+    // pre-0054 rows / fixtures, which the marker treats as backlog.
+    ...(typeof row.lane === "string" ? { lane: coerceLane(row.lane) } : {}),
+    ...(typeof row.review_summary === "string"
+      ? { reviewSummary: row.review_summary }
+      : {}),
     unread: isThreadUnread({
       createdAt: row.created_at ?? "",
       statusChangedAt: row.status_changed_at ?? null,
@@ -201,12 +225,14 @@ export function toExistingMarkers(
       severity: c.severity,
       status: c.status,
       createdAt: c.createdAt,
+      lane: c.lane,
       referenceImages: readReferenceImages(c.context),
       // Only carry the gate signals when truthy so older comments / tests that
       // omit them keep an unchanged content shape (the gate reads them as false).
       ...(c.isOwn ? { isOwn: true } : {}),
       ...(c.isSent ? { isSent: true } : {}),
       ...(c.latestReplyAt !== null ? { hasReplies: true } : {}),
+      ...(c.reviewSummary !== null ? { reviewSummary: c.reviewSummary } : {}),
     },
   }));
 }

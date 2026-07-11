@@ -44,6 +44,16 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   border-radius: 7px;
   box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--accent-ring), 0 4px 14px rgba(35, 31, 24, 0.4);
 }
+/* U10: open-comment workflow lane — a coloured ring marks the pipeline stage
+   (backlog keeps the default pin; ready-for-agent = green "handed off",
+   in-review = blue "under review"). Terminal (resolved/dismissed) pins get no
+   lane class, so their own treatment is untouched. */
+.sc-marker.sc-lane-ready_for_agent {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(47, 140, 68, 0.85), 0 4px 14px rgba(224, 87, 43, 0.4);
+}
+.sc-marker.sc-lane-in_review {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(74, 100, 134, 0.9), 0 4px 14px rgba(224, 87, 43, 0.4);
+}
 .sc-edge.sc-stale {
   background: var(--muted, #8a8578);
 }
@@ -186,6 +196,33 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+/* U10: the audience-aware workflow-lane chip in a comment's popover. */
+.sc-comment-lane {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--surface-soft, #f4f0e8);
+  color: var(--ink-2, #6e6759);
+}
+.sc-comment-lane.sc-lane-ready_for_agent {
+  background: rgba(47, 140, 68, 0.14);
+  color: #2f8c44;
+}
+.sc-comment-lane.sc-lane-in_review {
+  background: rgba(74, 100, 134, 0.14);
+  color: #4a6486;
+}
+.sc-comment-lane.sc-lane-done {
+  background: rgba(47, 140, 68, 0.14);
+  color: #2f8c44;
+}
+.sc-comment-lane.sc-lane-dismissed {
+  color: var(--ink-3, #a29a8a);
+  text-decoration: line-through;
 }
 .sc-comment-note {
   color: var(--ink);
