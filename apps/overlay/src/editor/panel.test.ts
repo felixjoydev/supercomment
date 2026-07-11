@@ -160,6 +160,16 @@ describe("PropertiesPanel — Type settings (text)", () => {
     expect(op.target.selector.length).toBeGreaterThan(0);
   });
 
+  it("records line-height in px, never a unitless multiplier (U1 marquee fix)", () => {
+    const { doc } = makeFakeDom();
+    const { session, q } = mount({ el: makeEl(doc, "p", "Copy"), doc });
+    const input = q(".sc-ep-ctl-line-height");
+    input.value = "26";
+    input.dispatch("input", {});
+    const op = session.list().find((o) => o.property === "line-height")!;
+    expect(op.after).toBe("26px");
+  });
+
   it("records a font-weight select change", () => {
     const { doc } = makeFakeDom();
     const { session, q } = mount({ el: makeEl(doc, "p", "Copy"), doc });

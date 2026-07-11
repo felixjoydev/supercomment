@@ -29,6 +29,7 @@ import type { ChangeOp, EditTarget, InsertionPoint } from "@supercomment/shared"
 import {
   applyStylePreview,
   buildStyleOp,
+  readComputedColor,
   readComputedValue,
 } from "./style-edits.js";
 import {
@@ -36,6 +37,13 @@ import {
   previewMove,
 } from "./structural-edits.js";
 import { buildEditTarget } from "./edit-target.js";
+import { getPropertyMeta, type PropCtx } from "./property-meta.js";
+import {
+  createCanvasProbe,
+  isTransparent,
+  rgbaToHex6,
+  type ColorProbe,
+} from "./color/normalize.js";
 
 /** How the controller records/reverts edits into its durable EditSession + preview log. */
 export interface PanelCallbacks {
@@ -116,6 +124,8 @@ export class PropertiesPanel {
   /** Control re-initializers (read computed → display), re-run on undo. */
   private readonly initializers: Array<() => void> = [];
   private readonly category: Category;
+  /** Shared colour-normalization seam (canvas readback on real pages; U1). */
+  private readonly colorProbe: ColorProbe;
 
   /** Which spacing family the 4-side inputs currently edit. */
   private spacingMode: "padding" | "margin" = "padding";
@@ -134,6 +144,7 @@ export class PropertiesPanel {
     private readonly cb: PanelCallbacks,
   ) {
     this.category = categoryOf(el);
+    this.colorProbe = createCanvasProbe(doc);
     this.root = doc.createElement("div");
     this.root.className = "sc-edit-panel sc-ep-dark";
     this.root.setAttribute("role", "dialog");
@@ -232,7 +243,9 @@ export class PropertiesPanel {
     body.appendChild(
       this.numberRow("Letter spacing", "letter-spacing", { unit: "px", step: 0.5, allowNegative: true }),
     );
-    body.appendChild(this.numberRow("Line height", "line-height", { step: 0.1 }));
+    // Line height reads AND writes px via the registry (a +1 step from 25.6px is
+    // 26.6px, not a 25.6x multiplier — the audited marquee defect).
+    body.appendChild(this.numberRow("Line height", "line-height"));
     body.appendChild(
       this.segmentedRow("Alignment", "text-align", [
         { label: "Left", value: "left" },
@@ -484,11 +497,22 @@ export class PropertiesPanel {
     body.appendChild(row);
 
     this.initializers.push(() => {
-      const rgb = readComputedValue(this.el, property);
-      const asHex = rgbToHex(rgb);
-      if (asHex) {
+      // Alpha-correct read through the shared pipeline (oklch/lab resolve; a
+      // transparent value reads as transparent, not #000000).
+      const c = readComputedColor(this.el, property, this.colorProbe);
+      if (c && isTransparent(c)) {
+        hex.value = "";
+        hex.placeholder = "transparent";
+      } else if (c) {
+        const asHex = rgbaToHex6(c);
         swatch.value = asHex;
         hex.value = asHex;
+      } else {
+        const asHex = rgbToHex(readComputedValue(this.el, property));
+        if (asHex) {
+          swatch.value = asHex;
+          hex.value = asHex;
+        }
       }
       const op = readComputedValue(this.el, "opacity");
       const opNum = op == null ? 1 : parseFloat(op);
@@ -633,7 +657,12 @@ export class PropertiesPanel {
     const input = this.create("input", `sc-ep-number sc-ep-ctl-${property}`) as HTMLInputElement;
     input.type = "number";
     input.setAttribute("aria-label", label);
-    const unit = opts.unit ?? "";
+    // The registry supplies unit / step / range so the read and write sides agree
+    // (line-height writes px, not a unitless multiplier); explicit opts still win.
+    const meta = getPropertyMeta(property);
+    const unit = opts.unit ?? meta.unit;
+    const step = opts.step ?? meta.step;
+    const allowNegative = opts.allowNegative ?? meta.allowNegative;
     const commit = (raw: string): void => {
       if (raw.trim() === "") return;
       if (opts.ensureFlex) this.ensureDisplayFlex();
@@ -641,14 +670,14 @@ export class PropertiesPanel {
     };
     this.on(input, "input", () => commit(input.value));
     const stepper = this.stepper(
-      () => this.bump(input, opts.step ?? 1, opts.allowNegative ?? false, commit),
-      () => this.bump(input, -(opts.step ?? 1), opts.allowNegative ?? false, commit),
+      () => this.bump(input, step, allowNegative, commit),
+      () => this.bump(input, -step, allowNegative, commit),
     );
     wrap.append(input, stepper);
     row.append(lab, wrap);
 
     this.initializers.push(() => {
-      input.value = this.readNumber(property);
+      input.value = meta.displayFrom(readComputedValue(this.el, property), this.dirCtx());
     });
     return row;
   }
@@ -674,9 +703,12 @@ export class PropertiesPanel {
       this.recordStyle(property, select.value);
     });
     row.append(lab, select);
+    const meta = getPropertyMeta(property);
     this.initializers.push(() => {
       const computed = readComputedValue(this.el, property);
-      if (computed && options.some((o) => o.value === computed)) select.value = computed;
+      const ctx = this.dirCtx();
+      const match = options.find((o) => meta.matchesOption(o.value, computed, ctx));
+      if (match) select.value = match.value;
     });
     return row;
   }
@@ -702,9 +734,13 @@ export class PropertiesPanel {
       seg.appendChild(btn);
     }
     row.append(lab, seg);
+    const meta = getPropertyMeta(property);
     this.initializers.push(() => {
       const computed = readComputedValue(this.el, property);
-      for (const b of buttons) b.btn.setAttribute("aria-pressed", String(b.value === computed));
+      const ctx = this.dirCtx();
+      for (const b of buttons) {
+        b.btn.setAttribute("aria-pressed", String(meta.matchesOption(b.value, computed, ctx)));
+      }
     });
     return row;
   }
@@ -767,6 +803,12 @@ export class PropertiesPanel {
   }
 
   // --- Helpers -------------------------------------------------------------
+
+  /** Registry context: the element's writing direction + the shared colour probe. */
+  private dirCtx(): PropCtx {
+    const dir = readComputedValue(this.el, "direction");
+    return { direction: dir === "rtl" ? "rtl" : "ltr", probe: this.colorProbe };
+  }
 
   /** Read a computed value as a bare number string ("48px" → "48"), or "". */
   private readNumber(property: string): string {

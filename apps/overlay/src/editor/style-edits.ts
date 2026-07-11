@@ -15,6 +15,8 @@
  */
 import type { ChangeOp, DeviceSurface, EditTarget } from "@supercomment/shared";
 
+import type { ColorProbe, Rgba } from "./color/normalize.js";
+
 let opCounter = 0;
 /** A stable-ish op id: crypto.randomUUID in the browser, counter fallback. */
 export function newOpId(): string {
@@ -79,6 +81,25 @@ export function readComputedValue(el: Element, property: string): string | null 
     const cs = win?.getComputedStyle?.(el);
     const v = cs?.getPropertyValue?.(property);
     return v != null && v.trim() !== "" ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a colour-valued computed property as alpha-correct sRGB bytes, resolving
+ * modern syntaxes (oklch/lab/color()) through the shared canvas pipeline. Returns
+ * null when unavailable/unparseable. Never throws. (U1 read-truth for colours.)
+ */
+export function readComputedColor(
+  el: Element,
+  property: string,
+  probe: ColorProbe,
+): Rgba | null {
+  const raw = readComputedValue(el, property);
+  if (raw == null) return null;
+  try {
+    return probe.toRgba(raw);
   } catch {
     return null;
   }
