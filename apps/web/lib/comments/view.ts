@@ -111,6 +111,13 @@ export function reconcileUnread(
     ...incoming,
     lastReadAt,
     latestReplyAt,
+    // The raw broadcast row carries neither the comment_queue join nor the
+    // agent_prompts join `toCommentView` needs, so `incoming.sendStatus`/
+    // `privatePrompt` are always null here — carry the existing value forward
+    // rather than letting an unrelated broadcast (e.g. a reply, a status
+    // change) silently wipe them from the on-screen view (code review finding).
+    sendStatus: incoming.sendStatus ?? existing.sendStatus,
+    privatePrompt: incoming.privatePrompt ?? existing.privatePrompt,
     unread: isThreadUnread({
       createdAt: incoming.createdAt,
       statusChangedAt: incoming.statusChangedAt,
@@ -301,7 +308,10 @@ export function groupByPage(comments: readonly CommentView[]): PageGroup[] {
  * directly.
  *
  * `requiresConfirm` is true exactly when the comment is from a guest. The UI
- * shows a confirm step; the API double-checks via `canEnqueue`.
+ * shows a confirm step; since U3, the server-side re-check lives in the
+ * `send_comment_to_agent` RPC itself (not a call to `canEnqueue` from the
+ * route) — `canEnqueue` remains here as the client-side gate `requiresGuestConfirm`
+ * backs, and is exercised directly by this file's own tests.
  */
 export function requiresGuestConfirm(comment: Pick<CommentView, "trustLevel">): boolean {
   return comment.trustLevel === "guest";
