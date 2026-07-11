@@ -90,6 +90,18 @@ describe("server enqueue path (mocked) honors the R23/R11 gate via send_comment_
     expect((r as { data: { status: string } }).data.status).toBe("pending");
   });
 
+  it("a re-send that hits the RPC's dedup path still returns 201 with the existing row (no 200/deduped:true distinction; accepted, documented since U3)", async () => {
+    // send_comment_to_agent's ON CONFLICT ... DO NOTHING dedup path returns
+    // the pre-existing active row as an ordinary success, not a distinct
+    // shape — this route no longer has a way to tell "fresh insert" from
+    // "already queued" apart without a further RPC change, and nothing reads
+    // the old `deduped` field today (code review finding, api-contract).
+    const supabase = fakeRpc({ data: [{ id: "q1", status: "pending" }] });
+    const r = await sendViaRpc({ id: "c1", previewId: "p1", trustLevel: "member" }, false, supabase);
+    expect(r.status).toBe(201);
+    expect((r as { data: { status: string; deduped?: boolean } }).data.deduped).toBeUndefined();
+  });
+
   it("GUEST comment without confirm is rejected with 409 (RPC raises guest_confirm_required / P0002)", async () => {
     const supabase = fakeRpc({ error: { code: "P0002", message: "guest_confirm_required" } });
     const r = await sendViaRpc({ id: "c2", previewId: "p1", trustLevel: "guest" }, false, supabase);

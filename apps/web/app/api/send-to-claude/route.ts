@@ -140,6 +140,19 @@ export async function POST(request: NextRequest) {
 
   const queued = Array.isArray(rpcData) ? rpcData[0] : rpcData;
 
+  // Code-review note (api-contract): the pre-U3 direct-insert path returned
+  // HTTP 200 + `{ deduped: true, ... }` when a re-send hit the active-row
+  // conflict (23505). `send_comment_to_agent`'s dedup path is now absorbed
+  // into the atomic RPC and returns the existing row as an ordinary success,
+  // so every response here is 201 with no `deduped` field — an intentional
+  // simplification, not an oversight: no client currently reads `deduped`,
+  // and resurrecting the old distinction would need either an RPC signature
+  // change (a migration, to expose its already-tracked internal insert-vs-dedup
+  // flag) or a clock-skew-prone app-side heuristic (comparing `created_at`
+  // against a request-start timestamp) — neither is worth it for a field
+  // nothing consumes today. If a future caller needs "was this a fresh send
+  // or already queued," add it deliberately via the RPC's return shape.
+  //
   // VERIFY IN REAL ENV: the local MCP queue consumer (U5/U12) reads this row
   // over the outbound channel and reports back working→done. End-to-end local
   // delivery cannot be exercised in this sandbox.
