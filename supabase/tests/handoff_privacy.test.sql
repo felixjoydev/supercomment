@@ -1,10 +1,11 @@
 -- =============================================================================
 -- handoff_privacy.test.sql — U13 early wire-privacy proof
 -- =============================================================================
--- pgTAP. Requires a LIVE Postgres with all migrations through 0044 applied
+-- pgTAP. Requires a LIVE Postgres with all migrations through 0046 applied
 -- (0043 agent_prompts/set_agent_prompt/get_agent_prompt; 0044
 -- agent_reference_confirmations/send_comment_to_agent + comment_queue's
--- prompt_snapshot/prompt_snapshot_author/prompt_snapshot_at columns).
+-- prompt_snapshot/prompt_snapshot_author/prompt_snapshot_at columns; 0046
+-- scrub_prompt_overlap fix + dismiss_comment scrub, see scenario 6b).
 --
 -- Purpose (R2, R9): prove the highest-risk invariant -- a workspace member's
 -- private prompt/instruction, and the fact that a guest send was confirmed,
@@ -77,7 +78,7 @@ begin;
 
 create extension if not exists pgtap;
 
-select plan(24);
+select plan(28);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (as superuser).
@@ -341,6 +342,73 @@ select is(
   (select resolved_summary from _resolve_no_prompt),
   'No related prompt exists for this comment; summary should pass through untouched.',
   'a comment with no live prompt at all resolves with its summary fully intact (no behavior change)');
+
+-- ===========================================================================
+-- Scenario 6b: 0046 fixes -- the line-break/short-prompt scrub bypass three
+-- independent code reviewers (testing, security, adversarial) found in
+-- scenario 6's original per-line chunking, plus dismiss_comment's symmetric
+-- gap (correctness finding: 0045 never scrubbed dismiss_comment at all).
+-- ===========================================================================
+set local role postgres;
+insert into public.comments
+  (id, preview_id, number, author_participant, trust_level, intent, severity, note) values
+  ('f0060000-0000-0000-0000-000000000004', 'f0030000-0000-0000-0000-000000000001', 4,
+     'f0050000-0000-0000-0000-000000000001', 'member', 'fix', 'important', 'comment P3 (linebreak prompt)'),
+  ('f0060000-0000-0000-0000-000000000005', 'f0030000-0000-0000-0000-000000000001', 5,
+     'f0050000-0000-0000-0000-000000000001', 'member', 'fix', 'important', 'comment P4 (short prompt)'),
+  ('f0060000-0000-0000-0000-000000000006', 'f0030000-0000-0000-0000-000000000001', 6,
+     'f0050000-0000-0000-0000-000000000001', 'member', 'fix', 'important', 'comment P5 (trivial prompt, dismiss path)');
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"f0040000-0000-0000-0000-000000000001","role":"authenticated","is_anonymous":false}';
+
+select public.set_agent_prompt('f0060000-0000-0000-0000-000000000004', E'skip the null check\nfor the guest path entirely');
+select public.set_agent_prompt('f0060000-0000-0000-0000-000000000005', 'hide auth bug');
+select public.set_agent_prompt('f0060000-0000-0000-0000-000000000006', 'ok');
+
+-- Case D: a summary that echoes a prompt whose sensitive content straddles a
+-- LINE BREAK (flattened to a space in prose, as any summary naturally would)
+-- -- the original per-line chunking missed this; the sliding-window fix over
+-- the flattened prompt must catch it.
+select is(
+  (select resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000004',
+    'Done: skip the null check for the guest path entirely. Verified in staging.'
+  )),
+  null,
+  '0046: a summary echoing a prompt that straddles a line break is now blanked (was NOT caught pre-0046)');
+
+-- Case E: a short (13-char) but distinctive prompt, previously exempt under
+-- the old 15-char-per-line floor -- must now be caught (new floor is 8).
+select is(
+  (select resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000005',
+    'I decided to hide auth bug for now, will revisit next sprint.'
+  )),
+  null,
+  '0046: a short (13-char) but distinctive prompt overlap is now blanked (was exempt pre-0046 under the old 15-char floor)');
+
+-- Case F: a TRIVIAL 2-char prompt ("ok") must still be exempt -- the lowered
+-- floor (8, from 15) must not start false-positiving on generic filler.
+select is(
+  (select resolved_summary from public.resolve_comment(
+    'f0060000-0000-0000-0000-000000000006',
+    'ok, this looks good, shipping it'
+  )),
+  'ok, this looks good, shipping it',
+  '0046: a trivial 2-char prompt ("ok") still does not trigger a false positive');
+
+-- Case G: dismiss_comment now carries the SAME scrub (0045 never added one).
+-- Reuses comment P3's line-break prompt (case D already resolved it, but
+-- resolve_comment/dismiss_comment don't gate on current status, matching
+-- pre-existing behavior) to prove the guard is symmetric across both RPCs.
+select is(
+  (select resolved_summary from public.dismiss_comment(
+    'f0060000-0000-0000-0000-000000000004',
+    'wontfix: skip the null check for the guest path entirely, not worth it'
+  )),
+  null,
+  '0046: dismiss_comment blanks resolved_summary on the same overlap check resolve_comment uses (0045 never scrubbed dismiss_comment at all)');
 
 select * from finish();
 rollback;
