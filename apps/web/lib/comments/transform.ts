@@ -46,6 +46,10 @@ export function toCommentView(
     status: n.status,
     fidelity: n.fidelity,
     kind: n.kind,
+    // lane + reviewSummary ride the comments row (incl. the full-row broadcast
+    // payload), so both the initial load and realtime deliveries carry them.
+    lane: n.lane,
+    reviewSummary: n.reviewSummary,
     isStale: n.isStale,
     context: n.context,
     path: n.path,

@@ -28,6 +28,8 @@ function mk(over: Partial<CommentView>): CommentView {
     resolvedSummary: null,
     createdAt: over.createdAt ?? "2026-07-04T10:00:00.000Z",
     statusChangedAt: over.statusChangedAt ?? "2026-07-04T10:00:00.000Z",
+    lane: over.lane ?? "backlog",
+    reviewSummary: over.reviewSummary ?? null,
     sendStatus: null,
     pageKey: over.pageKey ?? "/",
     pageLabel: over.pageLabel ?? "Home",

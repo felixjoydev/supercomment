@@ -8,7 +8,7 @@
  */
 
 import { isThreadUnread } from "@supercomment/shared";
-import type { CommentStatus, Severity } from "@supercomment/shared";
+import type { CommentStatus, CommentLane, Severity } from "@supercomment/shared";
 import type { CommentView } from "./types";
 
 export type DashboardFilter = "open" | "history" | "all";
@@ -90,6 +90,13 @@ function shallowEqualComment(a: CommentView, b: CommentView): boolean {
     // re-fetches its replies (comment-thread keys its reply load on latestReplyAt).
     a.latestReplyAt === b.latestReplyAt &&
     a.statusChangedAt === b.statusChangedAt &&
+    // lane + reviewSummary change on a lane move / in_review promotion (via
+    // optimistic local update OR the full-row broadcast). Compare them so a
+    // lane-only change still yields a new row and the board re-renders it —
+    // otherwise mergeComment returns the same array and a moved card is stuck
+    // in its old column until a full reload.
+    a.lane === b.lane &&
+    a.reviewSummary === b.reviewSummary &&
     // sendStatus and privatePrompt are set by OPTIMISTIC local updates (the send
     // button, the agent-prompt editor), never by a broadcast (reconcileUnread
     // carries them forward), so they MUST be compared here — otherwise a
@@ -250,6 +257,106 @@ export function applyStatusTransition(
     ...comments[idx]!,
     status,
     resolvedSummary: summary ?? comments[idx]!.resolvedSummary,
+  };
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow lanes (Kanban pipeline). The DISPLAYED lane is a projection so it
+// can never disagree with status: Done == status='resolved', Dismissed ==
+// status='dismissed'; only an OPEN comment shows its `lane` column value.
+// ---------------------------------------------------------------------------
+
+/** The lane a comment is SHOWN in — the projection over status + lane (§2). */
+export type DisplayLane = CommentLane | "done" | "dismissed";
+
+export function displayLane(c: Pick<CommentView, "status" | "lane">): DisplayLane {
+  if (c.status === "dismissed") return "dismissed";
+  if (c.status === "resolved") return "done";
+  return c.lane; // backlog | ready_for_agent | in_review (open comments only)
+}
+
+/**
+ * The dashboard's primary lane filter. "all" is every lane EXCEPT dismissed
+ * (dismissed is reached via the secondary "Closed" affordance, `isClosed`);
+ * each other value selects exactly one display lane.
+ */
+export type LaneFilter =
+  | "all"
+  | "backlog"
+  | "ready_for_agent"
+  | "in_review"
+  | "done"
+  | "dismissed";
+
+export function matchesLaneFilter(c: CommentView, filter: LaneFilter): boolean {
+  const dl = displayLane(c);
+  if (filter === "all") return dl !== "dismissed";
+  return dl === filter;
+}
+
+export function filterByLane(
+  comments: readonly CommentView[],
+  filter: LaneFilter,
+): CommentView[] {
+  return comments.filter((c) => matchesLaneFilter(c, filter));
+}
+
+/** Done + Dismissed — the "Closed" secondary view (both terminal states). */
+export function isClosed(c: Pick<CommentView, "status">): boolean {
+  return c.status === "resolved" || c.status === "dismissed";
+}
+
+/** Ready-for-review = the reviewer's "needs my review" bucket (in_review). */
+export function needsReview(c: Pick<CommentView, "status" | "lane">): boolean {
+  return displayLane(c) === "in_review";
+}
+
+export interface LaneCounts {
+  /** Everything not dismissed (the primary "All" tab). */
+  all: number;
+  backlog: number;
+  ready_for_agent: number;
+  in_review: number;
+  done: number;
+  dismissed: number;
+}
+
+export function countByLane(comments: readonly CommentView[]): LaneCounts {
+  const counts: LaneCounts = {
+    all: 0,
+    backlog: 0,
+    ready_for_agent: 0,
+    in_review: 0,
+    done: 0,
+    dismissed: 0,
+  };
+  for (const c of comments) {
+    const dl = displayLane(c);
+    counts[dl] += 1;
+    if (dl !== "dismissed") counts.all += 1;
+  }
+  return counts;
+}
+
+/**
+ * Optimistic lane move — the card control / board drag apply this before the
+ * RPC's broadcast confirms it, analogous to applyStatusTransition. Pure:
+ * returns a new list; a missing id is a no-op.
+ */
+export function applyLaneTransition(
+  comments: readonly CommentView[],
+  commentId: string,
+  lane: CommentLane,
+  reviewSummary?: string | null,
+): CommentView[] {
+  const idx = comments.findIndex((c) => c.id === commentId);
+  if (idx === -1) return comments as CommentView[];
+  const next = comments.slice();
+  next[idx] = {
+    ...comments[idx]!,
+    lane,
+    reviewSummary: reviewSummary ?? comments[idx]!.reviewSummary,
   };
   return next;
 }

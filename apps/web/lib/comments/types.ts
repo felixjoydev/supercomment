@@ -15,6 +15,7 @@ import type {
   CaptureFidelity,
   CapturedContext,
   CommentKind,
+  CommentLane,
 } from "@supercomment/shared";
 
 // The raw `comments` row shape is now the single source of truth in shared.
@@ -38,6 +39,19 @@ export interface CommentView {
   fidelity: CaptureFidelity;
   /** `comment` (ordinary) or `template` (carries a visual change-set), R11. */
   kind: CommentKind;
+  /**
+   * Workflow lane while OPEN (backlog|ready_for_agent|in_review). The DISPLAYED
+   * lane is a projection (`displayLane`): a resolved comment shows "done" and a
+   * dismissed one "dismissed", regardless of this value — so lane never
+   * disagrees with status. Rides the comments-row broadcast, so it stays live.
+   */
+  lane: CommentLane;
+  /**
+   * The agent's short "what changed" note, set when a comment was promoted to
+   * in_review (mark_comment_in_review). Shown to the reviewer on the
+   * Ready-for-review card. Null when none was recorded.
+   */
+  reviewSummary: string | null;
   /** True when re-anchoring could not resolve the element on the live deploy (R13). */
   isStale: boolean;
   context: CapturedContext | null;
