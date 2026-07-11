@@ -81,6 +81,12 @@ export class MarkerLayer {
      * (R19). Absent (tunnel/tests) → the reply composer shows no attach control.
      */
     private readonly uploader?: ScreenshotUploader,
+    /**
+     * Fired when the comment popover opens (with its comments) or closes (null),
+     * so the controller can re-apply a template's visual edits live while its pin
+     * is selected (the modified-view preview) and revert them on close.
+     */
+    private readonly onPopoverComments?: (comments: MarkerComment[] | null) => void,
   ) {
     this.container = doc.createElement("div");
     this.container.className = "sc-marker-container";
@@ -309,13 +315,19 @@ export class MarkerLayer {
     this.popover = pop;
     this.popoverNumbers = numbers.slice();
     this.positionPopover(anchorPoint);
+    // Let the controller preview any template edits for the just-opened comments.
+    this.onPopoverComments?.(
+      entries.map((mk) => mk.content).filter((c): c is MarkerComment => !!c),
+    );
   }
 
   /** Public close — remove the popover element and clear refs. */
   closePopover(): void {
+    const wasOpen = this.popover !== null;
     this.popover?.remove();
     this.popover = null;
     this.popoverNumbers = null;
+    if (wasOpen) this.onPopoverComments?.(null); // revert any live template preview
   }
 
   /** The popover's top bar: a "Comment(s)" title on the left, close on the right. */

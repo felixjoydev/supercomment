@@ -295,6 +295,46 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     expect(tag!.textContent).toContain("Template");
   });
 
+  it("notifies onPopoverComments with the popover's comments on open and null on close (U9 live preview)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const seen: Array<MarkerComment[] | null> = [];
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined, // cluster threshold
+      undefined, // thread client
+      undefined, // current user
+      undefined, // uploader
+      (comments) => seen.push(comments),
+    );
+    const content: MarkerComment = {
+      id: "c9",
+      note: "Make the hero bigger",
+      authorDisplayName: "Alex",
+      kind: "template",
+      changeSet: {
+        authoredCommit: "deadbeef",
+        ops: [
+          {
+            opId: "o1",
+            type: "setText",
+            target: { selector: "h1", anchors: [{ type: "id", value: "hero" }] },
+            before: "Welcome",
+            after: "Welcome, bigger",
+          },
+        ],
+      },
+    };
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content });
+
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(seen.at(-1)).toEqual([content]); // opened → fires the popover's comments
+
+    layer.closePopover();
+    expect(seen.at(-1)).toBeNull(); // closed → fires null so the preview reverts
+  });
+
   it("keeps the template treatment on a stale template pin (composed classes)", () => {
     const { doc } = makeFakeDom();
     const parent = doc.createElement("div");

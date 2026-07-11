@@ -21,6 +21,7 @@ import { newCommentInputSchema } from "@supercomment/shared";
 import {
   type CommentDraft,
   type ExistingCommentMarker,
+  type MarkerComment,
   type OverlayConfig,
   type Rect,
   type SelectionMode,
@@ -50,6 +51,7 @@ import {
 import { diffMarkersByNumber } from "./read/marker-diff.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
+import { ModifiedViewController } from "./editor/apply-change-set.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
 import { EditSession, opKey } from "./editor/edit-session.js";
 import type { EditDom } from "./editor/history.js";
@@ -118,6 +120,13 @@ export class OverlayController {
   private readonly selection: SelectionState;
   private readonly highlights: HighlightLayer;
   private readonly markers: MarkerLayer;
+  /**
+   * Live template preview (U9/G7): when a template comment's pin popover is
+   * open, its change-set is re-applied to the real page so the reviewer sees
+   * the proposed layout in place; reverted when the popover closes. Single
+   * active, drift-guarded (a stale change-set falls back to the screenshot).
+   */
+  private readonly modifiedView: ModifiedViewController;
   private readonly guestStore: GuestNameStore;
   private readonly guestEmailStore: GuestEmailStore;
 
@@ -230,6 +239,7 @@ export class OverlayController {
     this.selection = new SelectionState(this.rectFor);
 
     this.highlights = new HighlightLayer(this.doc, this.shell.layer);
+    this.modifiedView = new ModifiedViewController(this.doc);
     this.markers = new MarkerLayer(
       this.doc,
       this.shell.layer,
@@ -237,6 +247,7 @@ export class OverlayController {
       config.threadClient,
       config.currentUser,
       config.uploader,
+      (comments) => this.previewTemplate(comments),
     );
     this.inspector = new InspectorLayer(this.doc, this.shell.layer, {
       // U12: a committed drag-resize records width+height into the OPEN edit
@@ -350,6 +361,9 @@ export class OverlayController {
   destroy(): void {
     this.listeners.dispose();
     this.dismissEditPanel();
+    // Drop any live template preview first so its revert() runs against the
+    // previewed state, before restoreToBuild() normalises inline styles.
+    this.modifiedView.deselect();
     // Ephemeral visual edits must not outlive the overlay — restore the host
     // page's inline styles byte-identical before we detach.
     this.restoreToBuild();
@@ -375,6 +389,36 @@ export class OverlayController {
     this.toolbar.destroy();
     this.deviceMode?.exit();
     this.shell.destroy();
+  }
+
+  /**
+   * Live-preview a template comment when its pin popover opens (U9/G7). Applies
+   * the first template change-set among the popover's comments to the real page
+   * so the reviewer sees the proposed layout in place; `null` (popover closed)
+   * reverts to the live build. Skips while the reviewer has their own edits in
+   * flight so a saved template never clobbers an unsaved buffer. A drifted
+   * change-set applies nothing — the popover's stored screenshot is the record.
+   */
+  private previewTemplate(comments: MarkerComment[] | null): void {
+    if (!comments) {
+      this.modifiedView.deselect();
+      return;
+    }
+    // Don't fight an active edit buffer: the reviewer's unsaved previews own the
+    // page right now, so leave them untouched.
+    if (!this.editSession.isEmpty()) return;
+    const template = comments.find(
+      (c) => c.kind === "template" && !!c.changeSet && c.changeSet.ops.length > 0,
+    );
+    if (!template?.changeSet) {
+      this.modifiedView.deselect();
+      return;
+    }
+    // Prefer the DB id so re-opening the same pin is a no-op; fall back to a
+    // constant (popovers are single-active anyway).
+    this.modifiedView.select(template.id ?? "template", template.changeSet);
+    // A stale (drifted) result applied nothing; the popover already shows the
+    // stored before/after screenshot, which is the intended fallback.
   }
 
   /** Briefly surface a device-mode error inside the overlay (auto-dismisses). */
