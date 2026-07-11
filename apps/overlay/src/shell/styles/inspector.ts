@@ -78,20 +78,39 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
   z-index: 3;
 }
 /* U4/U6: a collapsed ghost at a hidden element's vacated slot. */
+/* A hidden element's collapsed slot: a clickable "Show <tag>" placeholder so the
+   reviewer can un-hide it without Cmd+Z (interactive, unlike the rest of the
+   chrome). Minimum tap target so a thin/short hidden element is still clickable. */
 .sc-inspect-ghost {
   position: fixed;
-  pointer-events: none;
-  border: 1.5px dashed rgba(232, 56, 196, 0.7);
+  box-sizing: border-box;
+  min-width: 64px;
+  min-height: 24px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1.5px dashed rgba(232, 56, 196, 0.75);
   background: repeating-linear-gradient(
     45deg,
-    rgba(232, 56, 196, 0.06),
-    rgba(232, 56, 196, 0.06) 6px,
+    rgba(232, 56, 196, 0.08),
+    rgba(232, 56, 196, 0.08) 6px,
     transparent 6px,
     transparent 12px
   );
-  border-radius: 2px;
-  z-index: 1;
+  border-radius: 4px;
+  color: #e838c4;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 3;
+  transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1);
 }
+.sc-inspect-ghost:hover { background: rgba(232, 56, 196, 0.16); }
 
 /* U12: the 8-point resize handles. Unlike the rest of the inspector chrome these
    ARE interactive (pointer-events: auto) so they can be grabbed; they render only

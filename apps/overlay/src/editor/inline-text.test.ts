@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { beginInlineTextEdit, isEditableTextLeaf } from "./inline-text.js";
+import { beginInlineTextEdit, isEditableTextLeaf, isEditableText } from "./inline-text.js";
 import { makeFakeDom, type FakeDocument, type FakeElement } from "../test/dom-double.js";
 
 function leaf(doc: FakeDocument, tag: string, text: string): FakeElement {
@@ -26,6 +26,46 @@ describe("isEditableTextLeaf", () => {
   it("rejects an empty leaf", () => {
     const { doc } = makeFakeDom();
     expect(isEditableTextLeaf(leaf(doc, "p", "   ") as unknown as Element)).toBe(false);
+  });
+});
+
+describe("isEditableText (broadened — paragraphs with inline children)", () => {
+  it("accepts a paragraph whose children are all phrasing/inline elements", () => {
+    const { doc } = makeFakeDom();
+    const p = doc.createElement("p");
+    p.appendChild(doc.createElement("span")); // (empty, but the <p> has text below)
+    const link = doc.createElement("a");
+    link.textContent = "docs";
+    p.appendChild(link);
+    p.textContent = p.textContent; // ensure textContent computes from children
+    // Give the paragraph real text so it isn't rejected as empty.
+    const withText = doc.createElement("p");
+    const a = doc.createElement("a");
+    a.textContent = "the docs";
+    withText.append(doc.createElement("span"), a);
+    (withText.querySelector("span") as unknown as { textContent: string }).textContent = "Read ";
+    expect(isEditableText(withText as unknown as Element)).toBe(true);
+  });
+
+  it("still accepts a plain leaf", () => {
+    const { doc } = makeFakeDom();
+    expect(isEditableText(leaf(doc, "h2", "Pricing") as unknown as Element)).toBe(true);
+  });
+
+  it("rejects an element with a BLOCK child (would flatten structure)", () => {
+    const { doc } = makeFakeDom();
+    const div = doc.createElement("div");
+    const inner = doc.createElement("p");
+    inner.textContent = "nested block";
+    div.appendChild(inner);
+    expect(isEditableText(div as unknown as Element)).toBe(false);
+  });
+
+  it("rejects an empty element regardless of inline children", () => {
+    const { doc } = makeFakeDom();
+    const p = doc.createElement("p");
+    p.appendChild(doc.createElement("span")); // empty span, no text
+    expect(isEditableText(p as unknown as Element)).toBe(false);
   });
 });
 

@@ -313,3 +313,41 @@ describe("InspectorLayer drag-to-reorder (U13)", () => {
     expect(q(".sc-inspect-insertion")!.style.display).toBe("none");
   });
 });
+
+describe("InspectorLayer hidden-element recovery", () => {
+  function mount() {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement);
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, q };
+  }
+
+  it("renders a clickable 'Show' placeholder per hidden element and fires onRestore", () => {
+    const { inspector, q } = mount();
+    let restored = 0;
+    inspector.setGhosts([{ rect: makeRect(20, 30, 120, 40), tag: "p", onRestore: () => { restored += 1; } }]);
+    const ghost = q(".sc-inspect-ghost")!;
+    expect(ghost).not.toBeNull();
+    expect(ghost.textContent).toBe("Show p");
+    ghost.dispatch("click", {});
+    expect(restored).toBe(1);
+  });
+
+  it("clears placeholders when passed an empty set", () => {
+    const { inspector, q } = mount();
+    inspector.setGhosts([{ rect: makeRect(0, 0, 10, 10), tag: "div", onRestore: () => {} }]);
+    expect(q(".sc-inspect-ghost")!.style.display).not.toBe("none");
+    inspector.setGhosts([]);
+    // the pooled node is hidden, not removed
+    expect(q(".sc-inspect-ghost")!.style.display).toBe("none");
+  });
+
+  it("does NOT draw the selection box for a hidden (zero-area) element — the top-left bug", () => {
+    setRectProvider(() => makeRect(0, 0, 0, 0)); // a display:none element reports 0x0
+    const { doc, inspector, q } = mount();
+    inspector.show(doc.createElement("p") as unknown as Element);
+    expect(q(".sc-inspect-box")!.style.display).toBe("none");
+    expect(q(".sc-inspect-tag")!.style.display).toBe("none");
+  });
+});

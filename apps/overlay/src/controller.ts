@@ -56,7 +56,7 @@ import type { EditDom } from "./editor/history.js";
 import { buildEditTarget } from "./editor/edit-target.js";
 import { PropertiesPanel } from "./editor/panel.js";
 import { InspectorLayer } from "./editor/inspector.js";
-import { beginInlineTextEdit, type InlineTextHandle } from "./editor/inline-text.js";
+import { beginInlineTextEdit, isEditableText, type InlineTextHandle } from "./editor/inline-text.js";
 import { EscapeStack, ESCAPE_PRIORITY } from "./editor/escape-stack.js";
 import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { createCanvasProbe } from "./editor/color/normalize.js";
@@ -159,6 +159,12 @@ export class OverlayController {
   private readonly escapeStack = new EscapeStack();
   /** U8: session FontFace registry (drained to baseline on reset-to-build). */
   private readonly fontRegistry = new FontRegistry();
+  /** Elements the reviewer HID this session, for the clickable "Show" recovery. */
+  private hiddenEls: Array<{
+    el: Element;
+    rect: { x: number; y: number; width: number; height: number };
+    key: string;
+  }> = [];
   /** U8: recently-picked font families (most-recent first), across panel opens. */
   private fontRecents: string[] = [];
   /** U10: recently-used colors (hex8, most-recent first), across panel opens. */
@@ -324,14 +330,9 @@ export class OverlayController {
     this.editSession.history.subscribe(() => {
       this.editPanel?.refreshUi();
       this.inspector.scheduleRender();
-      // U6: clear the hidden-element ghost once no hide op remains (undo/revert).
-      if (
-        !this.history
-          .projectOps()
-          .some((o) => o.type === "setVisibility" && o.after === "hidden")
-      ) {
-        this.inspector.setGhost(null);
-      }
+      // Re-sync the hidden-element "Show" placeholders: an undo/redo/revert that
+      // un-hides an element drops its placeholder; a re-hide restores it.
+      this.recomputeGhosts();
     });
     this.bindEvents();
   }
@@ -1390,8 +1391,13 @@ export class OverlayController {
       onSwapImageFile: (dataUrl) => {
         this.pendingSwapImages.push(dataUrl);
       },
-      // U6: ghost the vacated slot when an element is hidden (U4 chrome).
-      onElementHidden: (rect) => this.inspector.setGhost(rect),
+      // Track a hidden element + render its clickable "Show" placeholder so the
+      // reviewer can un-hide it without Cmd+Z (recovery UX).
+      onElementHidden: (info) => {
+        this.hiddenEls = this.hiddenEls.filter((h) => h.key !== info.key);
+        this.hiddenEls.push(info);
+        this.recomputeGhosts();
+      },
       // U8: the font picker — catalog + loader env, Escape layer, session recents.
       fontEnv: this.getFontEnv(),
       registerEscapeLayer: (layer) => this.escapeStack.register(layer),
@@ -1494,13 +1500,46 @@ export class OverlayController {
   private restoreToBuild(): void {
     this.history.resetToBuild();
     this.pendingSwapImages = [];
-    this.inspector.setGhost(null);
+    // Every hide is reverted by resetToBuild, so drop the "Show" placeholders too.
+    this.hiddenEls = [];
+    this.inspector.setGhosts([]);
     // U8: remove every FontFace the session added so document.fonts returns to
     // its developer-build baseline (device-mode child docs included).
     this.fontRegistry.drain();
     // U9: drop staged (not-yet-uploaded) font bytes; a reset-to-build discards the
     // whole buffer, and nothing was ever stored, so there is nothing to purge.
     this.pendingFontUploads = new Map();
+  }
+
+  /**
+   * Re-sync the hidden-element "Show" placeholders from live state: keep the
+   * elements still hidden (an inline `display:none` we applied), and hand the
+   * inspector a clickable placeholder per one so the reviewer can un-hide it.
+   */
+  private recomputeGhosts(): void {
+    this.hiddenEls = this.hiddenEls.filter((h) => this.isElementHidden(h.el));
+    this.inspector.setGhosts(
+      this.hiddenEls.map((h) => ({
+        rect: h.rect,
+        tag: (h.el.tagName || "node").toLowerCase(),
+        onRestore: () => this.restoreHidden(h.key),
+      })),
+    );
+  }
+
+  /** Does the element still carry the inline `display:none` we applied to hide it? */
+  private isElementHidden(el: Element): boolean {
+    try {
+      return (el as HTMLElement).style?.display === "none";
+    } catch {
+      return false;
+    }
+  }
+
+  /** Un-hide a hidden element by reverting its hide edit (previewShow runs). */
+  private restoreHidden(key: string): void {
+    this.history.revertKey(key);
+    this.recomputeGhosts();
   }
 
   /**
@@ -1520,18 +1559,23 @@ export class OverlayController {
    * non-leaf elements (guarded in `beginInlineTextEdit`).
    */
   private beginInlineEdit(el: Element): void {
-    const target = buildEditTarget(el, this.doc);
+    // Double-clicking a nested inline (an empty span, a <br>, an icon) should
+    // still edit the text it lives in: drill UP to the nearest editable text
+    // element (bounded). A word inside a <p> resolves the <p> directly.
+    const editable = this.nearestEditableText(el);
+    if (!editable) return;
+    const target = buildEditTarget(editable, this.doc);
     // Track the handle so the Escape stack can cancel THIS inline edit as its
     // innermost layer without tearing down the whole editor (U2).
-    this.inlineEdit = beginInlineTextEdit(el, this.doc, {
+    this.inlineEdit = beginInlineTextEdit(editable, this.doc, {
       onCommit: (before, after) => {
         this.inlineEdit = null;
         const next = after.replace(/\s+/g, " ").trim();
         if (next === before) return; // unchanged → record nothing
         const dom: EditDom = {
-          apply: () => applyTextPreview(el, next),
-          invert: () => applyTextPreview(el, before),
-          revertToBuild: () => applyTextPreview(el, before),
+          apply: () => applyTextPreview(editable, next),
+          invert: () => applyTextPreview(editable, before),
+          revertToBuild: () => applyTextPreview(editable, before),
         };
         this.recordEdit(buildTextOp(target, before, next), dom);
       },
@@ -1539,6 +1583,17 @@ export class OverlayController {
         this.inlineEdit = null;
       },
     });
+  }
+
+  /** The nearest editable text element at/above `el` (bounded drill), or null. */
+  private nearestEditableText(el: Element): Element | null {
+    let cur: Element | null = el;
+    for (let i = 0; cur && i < 4; i++) {
+      if (this.isOwnNode(cur)) return null; // never edit our own chrome
+      if (isEditableText(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
   }
 
   /**

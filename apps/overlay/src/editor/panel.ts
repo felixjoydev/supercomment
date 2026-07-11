@@ -71,6 +71,7 @@ import {
 import { ColorPicker } from "./color/picker.js";
 import { extractPalette } from "./color/palette.js";
 import { buildTokenIndex, matchToken, type TokenDecl } from "./tokens.js";
+import { opKey } from "./op-key.js";
 import { Gesture, type Point } from "./interact/gesture.js";
 
 /** Pointer px moved per value-step while scrubbing a numeric label (U16). */
@@ -143,7 +144,12 @@ export interface PanelCallbacks {
    */
   onSwapImageFile?(dataUrl: string): void;
   /** U6: an element was hidden — its pre-hide rect, so the controller can ghost the slot (U4). */
-  onElementHidden?(rect: { x: number; y: number; width: number; height: number }): void;
+  onElementHidden?(info: {
+    el: Element;
+    rect: { x: number; y: number; width: number; height: number };
+    /** The hide edit's history key, so the controller can restore it later. */
+    key: string;
+  }): void;
   /**
    * U8: the font-picker catalog + loader environment (catalog fetch from our
    * origin + Google font loading). Null / absent → the picker runs offline,
@@ -906,9 +912,9 @@ export class PropertiesPanel {
 
   private recordHide(): void {
     const op = buildSetVisibilityOp(this.target, true);
-    // Ghost the vacated slot (U4) using the rect captured BEFORE the element
-    // collapses to display:none.
-    this.cb.onElementHidden?.(this.rectOf());
+    // Capture the rect BEFORE the element collapses to display:none — it anchors
+    // the clickable "Show" placeholder the reviewer uses to un-hide (recovery).
+    const rect = this.rectOf();
     const priorDisplay = previewHide(this.el); // apply now (author clicked)
     const dom: EditDom = {
       apply: () => {
@@ -918,6 +924,7 @@ export class PropertiesPanel {
       revertToBuild: () => previewShow(this.el, priorDisplay),
     };
     this.cb.record(op, dom);
+    this.cb.onElementHidden?.({ el: this.el, rect, key: opKey(op) });
     this.refreshCount();
   }
 

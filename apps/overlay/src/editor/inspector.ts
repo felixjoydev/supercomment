@@ -160,6 +160,19 @@ export function computeDistancePills(a: ViewRect, b: ViewRect): DistancePill[] {
   return pills;
 }
 
+/**
+ * A collapsed-slot placeholder for a HIDDEN element (U6 + hidden-recovery). When
+ * `onRestore` is set the placeholder is an interactive "Show" button so the
+ * reviewer can un-hide the element without hunting for Cmd+Z.
+ */
+export interface GhostSpec {
+  rect: ViewRect;
+  /** The hidden element's tag, for the "Show <tag>" label. */
+  tag?: string;
+  /** Restore the hidden element (revert its hide edit). */
+  onRestore?: () => void;
+}
+
 export class InspectorLayer {
   private readonly container: HTMLElement;
   private current: Element | null = null;
@@ -170,13 +183,14 @@ export class InspectorLayer {
   private readonly box: HTMLElement;
   private readonly badge: HTMLElement;
   private readonly dims: HTMLElement;
-  private readonly ghost: HTMLElement;
   private readonly marginPool: HTMLElement[] = [];
   private readonly distancePool: HTMLElement[] = [];
+  /** Clickable "Show" placeholders for hidden elements (a pool, one per ghost). */
+  private readonly ghostPool: HTMLElement[] = [];
+  private ghosts: GhostSpec[] = [];
 
-  /** The element being measured-to on hover, and the ghost's rect (U6). */
+  /** The element being measured-to on hover. */
   private hovered: Element | null = null;
-  private ghostRect: ViewRect | null = null;
 
   // U12 — resize handles + the live drag state.
   private readonly handles = new Map<Handle, HTMLElement>();
@@ -228,8 +242,6 @@ export class InspectorLayer {
     this.box = this.node("div", "sc-inspect-box");
     this.badge = this.node("div", "sc-inspect-tag");
     this.dims = this.node("div", "sc-inspect-dims");
-    this.ghost = this.node("div", "sc-inspect-ghost");
-    this.hideNode(this.ghost);
     this.onResizeCommit = opts.onResizeCommit;
     this.onReorderCommit = opts.onReorderCommit;
     this.readMetrics = opts.readMetrics ?? ((el) => liveMetrics(el));
@@ -271,8 +283,12 @@ export class InspectorLayer {
     this.abortDrag();
     this.current = null;
     this.resizable = false;
-    this.clearHover();
-    this.detach();
+    this.hovered = null;
+    // Keep the layer alive while hidden elements still need their "Show"
+    // placeholders (the box/badge just stop drawing); only fully detach when
+    // there is nothing left to show.
+    if (this.ghosts.length > 0) this.render();
+    else this.detach();
   }
 
   /** Is a resize OR reorder drag currently live? (drives the gesture Escape layer). */
@@ -318,10 +334,20 @@ export class InspectorLayer {
 
   /**
    * Show a collapsed ghost affordance at a hidden element's vacated slot (U6's
-   * Hide interplay). Pass null to clear it.
+   * Hide interplay). Pass null to clear it. Back-compat shim over {@link setGhosts}.
    */
   setGhost(rect: ViewRect | null): void {
-    this.ghostRect = rect;
+    this.setGhosts(rect ? [{ rect }] : []);
+  }
+
+  /**
+   * Render the set of hidden-element placeholders (one clickable "Show" pill per
+   * hidden element). Attaches the inspector when there are ghosts so they survive
+   * even with no element selected; passing `[]` clears them.
+   */
+  setGhosts(specs: GhostSpec[]): void {
+    this.ghosts = specs;
+    if (specs.length > 0) this.attach();
     this.render();
   }
 
@@ -343,10 +369,15 @@ export class InspectorLayer {
 
   /** Re-measure + reposition every persistent node (scroll / resize / edit). */
   render(): void {
+    if (!this.attached) return;
     const el = this.current;
-    if (!el || !this.attached) return;
-    const rect = readRect(el);
-    if (!rect) {
+    const rect = el ? readRect(el) : null;
+    // A HIDDEN element (display:none) reports a zero-area rect at (0,0) — drawing
+    // the box/badge/handles there is the "stuck at top-left" bug. Treat it (and a
+    // missing rect / no selection) as unmeasurable: hide the selection chrome and
+    // let the hidden-element ghost be the only affordance.
+    const hasBox = !!el && !!rect && !isZeroArea(rect);
+    if (!hasBox) {
       this.hideNode(this.box);
       this.hideNode(this.badge);
       this.hideNode(this.dims);
@@ -386,7 +417,7 @@ export class InspectorLayer {
     }
 
     // Spacing pills (real-env; empty without getComputedStyle).
-    const marginPills = rect ? computeMarginPills(rect, readMargins(el)) : [];
+    const marginPills = hasBox ? computeMarginPills(rect, readMargins(el)) : [];
     this.syncPool(this.marginPool, "sc-inspect-pill", marginPills.length, (node, i) => {
       const pill = marginPills[i]!;
       node.textContent = String(pill.value);
@@ -395,7 +426,7 @@ export class InspectorLayer {
 
     // Hover distance pills between the selection and the hovered element (R11).
     const hoverRect = this.hovered ? readRect(this.hovered) : null;
-    const distancePills = rect && hoverRect ? computeDistancePills(rect, hoverRect) : [];
+    const distancePills = hasBox && hoverRect ? computeDistancePills(rect, hoverRect) : [];
     this.syncPool(this.distancePool, "sc-inspect-measure", distancePills.length, (node, i) => {
       const pill = distancePills[i]!;
       node.textContent = String(pill.value);
@@ -403,14 +434,40 @@ export class InspectorLayer {
       this.place(node, pill.x, pill.y);
     });
 
-    // Hidden-element ghost (U6).
-    if (this.ghostRect) {
-      this.place(this.ghost, this.ghostRect.x, this.ghostRect.y);
-      this.ghost.style.width = `${this.ghostRect.width}px`;
-      this.ghost.style.height = `${this.ghostRect.height}px`;
-      this.showNode(this.ghost);
-    } else {
-      this.hideNode(this.ghost);
+    this.renderGhosts();
+  }
+
+  /** Draw the clickable "Show" placeholders for the current hidden-element set. */
+  private renderGhosts(): void {
+    const specs = this.ghosts;
+    while (this.ghostPool.length < specs.length) {
+      const node = this.node("button", "sc-inspect-ghost") as HTMLButtonElement;
+      node.type = "button";
+      node.addEventListener("click", () => {
+        const spec = (node as unknown as { __spec?: GhostSpec }).__spec;
+        spec?.onRestore?.();
+      });
+      this.ghostPool.push(node);
+      this.container.appendChild(node);
+    }
+    for (let i = 0; i < this.ghostPool.length; i++) {
+      const node = this.ghostPool[i]!;
+      const spec = specs[i];
+      (node as unknown as { __spec?: GhostSpec }).__spec = spec;
+      if (spec) {
+        this.place(node, spec.rect.x, spec.rect.y);
+        node.style.width = `${spec.rect.width}px`;
+        node.style.height = `${spec.rect.height}px`;
+        node.textContent = spec.onRestore ? `Show ${spec.tag ?? "element"}` : "";
+        node.setAttribute(
+          "aria-label",
+          spec.onRestore ? `Show hidden ${spec.tag ?? "element"}` : "hidden element",
+        );
+        node.setAttribute("data-interactive", spec.onRestore ? "1" : "0");
+        this.showNode(node);
+      } else {
+        this.hideNode(node);
+      }
     }
   }
 
@@ -420,7 +477,6 @@ export class InspectorLayer {
       this.badge,
       this.box,
       this.dims,
-      this.ghost,
       this.insertionLine,
       this.reorderGrip,
       ...this.handles.values(),
@@ -435,6 +491,7 @@ export class InspectorLayer {
     // re-renders WHILE shown, not across a hide/show).
     this.marginPool.length = 0;
     this.distancePool.length = 0;
+    this.ghostPool.length = 0;
     this.attached = false;
   }
 
@@ -732,6 +789,11 @@ function liveMetrics(el: Element): BoxMetrics {
 function pointOf(e: unknown): Point {
   const ev = e as { clientX?: number; clientY?: number };
   return { x: ev.clientX ?? 0, y: ev.clientY ?? 0 };
+}
+
+/** A rect with no drawable area (e.g. a `display:none` element reports 0×0). */
+function isZeroArea(rect: ViewRect): boolean {
+  return rect.width <= 0 && rect.height <= 0;
 }
 
 /** The element's viewport rect, or null when it can't be measured. Never throws. */

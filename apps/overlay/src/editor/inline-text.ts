@@ -39,6 +39,35 @@ export function isEditableTextLeaf(el: Element): boolean {
 }
 
 /**
+ * Inline (phrasing) tags whose presence as children still makes an element safe
+ * to edit as plain text — a paragraph with a link or bold run is a text block, not
+ * a structural container. A child that is NOT one of these (a `div`, `p`, `ul`,
+ * `img`, …) means the element owns real structure we must not flatten.
+ */
+const PHRASING_TAGS = new Set([
+  "a", "abbr", "b", "bdi", "bdo", "br", "cite", "code", "data", "dfn", "em", "i",
+  "kbd", "mark", "q", "s", "samp", "small", "span", "strong", "sub", "sup",
+  "time", "u", "var", "wbr", "label",
+]);
+
+/**
+ * A broader safe inline-edit target: an element with visible text whose children
+ * (if any) are ALL phrasing/inline elements — so a `<p>Read the <a>docs</a></p>`
+ * or a `<div>` of inline runs is editable, but a container with block children
+ * (which editing would flatten, G12) is not. A strict leaf is the empty-children
+ * case of this rule.
+ */
+export function isEditableText(el: Element): boolean {
+  try {
+    if ((el.textContent ?? "").trim().length === 0) return false;
+    const children = Array.from(el.children ?? []);
+    return children.every((c) => PHRASING_TAGS.has((c.tagName || "").toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Begin an inline text edit on `el`. Returns a handle (or null when `el` isn't a
  * safe text leaf). Commits on blur / Enter, cancels on Escape.
  */
@@ -47,7 +76,7 @@ export function beginInlineTextEdit(
   doc: Document,
   opts: InlineTextOptions,
 ): InlineTextHandle | null {
-  if (!isEditableTextLeaf(el)) return null;
+  if (!isEditableText(el)) return null;
 
   const before = readText(el);
   try {
