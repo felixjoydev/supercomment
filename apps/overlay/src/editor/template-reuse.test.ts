@@ -5,6 +5,7 @@ import type { EditTarget, VisualChangeSet } from "@supercomment/shared";
 import { buildDom, byId, type FakeDocument } from "../capture/test-dom.js";
 import { captureAnchors } from "../capture/anchors.js";
 import { applyChangeSet } from "./apply-change-set.js";
+import { makeFakeDom, type FakeElement } from "../test/dom-double.js";
 
 // Cross-page template reuse (U15/R9) exercised against the REAL corroborate-or
 // -stale reanchor resolver (the capture DOM double supports id/[attr]/* queries),
@@ -102,6 +103,72 @@ describe("template cross-page reuse (R9)", () => {
     expect(result.skipped).toBe(1);
     expect(result.results[0]!.applied).toBe(false);
     expect(result.results[0]!.reason).toBe("unresolved"); // never guesses the first match
+  });
+
+  it("re-applies a moveNode as the SAME real DOM move it previewed (AE2/R5, U5)", () => {
+    // A parent with three children a, b, c; the saved edit moved b before a.
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    parent.className = "parent";
+    const a = doc.createElement("div");
+    a.className = "a";
+    const b = doc.createElement("div");
+    b.className = "b";
+    const c = doc.createElement("div");
+    c.className = "c";
+    parent.append(a, b, c);
+    doc.body.appendChild(parent);
+    const resolve = (t: { selector: string }): FakeElement | null =>
+      ({ ".parent": parent, ".a": a, ".b": b, ".c": c }[t.selector] ?? null);
+
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "m1",
+          type: "moveNode",
+          target: { selector: ".b", anchors: [] },
+          insertion: {
+            position: "before",
+            parent: { selector: ".parent", anchors: [] },
+            reference: { selector: ".a", anchors: [] },
+          },
+          order: { from: 1, to: 0 },
+        },
+      ],
+    };
+    const result = applyChangeSet(cs, doc as unknown as Document, {
+      resolve: resolve as unknown as (t: EditTarget, d: Document) => Element | null,
+    });
+    expect(result.applied).toBe(1);
+    expect(parent.children.indexOf(b)).toBe(0); // b moved before a, a real DOM move
+    result.revert();
+    expect(parent.children.indexOf(b)).toBe(1); // deselect restores the exact slot
+  });
+
+  it("skips a moveNode whose reference sibling no longer resolves (drift, no throw)", () => {
+    const { doc } = makeFakeDom();
+    const el = doc.createElement("div");
+    el.className = "b";
+    doc.body.appendChild(el);
+    const resolve = (t: { selector: string }): FakeElement | null =>
+      (t.selector === ".b" ? el : null); // the reference ".gone" resolves to null
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "m1",
+          type: "moveNode",
+          target: { selector: ".b", anchors: [] },
+          insertion: { position: "after", reference: { selector: ".gone", anchors: [] } },
+          order: { from: 2, to: 5 },
+        },
+      ],
+    };
+    const result = applyChangeSet(cs, doc as unknown as Document, {
+      resolve: resolve as unknown as (t: EditTarget, d: Document) => Element | null,
+    });
+    expect(result.applied).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.results[0]!.reason).toBe("inapplicable");
   });
 
   it("applies a uniquely-anchored edit on the same page", () => {

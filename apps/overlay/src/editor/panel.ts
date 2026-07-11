@@ -43,6 +43,7 @@ import {
 } from "./structural-edits.js";
 import { buildEditTarget } from "./edit-target.js";
 import { getPropertyMeta, type PropCtx } from "./property-meta.js";
+import { layoutContextFor } from "./layout-context.js";
 import type { EditDom, EditListRow } from "./history.js";
 import {
   createCanvasProbe,
@@ -548,9 +549,14 @@ export class PropertiesPanel {
 
     const body = this.section("Arrange");
     const actions = this.create("div", "sc-ep-arrange");
-    const up = this.button("sc-ep-btn sc-ep-move-up", "Move up", () => this.move(-1));
-    const down = this.button("sc-ep-btn sc-ep-move-down", "Move down", () => this.move(1));
-    actions.append(up, down);
+    // Orientation-correct buttons: rows read left/right, columns up/down, grids
+    // both axes, RTL flipped (R5). Each maps to a DOM-order step.
+    const ctx = layoutContextFor(this.el);
+    actions.setAttribute("data-axis", ctx.axis);
+    for (const b of ctx.buttons) {
+      const btn = this.button(`sc-ep-btn sc-ep-move-${b.word}`, b.label, () => this.move(b.dir));
+      actions.appendChild(btn);
+    }
     body.appendChild(actions);
   }
 

@@ -23,7 +23,15 @@ import { isInsertableTag, isSafeAttr } from "@supercomment/shared";
 
 import { resolveAnchors } from "../capture/reanchor.js";
 import { applyStylePreview, applyTextPreview } from "./style-edits.js";
-import { previewHide, previewOrder, previewShow } from "./structural-edits.js";
+import { previewHide, previewMove, previewShow } from "./structural-edits.js";
+
+/**
+ * U5: how many times the MutationObserver may re-assert a real DOM move before it
+ * stops fighting a framework that keeps reverting it. Bounded so a reconciling
+ * host never traps us in an infinite move/revert loop; on exhaustion the op
+ * degrades cleanly (the move simply stops being re-applied).
+ */
+const MOVE_REASSERT_BUDGET = 12;
 
 /** A minimal MutationObserver surface (feature-detected; real-env only). */
 interface MutationObserverLike {
@@ -127,7 +135,7 @@ export function applyChangeSet(
       results.push({ opId: op.opId, type: op.type, applied: false, reason: "unresolved" });
       continue;
     }
-    const binding = bindOp(op, el, doc);
+    const binding = bindOp(op, el, doc, resolve);
     if (!binding) {
       skipped++;
       results.push({ opId: op.opId, type: op.type, applied: false, reason: "inapplicable" });
@@ -175,6 +183,7 @@ function bindOp(
   op: VisualChangeSet["ops"][number],
   el: Element,
   doc: Document,
+  resolve: (target: EditTarget, doc: Document) => Element | null,
 ): OpBinding | null {
   const style = (el as HTMLElement).style as
     | (CSSStyleDeclaration & {
@@ -246,13 +255,28 @@ function bindOp(
     }
     case "moveNode": {
       if (!op.order) return null;
-      const prevOrder = style?.getPropertyValue?.("order") ?? "";
+      // U5: re-apply as the SAME real DOM move the live preview performed (CSS
+      // `order` re-applied differently than it previewed — R5). Resolve the
+      // destination reference sibling; if the op names one that no longer resolves
+      // on this build, the move is inapplicable (drift) — skip, never guess (R9).
+      const insertion = op.insertion;
+      const position: "before" | "after" = insertion?.position === "before" ? "before" : "after";
+      const refTarget = insertion?.reference;
+      const refEl = refTarget ? resolve(refTarget, doc) : null;
+      if (refTarget && !refEl) return null;
+      let restore: (() => void) | null = null;
+      let budget = MOVE_REASSERT_BUDGET;
       return {
-        apply: () => previewOrder(el, op.order!.to),
-        revert: () =>
-          prevOrder
-            ? previewOrder(el, Number(prevOrder))
-            : style?.removeProperty?.("order"),
+        apply: () => {
+          if (budget <= 0) return; // stop fighting a reconciling framework (degrade)
+          budget--;
+          const r = previewMove(el, refEl, position);
+          if (!restore) restore = r; // keep only the FIRST restore (pre-apply slot)
+        },
+        revert: () => {
+          restore?.();
+          restore = null;
+        },
       };
     }
     case "insertNode": {

@@ -123,9 +123,9 @@ export function previewShow(el: Element, priorDisplay: string | null): void {
 }
 
 /** Non-destructive reorder preview via CSS `order` (flex/grid). Never throws.
- * Retained for the saved-template re-apply path (apply-change-set.ts); the live
- * editor uses {@link previewMove} instead, since CSS `order` is a no-op outside a
- * flex/grid parent (requirement F). */
+ * NOTE (U5): both the live editor AND the saved-template re-apply now use
+ * {@link previewMove} (a real DOM move) so preview and re-apply are identical
+ * (R5); this CSS-`order` helper is retained only as a low-level utility. */
 export function previewOrder(el: Element, order: number): void {
   try {
     (el as HTMLElement).style?.setProperty?.("order", String(order));

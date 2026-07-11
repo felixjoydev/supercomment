@@ -95,6 +95,23 @@ describe("HistoryEngine — projection", () => {
     edit("color", "black", "blue", { selector: "p.lead" });
     expect(engine.size).toBe(2);
   });
+
+  it("coalesced moves net to the true original origin (order.from = first index, U5)", () => {
+    const engine = new HistoryEngine({ probe: basicProbe });
+    const noop = { apply: () => {}, invert: () => {}, revertToBuild: () => {} };
+    const moveOp = (from: number, to: number): ChangeOp => ({
+      opId: `m-${from}-${to}`,
+      type: "moveNode",
+      target: { selector: ".card", anchors: [] },
+      insertion: { position: "before" },
+      order: { from, to },
+    });
+    engine.record(moveOp(2, 1), noop); // 2 → 1
+    engine.record(moveOp(1, 0), noop); // then 1 → 0
+    const ops = engine.projectOps();
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.order).toEqual({ from: 2, to: 0 }); // origin stays the true 2
+  });
 });
 
 describe("HistoryEngine — undo / redo", () => {
