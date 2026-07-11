@@ -7,6 +7,7 @@ import {
   dimsLabel,
   parseMarginPx,
   computeMarginPills,
+  computeDistancePills,
 } from "./inspector.js";
 import {
   makeFakeDom,
@@ -62,6 +63,22 @@ describe("inspector pure helpers", () => {
     expect(bySide.bottom).toMatchObject({ value: 48, x: 200, y: 324 }); // cx, y+h+24
     expect(bySide.left).toMatchObject({ value: 20, x: 90, y: 250 }); // x-10, cy
   });
+
+  it("computeDistancePills measures the gap between nearest edges (R11)", () => {
+    const a = { x: 0, y: 0, width: 100, height: 100 };
+    // b sits 50px to the right, vertically aligned → one x-axis pill, no y pill.
+    expect(computeDistancePills(a, { x: 150, y: 0, width: 50, height: 100 })).toEqual([
+      { axis: "x", value: 50, x: 125, y: 50 },
+    ]);
+    // b below and to the right → both a horizontal and a vertical gap.
+    const pills = computeDistancePills(a, { x: 120, y: 140, width: 40, height: 40 });
+    expect(pills.map((p) => [p.axis, p.value])).toEqual([
+      ["x", 20],
+      ["y", 40],
+    ]);
+    // Overlapping on both axes → no gap pills.
+    expect(computeDistancePills(a, { x: 10, y: 10, width: 50, height: 50 })).toEqual([]);
+  });
 });
 
 describe("InspectorLayer", () => {
@@ -96,5 +113,66 @@ describe("InspectorLayer", () => {
   it("never throws for an unmeasurable element", () => {
     const { inspector } = mount();
     expect(() => inspector.show({ tagName: "DIV" } as unknown as Element)).not.toThrow();
+  });
+
+  it("keeps chrome node identity stable across 100 re-renders (no churn, U4)", () => {
+    setRectProvider(() => makeRect(0, 0, 100, 50));
+    const { doc, inspector, q } = mount();
+    inspector.show(doc.createElement("div") as unknown as Element);
+    const box = q(".sc-inspect-box");
+    for (let i = 0; i < 100; i++) inspector.render();
+    expect(q(".sc-inspect-box")).toBe(box); // same node object, repositioned only
+  });
+
+  it("updates the size badge immediately when an edit changes geometry (R4)", () => {
+    setRectProvider(() => makeRect(0, 0, 300, 50));
+    const { doc, inspector, q } = mount();
+    const el = doc.createElement("div");
+    inspector.show(el as unknown as Element);
+    expect(q(".sc-inspect-dims")!.textContent).toBe("300 × 50");
+    // An edit widened the element; a re-render (driven by a history event) reflects
+    // it without a scroll.
+    setRectProvider(() => makeRect(0, 0, 500, 50));
+    inspector.render();
+    expect(q(".sc-inspect-dims")!.textContent).toBe("500 × 50");
+    expect(q(".sc-inspect-box")!.style.width).toBe("500px");
+  });
+
+  it("draws hover distance pills between the selection and a hovered sibling (R11)", () => {
+    setRectProvider((el) =>
+      el.id === "sel" ? makeRect(0, 0, 100, 100) : makeRect(150, 0, 50, 100),
+    );
+    const { doc, inspector, parent } = mount();
+    const sel = doc.createElement("div");
+    sel.id = "sel";
+    const other = doc.createElement("div");
+    other.id = "other";
+    inspector.show(sel as unknown as Element);
+    inspector.measureTo(other as unknown as Element);
+    const pills = parent.querySelectorAll(".sc-inspect-measure");
+    expect(pills.length).toBe(1);
+    expect(pills[0]!.textContent).toBe("50"); // 150 - (0 + 100)
+    // Clearing the hover removes the measurement.
+    inspector.clearHover();
+    expect(
+      parent.querySelectorAll(".sc-inspect-measure").filter((p) => p.style.display !== "none"),
+    ).toHaveLength(0);
+  });
+
+  it("rAF-batches scheduled re-renders during a gesture (U4)", () => {
+    const { doc, inspector } = mount();
+    const queue: Array<() => void> = [];
+    (doc.defaultView as unknown as { requestAnimationFrame: (cb: () => void) => void })
+      .requestAnimationFrame = (cb) => {
+      queue.push(cb);
+    };
+    inspector.show(doc.createElement("div") as unknown as Element);
+    inspector.scheduleRender();
+    inspector.scheduleRender();
+    inspector.scheduleRender();
+    expect(queue.length).toBe(1); // three schedules coalesced into one frame
+    queue[0]!(); // flush the frame
+    inspector.scheduleRender();
+    expect(queue.length).toBe(2); // a new frame can be scheduled after the flush
   });
 });

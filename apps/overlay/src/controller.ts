@@ -273,9 +273,14 @@ export class OverlayController {
 
     this.editSession = new EditSession(undefined, { probe: createCanvasProbe(this.doc) });
     // Any history change (record, undo/redo, revert, discard) re-syncs the open
-    // panel's counter + undo/redo state; control re-reads happen on the explicit
-    // undo/redo/revert paths (resync), so live typing is never disrupted (U3).
-    this.editSession.history.subscribe(() => this.editPanel?.refreshUi());
+    // panel's counter + undo/redo state AND re-renders the live chrome so the
+    // selection box + size badge track an edit's geometry immediately (U4/R4);
+    // control re-reads happen on the explicit undo/redo/revert paths (resync), so
+    // live typing is never disrupted (U3).
+    this.editSession.history.subscribe(() => {
+      this.editPanel?.refreshUi();
+      this.inspector.scheduleRender();
+    });
     this.bindEvents();
   }
 
@@ -1430,15 +1435,20 @@ export class OverlayController {
     // badge, dimensions, and spacing pills ONLY in the modes where the reviewer
     // is picking an element to act on — element / multi / edit. Passive Browse is
     // just navigation, so it shows NO inspector chrome. While a panel is open the
-    // inspector is locked to the selection.
+    // inspector is locked to the selection, and hovering ANOTHER element measures
+    // the distance between the two (R11 — this passive hover is exempt from the
+    // chrome-origin gesture rule).
     this.on(
       this.doc,
       "mouseover",
       (e) => {
         const mode = this.selection.getMode();
         if (mode !== "element" && mode !== "multi" && mode !== "edit") return;
-        if (this.editPanel) return; // locked onto the selected element
         const target = e.target as Element | null;
+        if (this.editPanel) {
+          this.inspector.measureTo(target && !this.isOwnNode(target) ? target : null);
+          return;
+        }
         if (!target || this.isOwnNode(target)) {
           this.inspector.hide();
           return;

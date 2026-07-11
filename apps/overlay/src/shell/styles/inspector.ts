@@ -60,4 +60,36 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
   z-index: 2;
 }
+/* U4: distance pills between the selection and a hovered element (R11). */
+.sc-inspect-measure {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  min-width: 18px;
+  padding: 1px 6px;
+  background: #e838c4;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  z-index: 3;
+}
+/* U4/U6: a collapsed ghost at a hidden element's vacated slot. */
+.sc-inspect-ghost {
+  position: fixed;
+  pointer-events: none;
+  border: 1.5px dashed rgba(232, 56, 196, 0.7);
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(232, 56, 196, 0.06),
+    rgba(232, 56, 196, 0.06) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+  border-radius: 2px;
+  z-index: 1;
+}
 `;
