@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { containsSecret } from '@supercomment/shared';
 import { createClient } from '@/lib/supabase/client';
@@ -37,6 +37,17 @@ export function AgentPrompt({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warn, setWarn] = useState(false);
+  // Tracks the FRESHEST comment prop, independent of any in-flight save's
+  // closure (code review fix, julik-frontend-races): a realtime broadcast can
+  // update other fields (status, unread) on this same comment while save()'s
+  // RPC is awaiting, causing a re-render with a new `comment` prop — but the
+  // already-running save() still closes over the OLD one. Reading this ref
+  // instead of the closure-captured `comment` at merge time keeps that
+  // concurrent update from being silently reverted.
+  const commentRef = useRef(comment);
+  useEffect(() => {
+    commentRef.current = comment;
+  }, [comment]);
 
   if (!canShowAgentPrompt(canMutate)) return null;
 
@@ -52,7 +63,7 @@ export function AgentPrompt({
     // Detection-only: the body above was saved UNCHANGED regardless of this —
     // never block the save, never redact a member's own prompt.
     setWarn(containsSecret(value));
-    onLocalUpdate({ ...comment, privatePrompt: result.prompt });
+    onLocalUpdate({ ...commentRef.current, privatePrompt: result.prompt });
     setEditing(false);
   }
 
