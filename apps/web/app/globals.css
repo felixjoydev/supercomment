@@ -1378,6 +1378,101 @@ a.tile:active {
   margin-top: 4px;
 }
 
+/* ════════ Card lane badge + control (U9) ════════ */
+
+.lane-badge.lane-backlog {
+  color: var(--ink-3);
+}
+
+.lane-badge.lane-ready_for_agent {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.lane-badge.lane-in_review {
+  color: var(--info);
+}
+
+.lane-badge.lane-done {
+  color: var(--live);
+}
+
+.lane-badge.lane-dismissed {
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+
+.lane-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.lane-control-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.lane-chips {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.lane-chip {
+  -webkit-tap-highlight-color: transparent;
+  border: none;
+  background: none;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 530;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.lane-chip:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.lane-chip.is-current {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-xs);
+  cursor: default;
+}
+
+.lane-chip:disabled:not(.is-current) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.lane-confirm {
+  display: block;
+  width: 100%;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.lane-confirm-text {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.lane-confirm-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
 .page-group-list {
   list-style: none;
   margin: 0;

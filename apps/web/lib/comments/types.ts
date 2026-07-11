@@ -21,9 +21,6 @@ import type {
 // The raw `comments` row shape is now the single source of truth in shared.
 export type { CommentRow } from "@supercomment/shared";
 
-/** Latest "Send to Claude" queue state for a comment (null = never sent). */
-export type SendStatus = "pending" | "working" | "done" | "failed";
-
 export interface CommentView {
   id: string;
   previewId: string;
@@ -60,12 +57,6 @@ export interface CommentView {
   createdAt: string;
   /** When status last changed (0037); feeds thread-aware unread on reopen. */
   statusChangedAt: string | null;
-  /**
-   * Persisted "Send to Claude" status from comment_queue, hydrated server-side
-   * so the button survives a page refresh. Null when the comment was never
-   * enqueued (or for realtime-delivered rows, which carry no queue join).
-   */
-  sendStatus: SendStatus | null;
   /** Normalized page identity for grouping (pageKeyOf(context.url)). */
   pageKey: string;
   /** Human label for the page group (path, or "Home" / "Other"). */

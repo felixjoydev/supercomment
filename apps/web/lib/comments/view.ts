@@ -97,12 +97,11 @@ function shallowEqualComment(a: CommentView, b: CommentView): boolean {
     // in its old column until a full reload.
     a.lane === b.lane &&
     a.reviewSummary === b.reviewSummary &&
-    // sendStatus and privatePrompt are set by OPTIMISTIC local updates (the send
-    // button, the agent-prompt editor), never by a broadcast (reconcileUnread
-    // carries them forward), so they MUST be compared here — otherwise a
-    // prompt/send change looks "unchanged", mergeComment returns the same array,
-    // and the board never re-renders it until a full reload.
-    a.sendStatus === b.sendStatus &&
+    // privatePrompt is set by an OPTIMISTIC local update (the agent-prompt
+    // editor), never by a broadcast (reconcileUnread carries it forward), so it
+    // MUST be compared here — otherwise a prompt change looks "unchanged",
+    // mergeComment returns the same array, and the board never re-renders it
+    // until a full reload.
     samePrivatePrompt(a.privatePrompt, b.privatePrompt) &&
     a.createdAt === b.createdAt
   );
@@ -140,12 +139,10 @@ export function reconcileUnread(
     ...incoming,
     lastReadAt,
     latestReplyAt,
-    // The raw broadcast row carries neither the comment_queue join nor the
-    // agent_prompts join `toCommentView` needs, so `incoming.sendStatus`/
-    // `privatePrompt` are always null here — carry the existing value forward
-    // rather than letting an unrelated broadcast (e.g. a reply, a status
-    // change) silently wipe them from the on-screen view (code review finding).
-    sendStatus: incoming.sendStatus ?? existing.sendStatus,
+    // The raw broadcast row carries no agent_prompts join, so
+    // `incoming.privatePrompt` is always null here — carry the existing value
+    // forward rather than letting an unrelated broadcast (a reply, a status
+    // change) silently wipe it from the on-screen view (code review finding).
     privatePrompt: incoming.privatePrompt ?? existing.privatePrompt,
     unread: isThreadUnread({
       createdAt: incoming.createdAt,

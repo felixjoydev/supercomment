@@ -5,14 +5,15 @@ import { AnimatePresence, motion } from 'motion/react';
 
 import { commentModifyGate, modifyLockLabel } from '@supercomment/shared';
 import type { CommentView } from '@/lib/comments/types';
-import { severityLabel, intentLabel, trustLabel, statusLabel } from '@/lib/comments/labels';
+import { severityLabel, intentLabel, trustLabel, laneLabel } from '@/lib/comments/labels';
+import { displayLane } from '@/lib/comments/view';
 import { createClient } from '@/lib/supabase/client';
 import { ContextDetail } from './context-detail';
 import { CaptureThumb, ReferenceGallery } from './capture-image';
 import { CommentEditor } from './comment-editor';
 import { CommentThread } from './comment-thread';
 import { LifecycleControls } from './lifecycle-controls';
-import { SendToClaudeButton } from './send-to-claude-button';
+import { LaneControl } from './lane-control';
 import { GuestEmail } from './guest-email';
 import { AgentPrompt } from './agent-prompt';
 
@@ -95,6 +96,7 @@ export function CommentCard({
   const resolved = comment.status === 'resolved';
   const dismissed = comment.status === 'dismissed';
   const muted = resolved || dismissed;
+  const lane = displayLane(comment);
 
   // Author edit/delete gate (0050): a member editing/deleting their OWN comment
   // while it is untouched by others. The RPCs stay the authority.
@@ -104,7 +106,11 @@ export function CommentCard({
     isOwn,
     status: comment.status,
     hasReplies: comment.latestReplyAt != null,
-    isSent: comment.sendStatus != null,
+    // "Sent" is the LANE now (0052/U5): a comment that has left backlog has been
+    // handed to the agent, so it is frozen from author edit/delete exactly as a
+    // queued comment used to be (the edit_review_comment RPC enforces the same,
+    // 0053). Only a backlog comment is still "untouched".
+    isSent: comment.lane !== 'backlog',
   });
 
   const cardClass = [
@@ -142,7 +148,7 @@ export function CommentCard({
               </span>
             )}
             {comment.fidelity === 'snapshot' && <span className="badge is-snapshot">Snapshot</span>}
-            {muted && <span className="badge">{statusLabel(comment.status)}</span>}
+            <span className={`badge lane-badge lane-${lane}`}>{laneLabel(lane)}</span>
           </div>
 
           {editing ? (
@@ -235,14 +241,6 @@ export function CommentCard({
               {comment.unread ? 'Mark read' : 'Mark unread'}
             </button>
 
-            {comment.status === 'open' && (
-              <SendToClaudeButton
-                comment={comment}
-                canMutate={canMutate}
-                canSendToAgent={canSendToAgent}
-              />
-            )}
-
             {isOwn && modify.canModify && !editing && (
               <button type="button" className="text-btn" onClick={() => setEditing(true)}>
                 Edit
@@ -300,6 +298,13 @@ export function CommentCard({
               </motion.div>
             ) : null}
           </AnimatePresence>
+
+          <LaneControl
+            comment={comment}
+            canMutate={canMutate}
+            canSendToAgent={canSendToAgent}
+            onLocalUpdate={onLocalUpdate}
+          />
 
           {canMutate && <LifecycleControls comment={comment} onLocalUpdate={onLocalUpdate} />}
         </div>

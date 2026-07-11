@@ -56,16 +56,14 @@ export function toCommentView(
     resolvedSummary: n.resolvedSummary,
     createdAt: n.createdAt,
     statusChangedAt: n.statusChangedAt,
-    // Hydrated separately from comment_queue in getCommentsForPreview; the
-    // realtime/broadcast path carries no queue join, so it defaults to null.
-    sendStatus: null,
     pageKey: page.key,
     pageLabel: page.label,
     authorEmail: extras?.authorEmail ?? null,
     latestReplyAt,
     lastReadAt,
-    // Hydrated separately from agent_prompts in getCommentsForPreview (U4), same
-    // pattern as sendStatus above; a freshly broadcast row carries no such join.
+    // Hydrated separately from agent_prompts in getCommentsForPreview (U4); a
+    // freshly broadcast row carries no such join, so it defaults to null and is
+    // carried forward by reconcileUnread (unlike lane, which rides the row).
     privatePrompt: null,
     unread: isThreadUnread({
       createdAt: n.createdAt,

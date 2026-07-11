@@ -30,7 +30,6 @@ function mk(over: Partial<CommentView>): CommentView {
     statusChangedAt: over.statusChangedAt ?? "2026-07-04T10:00:00.000Z",
     lane: over.lane ?? "backlog",
     reviewSummary: over.reviewSummary ?? null,
-    sendStatus: null,
     pageKey: over.pageKey ?? "/",
     pageLabel: over.pageLabel ?? "Home",
     authorEmail: null,
@@ -96,17 +95,16 @@ describe("reconcileUnread", () => {
     expect(reconcileUnread(existing, incoming).unread).toBe(true);
   });
 
-  it("carries forward sendStatus and privatePrompt, which the raw broadcast row never carries", () => {
+  it("carries forward privatePrompt, which the raw broadcast row never carries", () => {
     const existing = mk({
       id: "a",
-      sendStatus: "pending",
       privatePrompt: { body: "check the spacing", authorDisplayName: "Alice", imageRefs: [] },
     });
-    // A freshly broadcast row (via toCommentView) always defaults these to
-    // null since neither has a join on the raw comments row.
-    const incoming = mk({ id: "a", sendStatus: null, privatePrompt: null });
+    // A freshly broadcast row (via toCommentView) always defaults privatePrompt
+    // to null since it has no join on the raw comments row (unlike lane, which
+    // rides the row itself and so is taken from the incoming broadcast).
+    const incoming = mk({ id: "a", privatePrompt: null });
     const merged = reconcileUnread(existing, incoming);
-    expect(merged.sendStatus).toBe("pending");
     expect(merged.privatePrompt).toEqual({
       body: "check the spacing",
       authorDisplayName: "Alice",
@@ -114,24 +112,27 @@ describe("reconcileUnread", () => {
     });
   });
 
-  it("prefers the incoming sendStatus/privatePrompt when the broadcast actually carries one", () => {
+  it("prefers the incoming privatePrompt when the broadcast actually carries one", () => {
     const existing = mk({
       id: "a",
-      sendStatus: "pending",
       privatePrompt: { body: "old prompt", authorDisplayName: "Alice", imageRefs: [] },
     });
     const incoming = mk({
       id: "a",
-      sendStatus: "done",
       privatePrompt: { body: "new prompt", authorDisplayName: "Bob", imageRefs: [] },
     });
     const merged = reconcileUnread(existing, incoming);
-    expect(merged.sendStatus).toBe("done");
     expect(merged.privatePrompt).toEqual({
       body: "new prompt",
       authorDisplayName: "Bob",
       imageRefs: [],
     });
+  });
+
+  it("takes lane from the incoming broadcast (it rides the comments row)", () => {
+    const existing = mk({ id: "a", lane: "backlog" });
+    const incoming = mk({ id: "a", lane: "ready_for_agent" });
+    expect(reconcileUnread(existing, incoming).lane).toBe("ready_for_agent");
   });
 });
 
@@ -158,9 +159,9 @@ describe("mergeComment — optimistic prompt/send updates re-render", () => {
     expect(mergeComment(current, updated)).not.toBe(current);
   });
 
-  it("yields a NEW array when only sendStatus changes", () => {
-    const current = [mk({ id: "a", sendStatus: null })];
-    const updated = mk({ id: "a", sendStatus: "pending" });
+  it("yields a NEW array when only the lane changes", () => {
+    const current = [mk({ id: "a", lane: "backlog" })];
+    const updated = mk({ id: "a", lane: "ready_for_agent" });
     expect(mergeComment(current, updated)).not.toBe(current);
   });
 

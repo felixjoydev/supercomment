@@ -39,7 +39,6 @@ function mk(over: Partial<CommentView> & { id: string }): CommentView {
     resolvedSummary: null,
     createdAt: "2026-07-12T10:00:00.000Z",
     statusChangedAt: "2026-07-12T10:00:00.000Z",
-    sendStatus: null,
     pageKey: "/",
     pageLabel: "Home",
     authorEmail: null,
