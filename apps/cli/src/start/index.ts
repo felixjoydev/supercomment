@@ -31,7 +31,6 @@ import { dirname, join } from "node:path";
 import { trimSlash } from "../lib/url.js";
 
 import { Channel, type ChannelSupabaseClient } from "../channel/index.js";
-import type { QueueItem } from "../channel/queue.js";
 import { loadProjectBinding, type ProjectBinding } from "../config/binding.js";
 import { createProxy, type Proxy } from "../proxy/index.js";
 import {
@@ -178,8 +177,6 @@ export interface RunStartOptions {
   tunnelProvider?: TunnelProvider;
   registerTunnel?: RegisterTunnel;
   readOverlayBundle?: ReadOverlayBundle;
-  /** The MCP/agent sink for the queue consumer (Send to Claude). */
-  sink?: (item: QueueItem) => Promise<string | void>;
   /** Heartbeat cadence (ms). Forwarded to the U5 Channel. */
   heartbeatIntervalMs?: number;
   logger?: StartLogger;
@@ -248,8 +245,6 @@ export async function runStart(
     makeRpcRegisterTunnel(backendOrigin ?? deriveBackendOrigin(binding));
   const readOverlayBundle =
     options.readOverlayBundle ?? defaultReadOverlayBundle;
-  const sink: (item: QueueItem) => Promise<string | void> =
-    options.sink ?? (async () => undefined);
   const signals = options.signals ?? process;
   const createServer =
     options.createServer ?? ((h) => http.createServer(h));
@@ -362,7 +357,6 @@ export async function runStart(
     channel = new Channel({
       binding,
       client,
-      sink,
       ...(options.heartbeatIntervalMs
         ? { heartbeatIntervalMs: options.heartbeatIntervalMs }
         : {}),
