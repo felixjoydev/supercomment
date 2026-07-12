@@ -98,9 +98,22 @@ export class MarkerLayer {
     this.container.addEventListener("click", (e) => this.handlePinClick(e));
   }
 
-  /** Register a new marker and repaint (the new pin pops in once). */
+  /**
+   * Register a new marker and repaint (the new pin pops in once). Idempotent by
+   * comment number: if a live re-read (broadcast / poll) has ALREADY placed this
+   * comment while the submit was mid-flight (captureContext -> upload -> submit
+   * all await before this optimistic add runs), update that pin in place instead
+   * of stacking a duplicate — otherwise the reviewer sees their own comment twice.
+   */
   add(marker: PlacedMarker): void {
-    this.markers.push(marker);
+    const existing = this.markers.find((m) => m.number === marker.number);
+    if (existing) {
+      existing.rect = marker.rect;
+      existing.content = marker.content;
+      existing.isStale = marker.isStale;
+    } else {
+      this.markers.push(marker);
+    }
     this.justAdded = marker.number;
     this.render();
     this.justAdded = null;

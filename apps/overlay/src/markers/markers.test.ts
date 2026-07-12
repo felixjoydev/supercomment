@@ -143,6 +143,30 @@ describe("MarkerLayer existing comments (U12)", () => {
     expect(layer.renderedPinCount()).toBe(0);
   });
 
+  it("add is idempotent by number: a live re-read that placed the pin first, then the optimistic add, yields ONE pin (no duplicate)", () => {
+    const { layer, parent } = setup();
+    // A live broadcast/poll re-read placed the reviewer's own comment #1 first,
+    // as a template (kind derived from the change-set).
+    layer.addMany([
+      {
+        number: 1,
+        rect: makeRect(100, 100, 0, 0),
+        content: { note: "n", authorDisplayName: "Alex", kind: "template" },
+      },
+    ]);
+    // The submit's optimistic add then runs for the SAME number — must update in
+    // place, not stack a second pin.
+    layer.add({
+      number: 1,
+      rect: makeRect(120, 120, 0, 0),
+      content: { note: "n", authorDisplayName: "Alex", kind: "template" },
+    });
+    layer.render({ width: 1000, height: 800 });
+    expect(layer.count()).toBe(1);
+    expect(layer.renderedPinCount()).toBe(1);
+    expect(parent.querySelectorAll(".sc-marker.sc-template").length).toBe(1);
+  });
+
   it("addMany is idempotent by number (a racing re-add never stacks a duplicate pin)", () => {
     const { layer } = setup();
     layer.addMany([
