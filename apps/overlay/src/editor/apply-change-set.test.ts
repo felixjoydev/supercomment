@@ -290,3 +290,75 @@ describe("ModifiedViewController — single active (G7)", () => {
     expect(mvc.activeId()).toBeNull(); // nothing became active
   });
 });
+
+describe("applyChangeSet — setStyle re-apply escalates over site CSS (live-preview bug)", () => {
+  /**
+   * Build an element whose SITE CSS declares `font-size:16px !important`, so a
+   * plain inline write loses (computed stays 16px) and only an inline `!important`
+   * takes. This is the exact shape that made font-size / text-align / italic edits
+   * fail to show in the live preview: the re-apply path used a plain inline write.
+   */
+  function siteImportantEl(prop: string, siteValue: string) {
+    const inline = new Map<string, { value: string; priority: string }>();
+    const computed = (p: string): string => {
+      const dec = inline.get(p);
+      if (dec && dec.priority === "important") return dec.value; // inline !important wins
+      if (p === prop) return siteValue; // site !important beats a plain inline write
+      return dec?.value ?? "";
+    };
+    const el = {
+      nodeType: 1,
+      getAttribute: () => null,
+      setAttribute: () => {},
+      removeAttribute: () => {},
+      style: {
+        setProperty(p: string, v: string, prio = "") {
+          inline.set(p, { value: v, priority: prio || "" });
+        },
+        getPropertyValue(p: string) {
+          return inline.get(p)?.value ?? "";
+        },
+        getPropertyPriority(p: string) {
+          return inline.get(p)?.priority ?? "";
+        },
+        removeProperty(p: string) {
+          inline.delete(p);
+        },
+      },
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: () => ({ getPropertyValue: (p: string) => computed(p) }),
+        },
+      },
+    };
+    return { el, inline, computed };
+  }
+
+  it("escalates the re-applied value to !important, then reverts byte-exact", () => {
+    const { el, inline, computed } = siteImportantEl("font-size", "16px");
+    const doc = el.ownerDocument as unknown as Document;
+    const cs: VisualChangeSet = {
+      ops: [
+        {
+          opId: "o1",
+          type: "setStyle",
+          target: target("h1"),
+          property: "font-size",
+          before: "16px",
+          after: "24px",
+        },
+      ],
+    };
+
+    const res = applyChangeSet(cs, doc, { resolve: () => el as unknown as Element });
+    expect(res.applied).toBe(1);
+    // A plain write lost to site !important, so the re-apply escalated.
+    expect(inline.get("font-size")).toEqual({ value: "24px", priority: "important" });
+    expect(computed("font-size")).toBe("24px"); // the preview actually shows
+
+    res.revert();
+    // The element had no inline font-size before, so revert removes it entirely.
+    expect(inline.has("font-size")).toBe(false);
+    expect(computed("font-size")).toBe("16px"); // back to the live build
+  });
+});

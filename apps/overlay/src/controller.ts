@@ -239,7 +239,9 @@ export class OverlayController {
     this.selection = new SelectionState(this.rectFor);
 
     this.highlights = new HighlightLayer(this.doc, this.shell.layer);
-    this.modifiedView = new ModifiedViewController(this.doc);
+    this.modifiedView = new ModifiedViewController(this.doc, {
+      probe: createCanvasProbe(this.doc),
+    });
     this.markers = new MarkerLayer(
       this.doc,
       this.shell.layer,
