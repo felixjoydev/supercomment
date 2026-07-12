@@ -1038,6 +1038,65 @@ describe("OverlayController — live comment sync", () => {
     expect(calls).toBe(1);
     controller.destroy();
   });
+
+  function templateReviewComment(number: number): ReviewComment {
+    return {
+      ...reviewComment(number),
+      note: "Make the hero heading bigger",
+      context: {
+        boundingBox: { x: 100, y: 100, width: 80, height: 24 },
+        changeSet: {
+          ops: [
+            {
+              opId: "o1",
+              type: "setStyle",
+              target: { selector: "h1", anchors: [] },
+              property: "font-size",
+              before: "16px",
+              after: "64px",
+            },
+          ],
+        },
+      } as unknown as ReviewComment["context"],
+    };
+  }
+
+  it("a live re-read that echoes the reviewer's own just-submitted template back must not drop its optimistic pin", async () => {
+    const { doc } = makeFakeDom();
+    const controller = new OverlayController({
+      previewId: "11111111-1111-4111-8111-111111111111",
+      previewKey: "preview-a",
+      capturer: new StubCapturer(),
+      submitter: new StubSubmitter(), // first submit → number 1
+      loadComments: async () => [templateReviewComment(1)],
+      doc: doc as unknown as Document,
+      storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
+    });
+    const shadow = () => doc.getElementById(HOST_ELEMENT_ID)!.shadowRoot!;
+    const q = (sel: string) => shadow().querySelector(sel);
+    const markerCount = () => shadow().querySelectorAll(".sc-marker").length;
+
+    // 1) The reviewer posts the template → the optimistic pin appears instantly.
+    const el = hostEl(doc, "h1", "Hero");
+    editAndOpenTemplateForm(controller, el, q as unknown as (s: string) => FakeElement | null);
+    q("textarea")!.value = "Make the hero heading bigger";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(markerCount()).toBe(1);
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    // The reviewer's own comment is registered in the tracked set immediately,
+    // so a re-read reconciles it in place instead of re-adding it.
+    expect(controller.loadedCommentCount).toBe(1);
+
+    // 2) The broadcast/poll echoes the SAME comment back — the pin must survive
+    // (reconciled as an UPDATE, not dropped or doubled), and stay a template.
+    await controller.reloadComments();
+    expect(markerCount()).toBe(1);
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    expect(controller.loadedCommentCount).toBe(1);
+
+    controller.destroy();
+  });
 });
 
 describe("OverlayController — realtime connection indicator", () => {

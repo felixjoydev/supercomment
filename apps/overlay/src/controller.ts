@@ -825,30 +825,51 @@ export class OverlayController {
       return;
     }
 
-    this.markers.add({
-      number: result.number,
-      // Store in DOCUMENT space (element box, or the drawn region for area/text)
-      // so the pin tracks the page as it scrolls.
-      rect: element ? this.documentRect(element) : this.viewportToDocument(target.rect),
-      content: {
-        ...(result.id ? { id: result.id } : {}),
-        note: draft.note.trim(),
-        authorDisplayName: name,
-        intent: draft.intent,
-        severity: draft.severity,
-        status: "new",
-        createdAt: new Date().toISOString(),
-        // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly
-        // and carry the change-set so selecting the pin can re-apply it live.
-        ...(changeSet ? { kind: "template" as const, changeSet } : {}),
-        // R19: carry the just-uploaded reference-image refs onto the fresh marker
-        // so its popover shows them INSTANTLY, without waiting for a reload to
-        // repopulate content from the server (matches the reply-image path).
-        ...(context.referenceImages && context.referenceImages.length > 0
-          ? { referenceImages: context.referenceImages }
-          : {}),
+    // Store in DOCUMENT space (element box, or the drawn region for area/text)
+    // so the pin tracks the page as it scrolls.
+    const markerRect = element
+      ? this.documentRect(element)
+      : this.viewportToDocument(target.rect);
+    const markerContent: MarkerComment = {
+      ...(result.id ? { id: result.id } : {}),
+      note: draft.note.trim(),
+      authorDisplayName: name,
+      intent: draft.intent,
+      severity: draft.severity,
+      status: "new",
+      createdAt: new Date().toISOString(),
+      // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly
+      // and carry the change-set so selecting the pin can re-apply it live.
+      ...(changeSet ? { kind: "template" as const, changeSet } : {}),
+      // R19: carry the just-uploaded reference-image refs onto the fresh marker
+      // so its popover shows them INSTANTLY, without waiting for a reload to
+      // repopulate content from the server (matches the reply-image path).
+      ...(context.referenceImages && context.referenceImages.length > 0
+        ? { referenceImages: context.referenceImages }
+        : {}),
+    };
+    this.markers.add({ number: result.number, rect: markerRect, content: markerContent });
+
+    // Register the reviewer's OWN comment in the tracked set immediately. The
+    // overlay was write-only about its own pins: the just-submitted comment lived
+    // in the marker layer but NOT in `existingComments`, so the next live re-read
+    // (broadcast / poll) classified it as a brand-new `added` pin rather than an
+    // existing one — which left the optimistic pin unreconciled (it only picked up
+    // the server's template treatment / change-set after a full page refresh) and,
+    // in a re-read race, could stack a second pin. Seeding it here makes the diff
+    // treat it as an UPDATE, so the pin stays put and reconciles in place.
+    // Idempotent by number.
+    this.existingComments = [
+      ...this.existingComments.filter((c) => c.number !== result.number),
+      {
+        number: result.number,
+        rect: markerRect,
+        isStale: false,
+        anchors: context.anchors ?? [],
+        surface: this.surface,
+        content: markerContent,
       },
-    });
+    ];
     // Keep the toggle counts live: update this controller's own toolbar (if
     // top-level) and notify the parent (if this is the device-iframe child).
     this.bumpSurfaceCount(this.surface);

@@ -100,10 +100,10 @@ export class MarkerLayer {
 
   /**
    * Register a new marker and repaint (the new pin pops in once). Idempotent by
-   * comment number: if a live re-read (broadcast / poll) has ALREADY placed this
-   * comment while the submit was mid-flight (captureContext -> upload -> submit
-   * all await before this optimistic add runs), update that pin in place instead
-   * of stacking a duplicate — otherwise the reviewer sees their own comment twice.
+   * comment number: if a re-read has ALREADY placed this comment, update that pin
+   * in place instead of stacking a duplicate. (Belt to the controller's braces —
+   * a just-submitted comment is registered in the tracked set so a live re-read
+   * reconciles rather than re-adds it.)
    */
   add(marker: PlacedMarker): void {
     const existing = this.markers.find((m) => m.number === marker.number);
