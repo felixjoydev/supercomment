@@ -369,6 +369,58 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     expect(listedFor()).toBe("c1"); // replies loaded for the thread
   });
 
+  it("U11: a member with a laneClient gets an interactive lane control", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const laneClient = { setLane: async () => true };
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      undefined, // thread not required for the lane control
+      { displayName: "Dev", role: "member" },
+      undefined, // uploader
+      laneClient,
+    );
+    layer.add({
+      number: 1,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c1", note: "hi", authorDisplayName: "Dev", status: "open", lane: "backlog" },
+    });
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(parent.querySelector(".sc-comment-lanes")).not.toBeNull();
+    const chips = parent.querySelectorAll(".sc-lane-chip");
+    expect(chips.length).toBe(3); // backlog / ready_for_agent / in_review
+    // the current lane (backlog) is highlighted + disabled
+    expect(parent.querySelector(".sc-lane-chip.is-current")).not.toBeNull();
+  });
+
+  it("U11: a reviewer sees the read-only lane chip (audience label), no control", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const laneClient = { setLane: async () => true };
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined,
+      undefined,
+      { displayName: "Reviewer", role: "guest" },
+      undefined,
+      laneClient,
+    );
+    layer.add({
+      number: 2,
+      rect: makeRect(100, 100, 10, 10),
+      content: { id: "c2", note: "hi", authorDisplayName: "Reviewer", status: "open", lane: "ready_for_agent" },
+    });
+    layer.showPopover([2], { x: 100, y: 100 });
+    expect(parent.querySelectorAll(".sc-lane-chip").length).toBe(0);
+    const chip = parent.querySelector(".sc-comment-lane");
+    expect(chip).not.toBeNull();
+    // reviewer label for ready_for_agent is "In progress" — never "agent".
+    expect(chip!.textContent).toBe("In progress");
+  });
+
   it("shows reviewer reference images as popover thumbnails, signed on open (R19)", async () => {
     const { thread } = stubThread();
     const { doc } = makeFakeDom();

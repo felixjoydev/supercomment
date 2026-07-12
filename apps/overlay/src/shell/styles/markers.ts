@@ -224,6 +224,42 @@ export const MARKERS_STYLES = `/* Markers --------------------------------------
   color: var(--ink-3, #a29a8a);
   text-decoration: line-through;
 }
+/* U11: the member lane-move control (chips) in a comment popover. */
+.sc-comment-lanes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: flex-start;
+}
+.sc-comment-lanes-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3, #a29a8a);
+}
+.sc-lane-chip {
+  border: 1px solid var(--line, rgba(35, 31, 24, 0.12));
+  background: #fff;
+  color: var(--ink-2, #6e6759);
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+.sc-lane-chip:hover:not(:disabled) {
+  border-color: var(--ink-3, #a29a8a);
+  color: var(--ink, #231f18);
+}
+.sc-lane-chip.is-current {
+  background: var(--accent, #bc4612);
+  color: #fff;
+  border-color: transparent;
+  cursor: default;
+}
 .sc-comment-note {
   color: var(--ink);
   white-space: pre-wrap;

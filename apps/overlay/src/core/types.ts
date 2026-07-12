@@ -234,6 +234,26 @@ export interface AgentEnqueuer {
 }
 
 /**
+ * U11 SEAM — move a comment between workflow lanes from a pin's popover.
+ *
+ * A MEMBER session's popover lane control calls this to move a comment among
+ * backlog / ready_for_agent / in_review via set_comment_lane (0052) with the
+ * reviewer's session creds. The RPC re-verifies membership + can_send_to_agent
+ * (for ready_for_agent) server-side; the control is UX only. `confirmGuest` is
+ * passed true for a ready_for_agent move — the member's deliberate click IS the
+ * guest-confirm acknowledgment, matching the editor footer's send. Returns
+ * false on any failure (never throws). Absent (guest / tunnel / tests) → the
+ * popover shows no lane control.
+ */
+export interface LaneClient {
+  setLane(
+    commentId: string,
+    lane: CommentLane,
+    confirmGuest?: boolean,
+  ): Promise<boolean>;
+}
+
+/**
  * U5 SEAM — member-authored "prompt for the agent" write path.
  *
  * The editor footer's prompt field (any workspace MEMBER session, R1-R3/R6 —
@@ -288,6 +308,12 @@ export interface OverlayConfig {
    * / tunnel / tests) the action just saves the comment.
    */
   enqueuer?: AgentEnqueuer;
+  /**
+   * U11: moves an existing comment between lanes from its pin popover (member
+   * sessions). Wired in embedded activation with the reviewer's session creds;
+   * absent (guest / tunnel / tests) → the popover shows no lane control.
+   */
+  laneClient?: LaneClient;
   /**
    * U5: writes a member-authored prompt for the agent (set_agent_prompt) right
    * after a template comment is created, before it is (optionally) enqueued.
