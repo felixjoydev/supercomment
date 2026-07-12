@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server';
 import { toCommentView } from '@/lib/comments/transform';
-import type { CommentView, CommentRow, SendStatus } from '@/lib/comments/types';
+import type { CommentView, CommentRow } from '@/lib/comments/types';
 import { COMMENT_ROW_COLUMNS } from '@supercomment/shared';
 
 /**
@@ -39,10 +39,9 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
 
   if (error) throw error;
 
-  // Hydrate each comment's latest "Send to Claude" status from comment_queue so
-  // the dashboard button reflects the real persisted state on load (Queued /
-  // Working / Done) instead of resetting to "Send to Claude" after a refresh.
-  // RLS scopes this to the member's previews, same as the comments read above.
+  // The comment's workflow LANE (comment_workflow_lane, 0052) rides the row
+  // itself (COMMENT_ROW_COLUMNS), so there is no separate queue join anymore —
+  // "sent" is now the lane, and toCommentView projects it directly.
   // Bulk sources for thread-aware unread: newest reply per thread + this member's
   // own read receipts (RLS scopes comment_read_state to the caller's member rows).
   // U4: each comment's member-only "prompt to the agent" (agent_prompts, 0043),
@@ -51,11 +50,10 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
   // caller's previews same as the comments read above — a real signed-in member
   // satisfies it directly, no session-linkage RPC needed (that's get_agent_prompt,
   // for the overlay's anon session, U5's concern).
-  // All four are independent preview_id-scoped queries; run them concurrently
-  // rather than as four sequential round trips (code review finding, performance).
-  const [sendStatusByComment, latestReplyByComment, lastReadByComment, promptByComment] =
+  // All three are independent preview_id-scoped queries; run them concurrently
+  // rather than as sequential round trips (code review finding, performance).
+  const [latestReplyByComment, lastReadByComment, promptByComment] =
     await Promise.all([
-      getSendStatusMap(supabase, previewId),
       getLatestReplyMap(supabase, previewId),
       getReadReceiptMap(supabase, previewId),
       getAgentPromptMap(supabase, previewId),
@@ -77,7 +75,6 @@ export async function getCommentsForPreview(previewId: string): Promise<CommentV
     });
     return {
       ...view,
-      sendStatus: sendStatusByComment.get(view.id) ?? null,
       privatePrompt: promptByComment.get(view.id) ?? null,
     };
   });
@@ -149,28 +146,6 @@ async function getAgentPromptMap(
       authorDisplayName: row.author_display_name,
       imageRefs: row.image_refs ?? [],
     });
-  }
-  return map;
-}
-
-/**
- * Map each comment id → its most recent comment_queue status for a preview. A
- * comment can have multiple rows over time (re-sends after a terminal state);
- * the newest row wins, so a fresh "pending" supersedes an older "done".
- */
-async function getSendStatusMap(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  previewId: string,
-): Promise<Map<string, SendStatus>> {
-  const map = new Map<string, SendStatus>();
-  const { data, error } = await supabase
-    .from('comment_queue')
-    .select('comment_id, status, created_at')
-    .eq('preview_id', previewId)
-    .order('created_at', { ascending: true });
-  if (error) return map; // queue is non-critical; degrade to "never sent"
-  for (const row of (data ?? []) as { comment_id: string; status: SendStatus }[]) {
-    map.set(row.comment_id, row.status); // ascending order → last write wins
   }
   return map;
 }

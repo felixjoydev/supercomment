@@ -249,6 +249,7 @@ export class OverlayController {
       config.threadClient,
       config.currentUser,
       config.uploader,
+      config.laneClient,
       (comments) => this.previewTemplate(comments),
     );
     this.inspector = new InspectorLayer(this.doc, this.shell.layer, {

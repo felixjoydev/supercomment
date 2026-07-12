@@ -9,7 +9,7 @@ import {
  * Phase 2 — send-to-agent per-member permission (web side). Node env, pure logic
  * + a mocked Supabase client mirroring app/api/send-to-claude/route.ts. The DB
  * enforcement (can_user_send_to_agent / set_member_send_to_agent, owner-gated;
- * and, since U3, the send_comment_to_agent RPC's own inline permission check)
+ * and, since U5, the set_comment_lane RPC's own inline permission check)
  * is verified separately against the live DB in a rolled-back transaction.
  */
 
@@ -53,11 +53,11 @@ describe("server enqueue authorization (authorizeSendToAgent)", () => {
 });
 
 describe("send-to-claude route decision (mocked) enforces the send-to-agent gate", () => {
-  // Mirrors the route post-U3: a preview-membership pre-check (for the
+  // Mirrors the route post-U5: a preview-membership pre-check (for the
   // existing 401/403 shape on a non-member), then ONE call to the
-  // send_comment_to_agent RPC, which itself re-verifies membership +
-  // can_send_to_agent + the guest-confirm gate and does the enqueue —
-  // there is no more separate can_user_send_to_agent call nor a direct
+  // set_comment_lane RPC (p_lane='ready_for_agent'), which itself re-verifies
+  // membership + can_send_to_agent + the guest-confirm gate and does the lane
+  // move — there is no more separate can_user_send_to_agent call nor any
   // comment_queue insert from the route.
   function fakeSupabase(opts: {
     isMember: boolean;
@@ -65,7 +65,7 @@ describe("send-to-claude route decision (mocked) enforces the send-to-agent gate
   }) {
     const rpc = vi.fn(async (name: string, _args?: Record<string, unknown>) => {
       if (name === "is_preview_workspace_member") return { data: opts.isMember };
-      if (name === "send_comment_to_agent") {
+      if (name === "set_comment_lane") {
         return { data: opts.rpcResult.data ?? null, error: opts.rpcResult.error ?? null };
       }
       return { data: null };
@@ -80,29 +80,32 @@ describe("send-to-claude route decision (mocked) enforces the send-to-agent gate
   ) {
     const { data: isMember } = await supabase.rpc("is_preview_workspace_member");
     if (isMember !== true) return { status: 403 as const, error: "not_member" };
-    const { data, error } = await supabase.rpc("send_comment_to_agent", {
+    const { data, error } = await supabase.rpc("set_comment_lane", {
       p_comment_id: comment.id,
+      p_lane: "ready_for_agent",
       p_confirm_guest: confirmGuest,
     });
     if (error) {
       if (error.code === "P0002") return { status: 409 as const, error: "guest_confirm_required" };
       if (error.code === "42501") return { status: 403 as const, error: "send_to_agent_forbidden" };
+      if (error.code === "P0001") return { status: 409 as const, error: "comment_not_open" };
       return { status: 500 as const, error: "enqueue_failed" };
     }
-    return { status: 201 as const, data: Array.isArray(data) ? data[0] : data };
+    return { status: 201 as const, lane: typeof data === "string" ? data : "ready_for_agent" };
   }
 
   const member = { id: "c1", previewId: "p1" };
 
-  it("permitted member enqueues (201, RPC returns a pending queue row)", async () => {
+  it("permitted member moves to ready_for_agent (201, RPC returns the new lane)", async () => {
     const supabase = fakeSupabase({
       isMember: true,
-      rpcResult: { data: [{ id: "q1", status: "pending" }] },
+      rpcResult: { data: "ready_for_agent" },
     });
     const r = await routeEnqueue(supabase, member, false);
     expect(r.status).toBe(201);
-    expect(supabase._rpc).toHaveBeenCalledWith("send_comment_to_agent", {
+    expect(supabase._rpc).toHaveBeenCalledWith("set_comment_lane", {
       p_comment_id: "c1",
+      p_lane: "ready_for_agent",
       p_confirm_guest: false,
     });
   });
@@ -124,7 +127,7 @@ describe("send-to-claude route decision (mocked) enforces the send-to-agent gate
     const r = await routeEnqueue(supabase, member, false);
     expect(r).toEqual({ status: 403, error: "not_member" });
     expect(supabase._rpc).toHaveBeenCalledTimes(1);
-    expect(supabase._rpc).not.toHaveBeenCalledWith("send_comment_to_agent", expect.anything());
+    expect(supabase._rpc).not.toHaveBeenCalledWith("set_comment_lane", expect.anything());
   });
 
   it("an unconfirmed guest-authored comment is rejected 409 (RPC raises guest_confirm_required / P0002)", async () => {

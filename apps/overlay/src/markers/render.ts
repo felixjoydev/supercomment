@@ -17,7 +17,14 @@ import {
   resolveCaptureSrc,
 } from "@supercomment/shared";
 
-import type { MarkerComment, Rect, ScreenshotUploader } from "../core/types.js";
+import type {
+  LaneClient,
+  MarkerComment,
+  Rect,
+  ScreenshotUploader,
+} from "../core/types.js";
+import type { CommentLane } from "@supercomment/shared";
+import { displayLaneOf, laneLabelFor, audienceOf } from "../core/lane.js";
 import {
   clusterMarkers,
   partitionByViewport,
@@ -81,6 +88,11 @@ export class MarkerLayer {
      * (R19). Absent (tunnel/tests) → the reply composer shows no attach control.
      */
     private readonly uploader?: ScreenshotUploader,
+    /**
+     * U11: moves a comment between lanes from its popover (member sessions).
+     * Absent (guest / tunnel / tests) → no lane control is rendered.
+     */
+    private readonly laneClient?: LaneClient,
     /**
      * Fired when the comment popover opens (with its comments) or closes (null),
      * so the controller can re-apply a template's visual edits live while its pin
@@ -209,6 +221,14 @@ export class MarkerLayer {
         .filter((m) => m.content?.status === "resolved")
         .map((m) => m.number),
     );
+    // U10: an OPEN comment's workflow lane, for a lane-tinted pin (a resolved /
+    // dismissed pin already has its own treatment, so it gets no lane class).
+    const laneByNumber = new Map<number, string>();
+    for (const m of this.markers) {
+      const status = m.content?.status;
+      if (status === "resolved" || status === "dismissed") continue;
+      laneByNumber.set(m.number, m.content?.lane ?? "backlog");
+    }
 
     const clusters = clusterMarkers(visible, this.thresholdPx);
     for (const cluster of clusters) {
@@ -224,6 +244,8 @@ export class MarkerLayer {
         if (templateNumbers.has(n)) cls += " sc-template";
         if (staleNumbers.has(n)) cls += " sc-stale";
         if (resolvedNumbers.has(n)) cls += " sc-resolved";
+        const lane = laneByNumber.get(n);
+        if (lane) cls += ` sc-lane-${lane}`;
         el.className = cls;
       }
       el.style.left = `${cluster.point.x}px`;
@@ -417,6 +439,22 @@ export class MarkerLayer {
       entry.appendChild(tag);
     }
 
+    // U10/U11: the workflow lane. A MEMBER on an OPEN comment gets an
+    // interactive lane control (move between lanes); everyone else gets the
+    // read-only, audience-aware lane chip (a reviewer never sees the internal
+    // pipeline names — Open / In progress / Ready for review / Done).
+    const isMember = this.currentUser?.role === "member";
+    const isOpen = (m.content?.status ?? "open") === "open";
+    if (isMember && isOpen && this.laneClient && m.content?.id) {
+      entry.appendChild(this.buildLaneControl(m, entry));
+    } else {
+      const lane = displayLaneOf(m.content);
+      const laneChip = this.doc.createElement("div");
+      laneChip.className = `sc-comment-lane sc-lane-${lane}`;
+      laneChip.textContent = laneLabelFor(lane, audienceOf(this.currentUser?.role));
+      entry.appendChild(laneChip);
+    }
+
     const noteText = m.content?.note ?? "";
     if (noteText) {
       const note = this.doc.createElement("div");
@@ -583,6 +621,55 @@ export class MarkerLayer {
     const menu = this.buildManageMenu(m, entry);
     if (menu) actions.appendChild(menu);
     return actions;
+  }
+
+  /**
+   * U11: the member lane control in a comment's popover — chips to move an OPEN
+   * comment between the three open lanes (the click/keyboard way to move a lane
+   * from the live page; Done/Reopen stay the ✓ toggle). Optimistic with
+   * rollback: the chip + pin re-tint immediately and snap back with a flash if
+   * set_comment_lane fails. "Ready for agent" carries the guest-confirm (the
+   * SessionLaneClient passes p_confirm_guest: true — the deliberate click).
+   */
+  private buildLaneControl(m: PlacedMarker, entry: HTMLElement): HTMLElement {
+    const commentId = m.content!.id!;
+    const openLanes: CommentLane[] = ["backlog", "ready_for_agent", "in_review"];
+    const wrap = this.doc.createElement("div");
+    wrap.className = "sc-comment-lanes";
+
+    const paint = () => {
+      wrap.replaceChildren();
+      const label = this.doc.createElement("span");
+      label.className = "sc-comment-lanes-label";
+      label.textContent = "Lane";
+      wrap.appendChild(label);
+      for (const lane of openLanes) {
+        const current = (m.content?.lane ?? "backlog") === lane;
+        const chip = this.doc.createElement("button");
+        chip.type = "button";
+        chip.className = current ? "sc-lane-chip is-current" : "sc-lane-chip";
+        chip.textContent = laneLabelFor(lane, "member");
+        chip.disabled = current;
+        chip.setAttribute("aria-pressed", String(current));
+        chip.addEventListener("click", async () => {
+          const prev = m.content?.lane ?? "backlog";
+          if (m.content) m.content.lane = lane; // optimistic
+          paint();
+          this.render(); // re-tint the pin
+          const ok = await this.laneClient!.setLane(commentId, lane);
+          if (!ok) {
+            if (m.content) m.content.lane = prev; // rollback
+            paint();
+            this.render();
+            this.flash(entry, "Could not move. Try again.");
+          }
+        });
+        wrap.appendChild(chip);
+      }
+    };
+
+    paint();
+    return wrap;
   }
 
   /**

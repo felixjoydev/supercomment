@@ -54,3 +54,20 @@ export type DeviceSurface = z.infer<typeof deviceSurfaceSchema>;
 export const commentKindSchema = z.enum(["comment", "template"]);
 export type CommentKind = z.infer<typeof commentKindSchema>;
 
+/**
+ * Workflow lane of an OPEN comment — a Kanban-style pipeline, NOT a topic
+ * taxonomy (bug/design/copy). Everything starts in `backlog`; a member hands it
+ * to the agent's work queue (`ready_for_agent`), and once the dev approves the
+ * agent's change it moves to `in_review`. THREE values, not four: "Done" is not
+ * a lane, it is `status='resolved'`, and "Dismissed" is `status='dismissed'` —
+ * both live on `status`, so the lane column can never disagree with them. Only
+ * meaningful while `status='open'`. Defaults to `backlog` so every existing row
+ * stays valid.
+ */
+export const commentLaneSchema = z.enum([
+  "backlog",
+  "ready_for_agent",
+  "in_review",
+]);
+export type CommentLane = z.infer<typeof commentLaneSchema>;
+

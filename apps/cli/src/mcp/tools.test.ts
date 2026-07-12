@@ -16,9 +16,11 @@ import {
   handleGetComment,
   handleListOpenComments,
   handleListProjects,
+  handleMarkInReview,
   handleResolveComment,
   handleUseProject,
   MATURE_DESIGN_GROUNDING_GUIDANCE,
+  NEVER_AUTONOMOUS,
   registerTools,
   STANDING_GUIDANCE,
   THIN_DESIGN_GROUNDING_GUIDANCE,
@@ -82,6 +84,7 @@ function makeComment(opts: {
   intent?: Intent;
   severity?: Severity;
   fidelity?: CaptureFidelity;
+  lane?: McpComment["lane"];
 }): McpComment {
   return {
     id: uuid(opts.number),
@@ -98,6 +101,9 @@ function makeComment(opts: {
     status: opts.status ?? "open",
     fidelity: opts.fidelity ?? "live",
     kind: "comment",
+    // Default to the agent's work queue so handleListOpenComments (U12,
+    // default lane=ready_for_agent) includes these; lane tests override.
+    lane: opts.lane ?? "ready_for_agent",
     isStale: false,
     createdAt: "2026-05-30T00:00:00.000Z",
     trustLevel: opts.trustLevel,
@@ -1165,6 +1171,28 @@ describe("U8 always-on standing guidance", () => {
     }
   });
 
+  it("U12: every status-changing tool carries the never-autonomous guardrail", () => {
+    const store = new InMemoryCommentStore([]);
+    const registered = wireWithConfig(store, fakeDiscovery);
+    for (const name of [
+      "resolve_comment",
+      "dismiss_comment",
+      "mark_in_review",
+    ] as const) {
+      expect(registered.get(name)?.config.description).toContain(NEVER_AUTONOMOUS);
+    }
+  });
+
+  it("U12: mark_in_review is registered; the list tools accept a lane filter", () => {
+    const store = new InMemoryCommentStore([]);
+    const registered = wireWithConfig(store, fakeDiscovery);
+    expect(registered.has("mark_in_review")).toBe(true);
+    expect(registered.get("list_open_comments")?.config.inputSchema).toHaveProperty(
+      "lane",
+    );
+    expect(registered.get("get_all_open")?.config.inputSchema).toHaveProperty("lane");
+  });
+
   it("happy path: governanceDocs attaches ONCE on list_open_comments' envelope, not per comment", async () => {
     const store = new InMemoryCommentStore([
       makeComment({ number: 1, trustLevel: "member" }),
@@ -1508,5 +1536,67 @@ describe("U9 design-context grounding", () => {
     expect(grounding && "anchors" in grounding).toBe(false);
     expect(grounding && "url" in grounding).toBe(false);
     expect(grounding && "context" in grounding).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U12 — lane filtering (the agent pulls from ready_for_agent) + mark_in_review
+// ---------------------------------------------------------------------------
+
+describe("U12: lane filtering + mark_in_review", () => {
+  const g = (
+    number: number,
+    lane: McpComment["lane"],
+    trust: TrustLevel = "member",
+  ) => makeComment({ number, trustLevel: trust, lane });
+
+  it("list defaults to the ready_for_agent queue (backlog + in_review excluded)", async () => {
+    const store = new InMemoryCommentStore([
+      g(1, "backlog"),
+      g(2, "ready_for_agent"),
+      g(3, "in_review"),
+      g(4, "ready_for_agent"),
+    ]);
+    const out = await handleListOpenComments(store);
+    expect(out.comments.map((c) => c.number)).toEqual([2, 4]);
+  });
+
+  it("lane='all' lists every open lane", async () => {
+    const store = new InMemoryCommentStore([
+      g(1, "backlog"),
+      g(2, "ready_for_agent"),
+      g(3, "in_review"),
+    ]);
+    const out = await handleListOpenComments(store, { lane: "all" });
+    expect(out.comments.map((c) => c.number)).toEqual([1, 2, 3]);
+  });
+
+  it("lane='backlog' lists only backlog", async () => {
+    const store = new InMemoryCommentStore([g(1, "backlog"), g(2, "ready_for_agent")]);
+    const out = await handleListOpenComments(store, { lane: "backlog" });
+    expect(out.comments.map((c) => c.number)).toEqual([1]);
+  });
+
+  it("handleMarkInReview promotes to in_review with a summary and leaves the queue", async () => {
+    const store = new InMemoryCommentStore([g(1, "ready_for_agent")]);
+    const out = await handleMarkInReview(store, { number: 1, summary: "raised the CTA" });
+    expect(out.ok).toBe(true);
+    expect(out.comment?.lane).toBe("in_review");
+    expect(out.comment?.reviewSummary).toBe("raised the CTA");
+    // It has left the default ready_for_agent queue and now shows under in_review.
+    expect((await handleListOpenComments(store)).comments).toHaveLength(0);
+    const r = await handleListOpenComments(store, { lane: "in_review" });
+    expect(r.comments.map((c) => c.number)).toEqual([1]);
+  });
+
+  it("handleMarkInReview returns not-ok for a missing number", async () => {
+    const store = new InMemoryCommentStore([]);
+    const out = await handleMarkInReview(store, { number: 99 });
+    expect(out.ok).toBe(false);
+    expect(out.comment).toBeNull();
+  });
+
+  it("mark_in_review is a declared tool name", () => {
+    expect(TOOL_NAMES).toContain("mark_in_review");
   });
 });

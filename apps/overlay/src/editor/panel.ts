@@ -1032,10 +1032,12 @@ export class PropertiesPanel {
     });
     this.saveBtn = this.button("sc-ep-save", "Save comment", () => this.cb.onSave());
     footer.append(this.countEl, this.undoBtn, this.redoBtn, this.saveBtn);
-    // Phase 2: permitted member sessions also get "Send to agent" (save + enqueue),
-    // ALONGSIDE "Save comment". Guests / non-permitted members never see it.
+    // Phase 2 / U10: permitted member sessions also get "Ready for agent" (save +
+    // move the template to the ready_for_agent lane, the agent's work queue),
+    // ALONGSIDE "Save comment" which lands it in Backlog. Guests / non-permitted
+    // members never see it.
     if (this.cb.canSendToAgent && this.cb.onSendToAgent) {
-      this.sendBtn = this.button("sc-ep-send", "Send to agent", () =>
+      this.sendBtn = this.button("sc-ep-send", "Ready for agent", () =>
         this.cb.onSendToAgent!(),
       );
       footer.append(this.sendBtn);

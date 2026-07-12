@@ -41,6 +41,7 @@ import { SessionCommentSubmitter } from "./submit/session.js";
 import { makeSetGuestEmail } from "./submit/email.js";
 import { makeKeepAlive } from "./submit/keepalive.js";
 import { SessionAgentEnqueuer } from "./submit/enqueue.js";
+import { SessionLaneClient } from "./submit/lane.js";
 import { SessionAgentPromptWriter } from "./submit/agent-prompt.js";
 import { CaptureUploader } from "./submit/upload.js";
 import { SessionThreadClient } from "./submit/thread.js";
@@ -322,6 +323,15 @@ async function activateSession(
     getAccessToken,
   });
 
+  // U11: moves an existing comment between lanes from its pin popover (member
+  // sessions), using the same session creds; set_comment_lane re-verifies the
+  // member session + grant server-side. The popover control is UX only.
+  const laneClient = new SessionLaneClient({
+    supabaseUrl,
+    supabaseAnonKey,
+    getAccessToken,
+  });
+
   // U5: writes a member-authored prompt for the agent (set_agent_prompt) right
   // after a template comment is created, before any enqueue, using the same
   // session creds. The RPC re-verifies a MEMBER session server-side; the
@@ -360,6 +370,7 @@ async function activateSession(
     // Phase 2: carry the member's send-to-agent grant into the editor footer.
     canSendToAgent: session.canSendToAgent === true,
     enqueuer,
+    laneClient,
     // U5: the editor footer's member-only "Prompt for agent" field writes
     // through this seam right after its comment is created.
     agentPromptWriter,

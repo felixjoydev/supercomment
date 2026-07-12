@@ -20,6 +20,7 @@ import type {
   CommentRow,
   CapturedContext,
   TrustLevel,
+  CommentLane,
 } from "@supercomment/shared";
 import {
   redactContextChangeSet,
@@ -53,7 +54,17 @@ export interface ListOpenOptions {
    * Supabase impl can avoid fetching guest rows when not opted in.
    */
   includeGuests?: boolean;
+  /**
+   * Which workflow lane to return (0052/U12). Omitted → `ready_for_agent`, the
+   * agent's work queue (the whole point: the agent pulls from the lane a member
+   * explicitly handed it, not "all open"). Pass a specific lane to inspect it,
+   * or `"all"` for every open lane regardless of stage.
+   */
+  lane?: CommentLane | "all";
 }
+
+/** The default lane the agent's work list pulls from when none is specified. */
+export const DEFAULT_AGENT_LANE: CommentLane = "ready_for_agent";
 
 /**
  * The data operations the MCP tools need. Numbers are the stable per-preview
@@ -74,6 +85,12 @@ export interface CommentStore {
   resolveComment(number: number, summary?: string): Promise<McpComment | null>;
   /** Mark a comment dismissed. Returns the updated comment, or null if missing. */
   dismissComment(number: number, reason?: string): Promise<McpComment | null>;
+  /**
+   * Promote a comment to the `in_review` lane (the dev-approved "the agent made
+   * a change, awaiting review" stage), optionally recording the agent's short
+   * "what changed" summary. Returns the updated comment, or null if missing.
+   */
+  markInReview(number: number, summary?: string): Promise<McpComment | null>;
   /** Projects the developer can read, each with its default preview + open count. */
   listProjects(): Promise<ProjectSummary[]>;
   /** Re-scope subsequent comment reads to a different preview (runtime switch). */
@@ -121,8 +138,10 @@ export class InMemoryCommentStore implements CommentStore {
 
   async listOpenComments(opts?: ListOpenOptions): Promise<McpComment[]> {
     const includeGuests = opts?.includeGuests ?? false;
+    const lane = opts?.lane ?? DEFAULT_AGENT_LANE;
     return this.all().filter((c) => {
       if (c.status !== "open") return false;
+      if (lane !== "all" && c.lane !== lane) return false;
       if (!includeGuests && c.trustLevel === "guest") return false;
       return true;
     });
@@ -161,6 +180,23 @@ export class InMemoryCommentStore implements CommentStore {
     this.comments.set(number, updated);
     return updated;
   }
+
+  async markInReview(
+    number: number,
+    summary?: string,
+  ): Promise<McpComment | null> {
+    const existing = this.comments.get(number);
+    if (!existing) return null;
+    const updated: McpComment = {
+      ...existing,
+      lane: "in_review",
+      ...(summary !== undefined && summary.trim() !== ""
+        ? { reviewSummary: summary }
+        : {}),
+    };
+    this.comments.set(number, updated);
+    return updated;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +219,16 @@ export interface SupabaseLike {
           column: string,
           value: unknown,
         ) => {
+          // A third .eq() for the lane filter (U12), e.g. status + lane.
+          eq: (
+            column: string,
+            value: unknown,
+          ) => {
+            order: (
+              column: string,
+              opts: { ascending: boolean },
+            ) => Promise<DbListResult>;
+          };
           order: (
             column: string,
             opts: { ascending: boolean },
@@ -363,9 +409,11 @@ function rowToMcpComment(
     status: n.status,
     fidelity: n.fidelity,
     kind: n.kind,
+    lane: n.lane,
     isStale: n.isStale,
     ...(n.resolvedBy ? { resolvedBy: n.resolvedBy } : {}),
     ...(n.resolvedSummary ? { resolvedSummary: n.resolvedSummary } : {}),
+    ...(n.reviewSummary ? { reviewSummary: n.reviewSummary } : {}),
     ...(n.privatePrompt ? { privatePrompt: n.privatePrompt } : {}),
     ...(n.referenceConfirmed ? { referenceConfirmed: true } : {}),
     ...(referenceConfirmedAt ? { referenceConfirmedAt } : {}),
@@ -469,23 +517,25 @@ export class SupabaseCommentStore implements CommentStore {
   }
 
   async listOpenComments(opts?: ListOpenOptions): Promise<McpComment[]> {
-    // We always fetch all open rows scoped to the preview and let the tool
-    // layer apply the guest guard. `includeGuests` is accepted for parity with
-    // the interface but does not change the fetch (RLS already scopes by team;
-    // the guard is a tool-layer policy, kept in one place for testability).
-    void opts;
+    // The guest guard stays a tool-layer policy (RLS already scopes by team),
+    // so `includeGuests` doesn't change the fetch. The LANE, however, is a
+    // real DB filter (U12): default to ready_for_agent — the agent's work
+    // queue — using the comments_lane_idx; `"all"` lists every open lane.
+    const lane = opts?.lane ?? DEFAULT_AGENT_LANE;
+    const open = this.client
+      .from("comments")
+      .select(COMMENT_ROW_COLUMNS)
+      .eq("preview_id", this.previewId)
+      .eq("status", "open");
     // U7: the list path deliberately never resolves a raster to a signed URL
     // (R18 keeps signed-URL round trips off the hot list path) — only
     // `referenceConfirmed` is batch-fetched here, alongside prompts, so the
     // tool layer's strip-vs-pass-through decision (`shouldResolveRaster`,
     // same predicate) is correct even though nothing gets resolved yet.
     const [{ data, error }, prompts, confirmations] = await Promise.all([
-      this.client
-        .from("comments")
-        .select(COMMENT_ROW_COLUMNS)
-        .eq("preview_id", this.previewId)
-        .eq("status", "open")
-        .order("number", { ascending: true }),
+      lane === "all"
+        ? open.order("number", { ascending: true })
+        : open.eq("lane", lane).order("number", { ascending: true }),
       this.fetchPrompts(),
       this.fetchReferenceConfirmations(),
     ]);
@@ -870,6 +920,20 @@ export class SupabaseCommentStore implements CommentStore {
       p_reason: reason ?? null,
     });
     if (error) throw asError(error, `Failed to dismiss comment #${number}`);
+    return this.getComment(number);
+  }
+
+  async markInReview(
+    number: number,
+    summary?: string,
+  ): Promise<McpComment | null> {
+    const target = await this.getComment(number);
+    if (!target) return null;
+    const { error } = await this.client.rpc("mark_comment_in_review", {
+      p_comment_id: target.id,
+      p_summary: summary ?? null,
+    });
+    if (error) throw asError(error, `Failed to mark comment #${number} in review`);
     return this.getComment(number);
   }
 }

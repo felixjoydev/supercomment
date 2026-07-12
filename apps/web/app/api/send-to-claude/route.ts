@@ -10,31 +10,29 @@ import { handoffSourceRef } from "@/lib/comments/handoff";
 export const dynamic = "force-dynamic";
 
 /**
- * "Send to Claude" enqueue endpoint (R20 + R23, R7/R11 via U3).
+ * "Send to agent" endpoint (R20 + R23, R7/R11) — now the LANE transition (U5).
  *
- * POST { commentId, confirmGuest? } → calls the `send_comment_to_agent` RPC
- * (0044/U3), which ATOMICALLY enqueues a `comment_queue` row (status pending),
- * stamps a point-in-time snapshot of the live agent_prompt onto it (R7), and
- * (guest-authored comments only) records a member-only confirm marker (R11).
- * The actual local delivery happens off-platform; here we only enqueue and
- * report sent / working / failed via the row's status.
+ * POST { commentId, confirmGuest? } → calls the `set_comment_lane` RPC
+ * (0052), which moves the comment to the `ready_for_agent` lane. That lane IS
+ * the agent's pull queue, so this subsumes what `send_comment_to_agent` did —
+ * membership + can_send_to_agent + the guest-confirm gate + the guest
+ * reference-image unlock (`agent_reference_confirmations`) — in one
+ * transaction, but WITHOUT the dead `comment_queue` insert (the queue table is
+ * left dormant, retired in a later cleanup unit). There is no background
+ * consumer to report working/done anymore; the lane itself is the status.
  *
  * Authz: this route still verifies the user (getClaims) and preview workspace
  * membership (requireMemberOfPreview) BEFORE calling the RPC, purely so a
  * non-member gets the existing 401/403 response shape this route has always
- * returned (the RPC itself re-verifies membership + can_send_to_agent +
- * the guest-confirm gate server-side regardless — it is the real guard, not
- * this pre-check). The RPC replaces what used to be a direct
- * `comment_queue` insert; canEnqueue()/can_user_send_to_agent are no longer
- * called here since the RPC re-does both checks atomically inside the same
- * transaction as the insert.
+ * returned (the RPC itself re-verifies membership + can_send_to_agent + the
+ * guest-confirm gate server-side regardless — it is the real guard, not this
+ * pre-check).
  *
  * R23/R11 guest gate: a guest-authored comment is UNTRUSTED to the agent and
- * is BLOCKED unless `confirmGuest === true` is explicitly supplied — now
- * enforced by the RPC itself (SQLSTATE P0002 / message
- * 'guest_confirm_required'), mapped below back to the same 409 JSON shape
- * this route has always returned so the dashboard UI's existing confirm flow
- * keeps working unchanged.
+ * is BLOCKED unless `confirmGuest === true` is explicitly supplied — enforced
+ * by the RPC itself (SQLSTATE P0002 / message 'guest_confirm_required'),
+ * mapped below back to the same 409 JSON shape this route has always returned
+ * so the dashboard UI's existing confirm flow keeps working unchanged.
  */
 export async function POST(request: NextRequest) {
   let body: unknown;
@@ -94,26 +92,21 @@ export async function POST(request: NextRequest) {
     includeSource,
   );
 
-  // U3: one atomic RPC does membership + can_send_to_agent + the guest-confirm
-  // gate + the enqueue + the prompt snapshot + the guest confirm marker, all in
-  // one transaction (see supabase/migrations/0044_send_comment_to_agent.sql).
-  // The partial unique index (0006) still backs the RPC's own dedup — a
-  // re-send while an attempt is already pending/working comes back as the
-  // SAME existing row rather than an error. `send_comment_to_agent` returns
-  // `setof comment_queue` (a real empty array on the not-permitted/rejected
-  // paths, never a bare-rowtype null row — see 0044's header note), so `data`
-  // comes back as an array here, matching the create_review_reply convention
-  // elsewhere in this codebase.
-  const { data: rpcData, error: rpcError } = await supabase.rpc("send_comment_to_agent", {
+  // U5: one atomic RPC does membership + can_send_to_agent + the guest-confirm
+  // gate + the guest reference-image unlock + the lane move, all in one
+  // transaction (see supabase/migrations/0052_comment_workflow_lane.sql). It
+  // returns the new lane text ('ready_for_agent'); moving an already-sent
+  // comment is idempotent (no dedup distinction — the lane is just re-set).
+  const { data: newLane, error: rpcError } = await supabase.rpc("set_comment_lane", {
     p_comment_id: comment.id,
+    p_lane: "ready_for_agent",
     p_confirm_guest: confirmGuest,
   });
 
   if (rpcError) {
-    // P0002 is send_comment_to_agent's dedicated errcode for the guest-confirm
-    // gate (message 'guest_confirm_required'); 42501 covers both of its plain
-    // authz rejections (not_authorized / send_to_agent_forbidden), which this
-    // route has always folded into the same 403 response.
+    // P0002 is the dedicated errcode for the guest-confirm gate (message
+    // 'guest_confirm_required'); 42501 covers both plain authz rejections
+    // (not_authorized / send_to_agent_forbidden), folded into the same 403.
     if (rpcError.code === "P0002") {
       return NextResponse.json(
         {
@@ -135,29 +128,24 @@ export async function POST(request: NextRequest) {
         { status: 403 },
       );
     }
-    return jsonError("Failed to enqueue", 500);
+    // P0001 now also covers "comment is no longer open" — set_comment_lane
+    // refuses to move a resolved/dismissed comment's lane (something the old
+    // send path never enforced). Surface it as a 409 the UI can explain,
+    // rather than a generic 500.
+    if (rpcError.code === "P0001") {
+      return NextResponse.json(
+        {
+          error: "comment_not_open",
+          message:
+            "This comment is no longer open, so it can't be sent to the agent.",
+        },
+        { status: 409 },
+      );
+    }
+    return jsonError("Failed to send to agent", 500);
   }
 
-  const queued = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  const lane = typeof newLane === "string" ? newLane : "ready_for_agent";
 
-  // Code-review note (api-contract): the pre-U3 direct-insert path returned
-  // HTTP 200 + `{ deduped: true, ... }` when a re-send hit the active-row
-  // conflict (23505). `send_comment_to_agent`'s dedup path is now absorbed
-  // into the atomic RPC and returns the existing row as an ordinary success,
-  // so every response here is 201 with no `deduped` field — an intentional
-  // simplification, not an oversight: no client currently reads `deduped`,
-  // and resurrecting the old distinction would need either an RPC signature
-  // change (a migration, to expose its already-tracked internal insert-vs-dedup
-  // flag) or a clock-skew-prone app-side heuristic (comparing `created_at`
-  // against a request-start timestamp) — neither is worth it for a field
-  // nothing consumes today. If a future caller needs "was this a fresh send
-  // or already queued," add it deliberately via the RPC's return shape.
-  //
-  // VERIFY IN REAL ENV: the local MCP queue consumer (U5/U12) reads this row
-  // over the outbound channel and reports back working→done. End-to-end local
-  // delivery cannot be exercised in this sandbox.
-  return NextResponse.json(
-    { ok: true, status: queued?.status ?? "pending", queueId: queued?.id ?? null, sourceRef },
-    { status: 201 },
-  );
+  return NextResponse.json({ ok: true, lane, sourceRef }, { status: 201 });
 }
