@@ -143,6 +143,30 @@ describe("MarkerLayer existing comments (U12)", () => {
     expect(layer.renderedPinCount()).toBe(0);
   });
 
+  it("add is idempotent by number: a live re-read that placed the pin first, then the optimistic add, yields ONE pin (no duplicate)", () => {
+    const { layer, parent } = setup();
+    // A live broadcast/poll re-read placed the reviewer's own comment #1 first,
+    // as a template (kind derived from the change-set).
+    layer.addMany([
+      {
+        number: 1,
+        rect: makeRect(100, 100, 0, 0),
+        content: { note: "n", authorDisplayName: "Alex", kind: "template" },
+      },
+    ]);
+    // The submit's optimistic add then runs for the SAME number — must update in
+    // place, not stack a second pin.
+    layer.add({
+      number: 1,
+      rect: makeRect(120, 120, 0, 0),
+      content: { note: "n", authorDisplayName: "Alex", kind: "template" },
+    });
+    layer.render({ width: 1000, height: 800 });
+    expect(layer.count()).toBe(1);
+    expect(layer.renderedPinCount()).toBe(1);
+    expect(parent.querySelectorAll(".sc-marker.sc-template").length).toBe(1);
+  });
+
   it("addMany is idempotent by number (a racing re-add never stacks a duplicate pin)", () => {
     const { layer } = setup();
     layer.addMany([
@@ -293,6 +317,47 @@ describe("MarkerLayer — template treatment (U16/R11)", () => {
     const tag = parent.querySelector(".sc-comment-tag");
     expect(tag).not.toBeNull();
     expect(tag!.textContent).toContain("Template");
+  });
+
+  it("notifies onPopoverComments with the popover's comments on open and null on close (U9 live preview)", () => {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const seen: Array<MarkerComment[] | null> = [];
+    const layer = new MarkerLayer(
+      doc as unknown as Document,
+      parent as unknown as HTMLElement,
+      undefined, // cluster threshold
+      undefined, // thread client
+      undefined, // current user
+      undefined, // uploader
+      undefined, // laneClient (U11)
+      (comments) => seen.push(comments),
+    );
+    const content: MarkerComment = {
+      id: "c9",
+      note: "Make the hero bigger",
+      authorDisplayName: "Alex",
+      kind: "template",
+      changeSet: {
+        authoredCommit: "deadbeef",
+        ops: [
+          {
+            opId: "o1",
+            type: "setText",
+            target: { selector: "h1", anchors: [{ type: "id", value: "hero" }] },
+            before: "Welcome",
+            after: "Welcome, bigger",
+          },
+        ],
+      },
+    };
+    layer.add({ number: 1, rect: makeRect(100, 100, 0, 0), content });
+
+    layer.showPopover([1], { x: 100, y: 100 });
+    expect(seen.at(-1)).toEqual([content]); // opened → fires the popover's comments
+
+    layer.closePopover();
+    expect(seen.at(-1)).toBeNull(); // closed → fires null so the preview reverts
   });
 
   it("keeps the template treatment on a stale template pin (composed classes)", () => {

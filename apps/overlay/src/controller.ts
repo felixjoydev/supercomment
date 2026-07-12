@@ -21,6 +21,7 @@ import { newCommentInputSchema } from "@supercomment/shared";
 import {
   type CommentDraft,
   type ExistingCommentMarker,
+  type MarkerComment,
   type OverlayConfig,
   type Rect,
   type SelectionMode,
@@ -50,13 +51,14 @@ import {
 import { diffMarkersByNumber } from "./read/marker-diff.js";
 import { MarkerLayer, type PlacedMarker } from "./markers/render.js";
 import { resolveAnchors } from "./capture/reanchor.js";
+import { ModifiedViewController } from "./editor/apply-change-set.js";
 import { attachBeforeArtifact } from "./capture/screenshot.js";
 import { EditSession, opKey } from "./editor/edit-session.js";
 import type { EditDom } from "./editor/history.js";
 import { buildEditTarget } from "./editor/edit-target.js";
 import { PropertiesPanel } from "./editor/panel.js";
 import { InspectorLayer } from "./editor/inspector.js";
-import { beginInlineTextEdit, type InlineTextHandle } from "./editor/inline-text.js";
+import { beginInlineTextEdit, isEditableText, type InlineTextHandle } from "./editor/inline-text.js";
 import { EscapeStack, ESCAPE_PRIORITY } from "./editor/escape-stack.js";
 import { applyTextPreview, buildTextOp } from "./editor/style-edits.js";
 import { createCanvasProbe } from "./editor/color/normalize.js";
@@ -118,6 +120,13 @@ export class OverlayController {
   private readonly selection: SelectionState;
   private readonly highlights: HighlightLayer;
   private readonly markers: MarkerLayer;
+  /**
+   * Live template preview (U9/G7): when a template comment's pin popover is
+   * open, its change-set is re-applied to the real page so the reviewer sees
+   * the proposed layout in place; reverted when the popover closes. Single
+   * active, drift-guarded (a stale change-set falls back to the screenshot).
+   */
+  private readonly modifiedView: ModifiedViewController;
   private readonly guestStore: GuestNameStore;
   private readonly guestEmailStore: GuestEmailStore;
 
@@ -159,6 +168,12 @@ export class OverlayController {
   private readonly escapeStack = new EscapeStack();
   /** U8: session FontFace registry (drained to baseline on reset-to-build). */
   private readonly fontRegistry = new FontRegistry();
+  /** Elements the reviewer HID this session, for the clickable "Show" recovery. */
+  private hiddenEls: Array<{
+    el: Element;
+    rect: { x: number; y: number; width: number; height: number };
+    key: string;
+  }> = [];
   /** U8: recently-picked font families (most-recent first), across panel opens. */
   private fontRecents: string[] = [];
   /** U10: recently-used colors (hex8, most-recent first), across panel opens. */
@@ -224,6 +239,9 @@ export class OverlayController {
     this.selection = new SelectionState(this.rectFor);
 
     this.highlights = new HighlightLayer(this.doc, this.shell.layer);
+    this.modifiedView = new ModifiedViewController(this.doc, {
+      probe: createCanvasProbe(this.doc),
+    });
     this.markers = new MarkerLayer(
       this.doc,
       this.shell.layer,
@@ -232,8 +250,15 @@ export class OverlayController {
       config.currentUser,
       config.uploader,
       config.laneClient,
+      (comments) => this.previewTemplate(comments),
     );
-    this.inspector = new InspectorLayer(this.doc, this.shell.layer);
+    this.inspector = new InspectorLayer(this.doc, this.shell.layer, {
+      // U12: a committed drag-resize records width+height into the OPEN edit
+      // panel as one history step (the handles only show while editing).
+      onResizeCommit: (dims) => this.editPanel?.applyResize(dims.width, dims.height),
+      // U13: a committed drag-reorder records a moveNode into the open panel.
+      onReorderCommit: (c) => this.editPanel?.applyReorder(c),
+    });
     this.guestStore = new GuestNameStore(config.previewKey, config.storage);
     this.guestEmailStore = new GuestEmailStore(config.previewKey, config.storage);
 
@@ -259,6 +284,15 @@ export class OverlayController {
     // only; the device-mode child renders the parent's already-loaded set.
     if (!config.deviceChild) this.startCommentSync();
 
+    // U14: a device-mode CHILD forwards its own activity to the parent's session
+    // lifecycle (it runs no keepalive itself), so editing inside the iframe keeps
+    // the review session alive. Tracked in the listener bag for teardown.
+    if (config.deviceChild && config.onChildActivity) {
+      const forward = (): void => config.onChildActivity?.();
+      this.on(this.shell.layer, "pointerdown", forward);
+      this.on(this.shell.layer, "keydown", forward);
+    }
+
     // Responsive device-mode toolbar — top-level controllers only. The child
     // controller mounted inside the device iframe must not nest its own.
     if (!config.deviceChild) {
@@ -271,8 +305,14 @@ export class OverlayController {
             doc: childDoc,
             deviceChild: true,
             surface: preset.surface,
+            // U14: label the child's edit-panel chip + tag its ops to this surface.
+            surfaceLabel: `${preset.label} · ${preset.width}px`,
             // Route the child's submits back so the parent's toggle counts stay live.
             onCommentSubmitted: (s) => this.bumpSurfaceCount(s),
+            // U14: forward the child's activity to the PARENT session lifecycle
+            // (the child runs no keepalive of its own), so editing in the iframe
+            // keeps the review session alive.
+            onChildActivity: () => this.onOverlayActivity(),
           });
           // Hand the child the full comment set; it renders only its own surface.
           child.loadExistingComments(this.existingComments);
@@ -304,14 +344,9 @@ export class OverlayController {
     this.editSession.history.subscribe(() => {
       this.editPanel?.refreshUi();
       this.inspector.scheduleRender();
-      // U6: clear the hidden-element ghost once no hide op remains (undo/revert).
-      if (
-        !this.history
-          .projectOps()
-          .some((o) => o.type === "setVisibility" && o.after === "hidden")
-      ) {
-        this.inspector.setGhost(null);
-      }
+      // Re-sync the hidden-element "Show" placeholders: an undo/redo/revert that
+      // un-hides an element drops its placeholder; a re-hide restores it.
+      this.recomputeGhosts();
     });
     this.bindEvents();
   }
@@ -329,6 +364,9 @@ export class OverlayController {
   destroy(): void {
     this.listeners.dispose();
     this.dismissEditPanel();
+    // Drop any live template preview first so its revert() runs against the
+    // previewed state, before restoreToBuild() normalises inline styles.
+    this.modifiedView.deselect();
     // Ephemeral visual edits must not outlive the overlay — restore the host
     // page's inline styles byte-identical before we detach.
     this.restoreToBuild();
@@ -354,6 +392,36 @@ export class OverlayController {
     this.toolbar.destroy();
     this.deviceMode?.exit();
     this.shell.destroy();
+  }
+
+  /**
+   * Live-preview a template comment when its pin popover opens (U9/G7). Applies
+   * the first template change-set among the popover's comments to the real page
+   * so the reviewer sees the proposed layout in place; `null` (popover closed)
+   * reverts to the live build. Skips while the reviewer has their own edits in
+   * flight so a saved template never clobbers an unsaved buffer. A drifted
+   * change-set applies nothing — the popover's stored screenshot is the record.
+   */
+  private previewTemplate(comments: MarkerComment[] | null): void {
+    if (!comments) {
+      this.modifiedView.deselect();
+      return;
+    }
+    // Don't fight an active edit buffer: the reviewer's unsaved previews own the
+    // page right now, so leave them untouched.
+    if (!this.editSession.isEmpty()) return;
+    const template = comments.find(
+      (c) => c.kind === "template" && !!c.changeSet && c.changeSet.ops.length > 0,
+    );
+    if (!template?.changeSet) {
+      this.modifiedView.deselect();
+      return;
+    }
+    // Prefer the DB id so re-opening the same pin is a no-op; fall back to a
+    // constant (popovers are single-active anyway).
+    this.modifiedView.select(template.id ?? "template", template.changeSet);
+    // A stale (drifted) result applied nothing; the popover already shows the
+    // stored before/after screenshot, which is the intended fallback.
   }
 
   /** Briefly surface a device-mode error inside the overlay (auto-dismisses). */
@@ -758,37 +826,69 @@ export class OverlayController {
       return;
     }
 
-    this.markers.add({
-      number: result.number,
-      // Store in DOCUMENT space (element box, or the drawn region for area/text)
-      // so the pin tracks the page as it scrolls.
-      rect: element ? this.documentRect(element) : this.viewportToDocument(target.rect),
-      content: {
-        ...(result.id ? { id: result.id } : {}),
-        note: draft.note.trim(),
-        authorDisplayName: name,
-        intent: draft.intent,
-        severity: draft.severity,
-        status: "new",
-        createdAt: new Date().toISOString(),
-        // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly.
-        ...(changeSet ? { kind: "template" as const } : {}),
-        // R19: carry the just-uploaded reference-image refs onto the fresh marker
-        // so its popover shows them INSTANTLY, without waiting for a reload to
-        // repopulate content from the server (matches the reply-image path).
-        ...(context.referenceImages && context.referenceImages.length > 0
-          ? { referenceImages: context.referenceImages }
-          : {}),
+    // The edits are now saved as a comment (R7): reset the history to the
+    // developer build (U3) BEFORE we measure the pin's box. A geometry-changing
+    // edit (font-size, etc.) leaves the element enlarged while its previews are
+    // applied, so measuring here would anchor the pin to the EDITED box — after
+    // the revert below the element is back to its build size and the pin would
+    // sit off the element (often off-screen), invisible until a refresh
+    // re-anchored it. Opacity and other non-geometry edits didn't move the box,
+    // which is why only those pins showed instantly. Reverting first makes the
+    // measured box match what the reviewer sees post-save. (The change-set +
+    // screenshot were already captured above, so the reset loses nothing.)
+    if (changeSet) this.restoreToBuild();
+
+    // Store in DOCUMENT space (element box, or the drawn region for area/text)
+    // so the pin tracks the page as it scrolls.
+    const markerRect = element
+      ? this.documentRect(element)
+      : this.viewportToDocument(target.rect);
+    const markerContent: MarkerComment = {
+      ...(result.id ? { id: result.id } : {}),
+      note: draft.note.trim(),
+      authorDisplayName: name,
+      intent: draft.intent,
+      severity: draft.severity,
+      status: "new",
+      createdAt: new Date().toISOString(),
+      // U16 (R11): a saved visual edit is a `template` — mark its pin distinctly
+      // and carry the change-set so selecting the pin can re-apply it live.
+      ...(changeSet ? { kind: "template" as const, changeSet } : {}),
+      // R19: carry the just-uploaded reference-image refs onto the fresh marker
+      // so its popover shows them INSTANTLY, without waiting for a reload to
+      // repopulate content from the server (matches the reply-image path).
+      ...(context.referenceImages && context.referenceImages.length > 0
+        ? { referenceImages: context.referenceImages }
+        : {}),
+    };
+    this.markers.add({ number: result.number, rect: markerRect, content: markerContent });
+
+    // Register the reviewer's OWN comment in the tracked set immediately. The
+    // overlay was write-only about its own pins: the just-submitted comment lived
+    // in the marker layer but NOT in `existingComments`, so the next live re-read
+    // (broadcast / poll) classified it as a brand-new `added` pin rather than an
+    // existing one — which left the optimistic pin unreconciled (it only picked up
+    // the server's template treatment / change-set after a full page refresh) and,
+    // in a re-read race, could stack a second pin. Seeding it here makes the diff
+    // treat it as an UPDATE, so the pin stays put and reconciles in place.
+    // Idempotent by number.
+    this.existingComments = [
+      ...this.existingComments.filter((c) => c.number !== result.number),
+      {
+        number: result.number,
+        rect: markerRect,
+        isStale: false,
+        anchors: context.anchors ?? [],
+        surface: this.surface,
+        content: markerContent,
       },
-    });
+    ];
     // Keep the toggle counts live: update this controller's own toolbar (if
     // top-level) and notify the parent (if this is the device-iframe child).
     this.bumpSurfaceCount(this.surface);
     this.config.onCommentSubmitted?.(this.surface);
-    // The edits are now saved as a comment (R7): reset the history to the
-    // developer build (U3 — the modified state is captured in the comment's
-    // screenshot + change-set, so the live DOM resets; non-undoable).
-    if (changeSet) this.restoreToBuild();
+    // (restoreToBuild ran above, before the pin was measured, so the pin anchors
+    // to the element's build box rather than the still-enlarged edited box.)
 
     // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
     // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really
@@ -1150,6 +1250,12 @@ export class OverlayController {
     if (this.liveRefreshTimer) return; // already scheduled within the window
     this.liveRefreshTimer = setTimeout(() => {
       this.liveRefreshTimer = null;
+      // U13: a live comment refresh mid-drag would re-measure + repaint pins under
+      // the pointer and can disturb the gesture; defer it until the drag ends.
+      if (this.inspector.isDragging()) {
+        this.scheduleLiveRefresh();
+        return;
+      }
       void this.reloadComments();
       this.refreshOpenThreadReplies();
     }, 250);
@@ -1364,11 +1470,22 @@ export class OverlayController {
       onSwapImageFile: (dataUrl) => {
         this.pendingSwapImages.push(dataUrl);
       },
-      // U6: ghost the vacated slot when an element is hidden (U4 chrome).
-      onElementHidden: (rect) => this.inspector.setGhost(rect),
+      // Track a hidden element + render its clickable "Show" placeholder so the
+      // reviewer can un-hide it without Cmd+Z (recovery UX).
+      onElementHidden: (info) => {
+        this.hiddenEls = this.hiddenEls.filter((h) => h.key !== info.key);
+        this.hiddenEls.push(info);
+        this.recomputeGhosts();
+      },
       // U8: the font picker — catalog + loader env, Escape layer, session recents.
       fontEnv: this.getFontEnv(),
       registerEscapeLayer: (layer) => this.escapeStack.register(layer),
+      // U12: coalesce a drag-resize's width+height records into one undo step.
+      beginGesture: () => this.history.beginGesture(),
+      commitGesture: () => this.history.commitGesture(),
+      // U14: tag every edit to the current device surface + show the chip.
+      surface: this.surface,
+      ...(this.config.surfaceLabel ? { surfaceLabel: this.config.surfaceLabel } : {}),
       fontRecents: () => this.fontRecents,
       onFontPicked: (family) => {
         this.fontRecents = reorderRecents(this.fontRecents, family);
@@ -1387,8 +1504,9 @@ export class OverlayController {
         this.colorRecents = reorderRecents(this.colorRecents, hex8);
       },
     });
-    // The in-page inspector locks onto the selected element while editing.
-    this.inspector.show(el);
+    // The in-page inspector locks onto the selected element while editing, with
+    // the interactive resize handles enabled (U12).
+    this.inspector.show(el, { resizable: true });
   }
 
   /**
@@ -1461,13 +1579,46 @@ export class OverlayController {
   private restoreToBuild(): void {
     this.history.resetToBuild();
     this.pendingSwapImages = [];
-    this.inspector.setGhost(null);
+    // Every hide is reverted by resetToBuild, so drop the "Show" placeholders too.
+    this.hiddenEls = [];
+    this.inspector.setGhosts([]);
     // U8: remove every FontFace the session added so document.fonts returns to
     // its developer-build baseline (device-mode child docs included).
     this.fontRegistry.drain();
     // U9: drop staged (not-yet-uploaded) font bytes; a reset-to-build discards the
     // whole buffer, and nothing was ever stored, so there is nothing to purge.
     this.pendingFontUploads = new Map();
+  }
+
+  /**
+   * Re-sync the hidden-element "Show" placeholders from live state: keep the
+   * elements still hidden (an inline `display:none` we applied), and hand the
+   * inspector a clickable placeholder per one so the reviewer can un-hide it.
+   */
+  private recomputeGhosts(): void {
+    this.hiddenEls = this.hiddenEls.filter((h) => this.isElementHidden(h.el));
+    this.inspector.setGhosts(
+      this.hiddenEls.map((h) => ({
+        rect: h.rect,
+        tag: (h.el.tagName || "node").toLowerCase(),
+        onRestore: () => this.restoreHidden(h.key),
+      })),
+    );
+  }
+
+  /** Does the element still carry the inline `display:none` we applied to hide it? */
+  private isElementHidden(el: Element): boolean {
+    try {
+      return (el as HTMLElement).style?.display === "none";
+    } catch {
+      return false;
+    }
+  }
+
+  /** Un-hide a hidden element by reverting its hide edit (previewShow runs). */
+  private restoreHidden(key: string): void {
+    this.history.revertKey(key);
+    this.recomputeGhosts();
   }
 
   /**
@@ -1487,18 +1638,23 @@ export class OverlayController {
    * non-leaf elements (guarded in `beginInlineTextEdit`).
    */
   private beginInlineEdit(el: Element): void {
-    const target = buildEditTarget(el, this.doc);
+    // Double-clicking a nested inline (an empty span, a <br>, an icon) should
+    // still edit the text it lives in: drill UP to the nearest editable text
+    // element (bounded). A word inside a <p> resolves the <p> directly.
+    const editable = this.nearestEditableText(el);
+    if (!editable) return;
+    const target = buildEditTarget(editable, this.doc);
     // Track the handle so the Escape stack can cancel THIS inline edit as its
     // innermost layer without tearing down the whole editor (U2).
-    this.inlineEdit = beginInlineTextEdit(el, this.doc, {
+    this.inlineEdit = beginInlineTextEdit(editable, this.doc, {
       onCommit: (before, after) => {
         this.inlineEdit = null;
         const next = after.replace(/\s+/g, " ").trim();
         if (next === before) return; // unchanged → record nothing
         const dom: EditDom = {
-          apply: () => applyTextPreview(el, next),
-          invert: () => applyTextPreview(el, before),
-          revertToBuild: () => applyTextPreview(el, before),
+          apply: () => applyTextPreview(editable, next),
+          invert: () => applyTextPreview(editable, before),
+          revertToBuild: () => applyTextPreview(editable, before),
         };
         this.recordEdit(buildTextOp(target, before, next), dom);
       },
@@ -1506,6 +1662,17 @@ export class OverlayController {
         this.inlineEdit = null;
       },
     });
+  }
+
+  /** The nearest editable text element at/above `el` (bounded drill), or null. */
+  private nearestEditableText(el: Element): Element | null {
+    let cur: Element | null = el;
+    for (let i = 0; cur && i < 4; i++) {
+      if (this.isOwnNode(cur)) return null; // never edit our own chrome
+      if (isEditableText(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
   }
 
   /**
@@ -1550,6 +1717,13 @@ export class OverlayController {
         this.inlineEdit?.cancel();
         this.inlineEdit = null;
       },
+    });
+    // U12/U13: a live drag (resize or reorder) cancels on Escape (gesture layer
+    // only) — the panel and its buffer stay intact.
+    this.escapeStack.register({
+      priority: ESCAPE_PRIORITY.gesture,
+      isActive: () => this.inspector.isDragging(),
+      close: () => this.inspector.abortDrag(),
     });
     this.escapeStack.register({
       priority: ESCAPE_PRIORITY.selection,

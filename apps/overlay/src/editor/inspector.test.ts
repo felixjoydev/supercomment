@@ -176,3 +176,178 @@ describe("InspectorLayer", () => {
     expect(queue.length).toBe(2); // a new frame can be scheduled after the flush
   });
 });
+
+describe("InspectorLayer resize handles (U12)", () => {
+  function mount(metrics = { offsetWidth: 200, offsetHeight: 100, clientRectCount: 1, display: "block" }) {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const committed: { width: number; height: number }[] = [];
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement, {
+      onResizeCommit: (d) => committed.push(d),
+      readMetrics: () => metrics,
+    });
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, committed, q };
+  }
+
+  it("records a handle drag as width+height, correcting for ancestor scale", () => {
+    // rect 100x50 but layout 200x100 → scale 0.5. Drag +50 viewport px east → +100 css.
+    setRectProvider(() => makeRect(0, 0, 100, 50));
+    const { doc, inspector, committed, q } = mount();
+    const el = doc.createElement("div");
+    inspector.show(el as unknown as Element, { resizable: true });
+    const eHandle = q(".sc-inspect-handle-e")!;
+    eHandle.dispatch("pointerdown", {
+      clientX: 100, clientY: 25, pointerId: 1, target: eHandle,
+      preventDefault() {}, stopPropagation() {},
+    });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 150, clientY: 25 });
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 150, clientY: 25 });
+    expect(committed).toEqual([{ width: 300, height: 100 }]);
+  });
+
+  it("pointercancel mid-drag records nothing (restores the pre-gesture size)", () => {
+    setRectProvider(() => makeRect(0, 0, 200, 100));
+    const { doc, inspector, committed, q } = mount();
+    const el = doc.createElement("div");
+    inspector.show(el as unknown as Element, { resizable: true });
+    const se = q(".sc-inspect-handle-se")!;
+    se.dispatch("pointerdown", { clientX: 200, clientY: 100, pointerId: 1, target: se, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 250, clientY: 130 });
+    expect(inspector.isResizing()).toBe(true);
+    (doc as unknown as FakeElement).dispatch("pointercancel", {});
+    expect(inspector.isResizing()).toBe(false);
+    expect(committed).toEqual([]);
+  });
+
+  it("hides the handles in passive (non-resizable) mode and for inapplicable boxes", () => {
+    setRectProvider(() => makeRect(0, 0, 200, 100));
+    const passive = mount();
+    passive.inspector.show(passive.doc.createElement("div") as unknown as Element); // no resizable
+    expect(passive.q(".sc-inspect-handle-e")!.style.display).toBe("none");
+
+    const inline = mount({ offsetWidth: 200, offsetHeight: 20, clientRectCount: 2, display: "inline" });
+    inline.inspector.show(inline.doc.createElement("span") as unknown as Element, { resizable: true });
+    expect(inline.q(".sc-inspect-handle-e")!.style.display).toBe("none");
+  });
+});
+
+describe("InspectorLayer drag-to-reorder (U13)", () => {
+  function mount() {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const committed: Array<{ from: number; to: number; referenceIndex: number; position: string }> = [];
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement, {
+      onReorderCommit: (c) => committed.push(c),
+    });
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, committed, q };
+  }
+
+  /** A vertical stack (double defaults to axis "column"): a,b,c at y 0/50/100. */
+  function stack(doc: ReturnType<typeof makeFakeDom>["doc"]) {
+    const container = doc.createElement("div");
+    container.id = "par";
+    const a = doc.createElement("div"); a.id = "a";
+    const b = doc.createElement("div"); b.id = "b"; // dragged (index 1)
+    const c = doc.createElement("div"); c.id = "c";
+    container.append(a, b, c);
+    setRectProvider((el) => {
+      switch ((el as FakeElement).id) {
+        case "par": return makeRect(0, 0, 100, 150);
+        case "a": return makeRect(0, 0, 100, 50);
+        case "b": return makeRect(0, 50, 100, 50);
+        case "c": return makeRect(0, 100, 100, 50);
+        default: return makeRect(0, 0, 0, 0);
+      }
+    });
+    return { container, a, b, c };
+  }
+
+  it("drops after the last card and records a moveNode with true DOM indices", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    // Drag down over c's lower half (y 130 > c center 125) → after c (index 2).
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 50, clientY: 130 });
+    expect(committed).toEqual([{ from: 1, to: 3, referenceIndex: 2, position: "after" }]);
+  });
+
+  it("shows the insertion line during the drag and hides it after drop", () => {
+    const { doc, inspector, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    expect(q(".sc-inspect-insertion")!.style.display).not.toBe("none");
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 50, clientY: 130 });
+    expect(q(".sc-inspect-insertion")!.style.display).toBe("none");
+  });
+
+  it("a drop in a non-sibling region (outside the container) records nothing", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 400, clientY: 400 }); // outside
+    (doc as unknown as FakeElement).dispatch("pointerup", { clientX: 400, clientY: 400 });
+    expect(committed).toEqual([]);
+  });
+
+  it("pointercancel mid-drag aborts with no record and hides the line", () => {
+    const { doc, inspector, committed, q } = mount();
+    const { b } = stack(doc);
+    inspector.show(b as unknown as Element, { resizable: true });
+    const grip = q(".sc-inspect-reorder-grip")!;
+    grip.dispatch("pointerdown", { clientX: 50, clientY: 75, pointerId: 1, target: grip, preventDefault() {}, stopPropagation() {} });
+    (doc as unknown as FakeElement).dispatch("pointermove", { clientX: 50, clientY: 130 });
+    expect(inspector.isDragging()).toBe(true);
+    (doc as unknown as FakeElement).dispatch("pointercancel", {});
+    expect(inspector.isDragging()).toBe(false);
+    expect(committed).toEqual([]);
+    expect(q(".sc-inspect-insertion")!.style.display).toBe("none");
+  });
+});
+
+describe("InspectorLayer hidden-element recovery", () => {
+  function mount() {
+    const { doc } = makeFakeDom();
+    const parent = doc.createElement("div");
+    const inspector = new InspectorLayer(doc as unknown as Document, parent as unknown as HTMLElement);
+    const q = (sel: string): FakeElement | null => parent.querySelector(sel);
+    return { doc, parent, inspector, q };
+  }
+
+  it("renders a clickable 'Show' placeholder per hidden element and fires onRestore", () => {
+    const { inspector, q } = mount();
+    let restored = 0;
+    inspector.setGhosts([{ rect: makeRect(20, 30, 120, 40), tag: "p", onRestore: () => { restored += 1; } }]);
+    const ghost = q(".sc-inspect-ghost")!;
+    expect(ghost).not.toBeNull();
+    expect(ghost.textContent).toBe("Show p");
+    ghost.dispatch("click", {});
+    expect(restored).toBe(1);
+  });
+
+  it("clears placeholders when passed an empty set", () => {
+    const { inspector, q } = mount();
+    inspector.setGhosts([{ rect: makeRect(0, 0, 10, 10), tag: "div", onRestore: () => {} }]);
+    expect(q(".sc-inspect-ghost")!.style.display).not.toBe("none");
+    inspector.setGhosts([]);
+    // the pooled node is hidden, not removed
+    expect(q(".sc-inspect-ghost")!.style.display).toBe("none");
+  });
+
+  it("does NOT draw the selection box for a hidden (zero-area) element — the top-left bug", () => {
+    setRectProvider(() => makeRect(0, 0, 0, 0)); // a display:none element reports 0x0
+    const { doc, inspector, q } = mount();
+    inspector.show(doc.createElement("p") as unknown as Element);
+    expect(q(".sc-inspect-box")!.style.display).toBe("none");
+    expect(q(".sc-inspect-tag")!.style.display).toBe("none");
+  });
+});

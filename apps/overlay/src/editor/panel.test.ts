@@ -15,6 +15,7 @@ import {
 } from "./panel.js";
 import { EditSession } from "./edit-session.js";
 import { buildEditTarget } from "./edit-target.js";
+import { opKey } from "./op-key.js";
 
 // The panel is exercised against its REAL collaborator — a live EditSession — so
 // these are integration tests over the exact wiring the controller uses. The fake
@@ -50,6 +51,8 @@ function mount(opts?: {
   initialPromptText?: string;
   fontEnv?: PanelCallbacks["fontEnv"];
   fontRecents?: string[];
+  surface?: PanelCallbacks["surface"];
+  surfaceLabel?: string;
 }) {
   const { doc } = opts?.doc ? { doc: opts.doc } : makeFakeDom();
   const parent = doc.createElement("div"); // stands in for shell.layer
@@ -98,6 +101,9 @@ function mount(opts?: {
           fontRecents: () => opts.fontRecents ?? [],
           onFontPicked: () => {},
         }
+      : {}),
+    ...(opts?.surface
+      ? { surface: opts.surface, ...(opts.surfaceLabel ? { surfaceLabel: opts.surfaceLabel } : {}) }
       : {}),
   };
   const target = buildEditTarget(el as unknown as Element, doc as unknown as Document);
@@ -239,6 +245,22 @@ describe("PropertiesPanel — Type settings (text)", () => {
     expect(session.list()[0]!.after).toBe("52px");
   });
 
+  it("scrubbing a numeric label commits exactly one edit with the final value (U16)", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent } = mount({ el: makeEl(doc, "h1", "Hero"), doc });
+    const label = parent
+      .querySelectorAll(".sc-ep-scrub")
+      .find((l) => l.textContent === "Size")!;
+    label.dispatch("pointerdown", {
+      clientX: 100, clientY: 10, pointerId: 1, target: label, preventDefault() {},
+    });
+    // +20px past the 3px activation → 20/4 = 5 steps × step 1 = +5 (from 0).
+    doc.dispatch("pointermove", { clientX: 120, clientY: 10 });
+    doc.dispatch("pointerup", { clientX: 120, clientY: 10 });
+    expect(session.size).toBe(1);
+    expect(session.list().find((o) => o.property === "font-size")!.after).toBe("5px");
+  });
+
   it("opens the font picker and records a font-family op with identity (U8)", async () => {
     const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
     const { doc } = makeFakeDom();
@@ -304,6 +326,32 @@ describe("PropertiesPanel — Colour + opacity", () => {
     expect(session.list().some((o) => o.property === "opacity")).toBe(false);
   });
 
+  it("records valueToken when a color pick matches a page design token (U11)", () => {
+    const { doc, win } = makeFakeDom();
+    // Minimal CSSOM: a stylesheet declaring --brand, resolved on the element.
+    const brandStyle = {
+      length: 1,
+      item: (i: number) => (i === 0 ? "--brand" : ""),
+      getPropertyValue: (n: string) => (n === "--brand" ? "#123456" : ""),
+    };
+    (doc as unknown as { styleSheets: unknown }).styleSheets = {
+      length: 1,
+      0: { cssRules: { length: 1, 0: { style: brandStyle } } },
+    };
+    (win as unknown as { getComputedStyle: unknown }).getComputedStyle = () => ({
+      getPropertyValue: (n: string) => (n === "--brand" ? "#123456" : ""),
+      fontFamily: "",
+    });
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc });
+    q(".sc-ep-ctl-color").dispatch("click", {});
+    const hex = parent.querySelector(".sc-ep-colorhex")!;
+    hex.value = "#123456";
+    hex.dispatch("change", {});
+    const op = session.list().find((o) => o.property === "color")!;
+    expect(op.after).toBe("rgb(18, 52, 86)");
+    expect(op.valueToken).toBe("--brand");
+  });
+
   it("records opacity as a 0–1 fraction from the percent field", () => {
     const { doc } = makeFakeDom();
     const { session, q } = mount({ el: makeEl(doc, "div", "box"), doc });
@@ -312,6 +360,67 @@ describe("PropertiesPanel — Colour + opacity", () => {
     op.dispatch("input", {});
     const recorded = session.list().find((o) => o.property === "opacity")!;
     expect(recorded.after).toBe("0.5");
+  });
+});
+
+describe("PropertiesPanel — device-mode surface (U14)", () => {
+  it("tags edits with the current surface and renders the chip (mobile)", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent, q } = mount({
+      el: makeEl(doc, "h2", "Hi"),
+      doc,
+      surface: "mobile",
+      surfaceLabel: "Mobile · 375px",
+    });
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    expect(session.list()[0]!.responsive).toBe("mobile");
+    expect(parent.querySelector(".sc-ep-surface-chip")!.textContent).toContain("Mobile · 375px");
+  });
+
+  it("leaves base (web) edits untagged and shows no chip", () => {
+    const { doc } = makeFakeDom();
+    const { session, parent, q } = mount({ el: makeEl(doc, "h2", "Hi"), doc, surface: "web" });
+    q(".sc-ep-ctl-font-size").value = "40";
+    q(".sc-ep-ctl-font-size").dispatch("input", {});
+    expect(session.list()[0]!.responsive).toBeUndefined();
+    expect(parent.querySelector(".sc-ep-surface-chip")).toBeNull();
+  });
+
+  it("the same property edited at base vs mobile yields two distinct ops", () => {
+    const { doc } = makeFakeDom();
+    // Base edit.
+    const base = mount({ el: makeEl(doc, "h2", "A"), doc });
+    base.q(".sc-ep-ctl-font-size").value = "40";
+    base.q(".sc-ep-ctl-font-size").dispatch("input", {});
+    // Mobile edit of the SAME property on a fresh panel + session (distinct opKey).
+    const mobile = mount({ el: makeEl(doc, "h2", "A"), doc, surface: "mobile" });
+    mobile.q(".sc-ep-ctl-font-size").value = "40";
+    mobile.q(".sc-ep-ctl-font-size").dispatch("input", {});
+    // opKey namespaces by breakpoint, so these never coalesce.
+    expect(opKey(base.session.list()[0]!)).not.toBe(opKey(mobile.session.list()[0]!));
+  });
+});
+
+describe("PropertiesPanel — drag-reorder (U13)", () => {
+  it("applyReorder records a moveNode with the drop's true DOM indices", () => {
+    const { doc } = makeFakeDom();
+    const { el } = withSiblings(doc, "div"); // el = middle child (index 1) of 3
+    const { session, panel } = mount({ el, doc });
+    panel.applyReorder({ from: 1, to: 3, referenceIndex: 2, position: "after" });
+    const op = session.list().find((o) => o.type === "moveNode")!;
+    expect(op).toBeDefined();
+    expect(op.order).toEqual({ from: 1, to: 3 });
+    expect(op.insertion?.position).toBe("after");
+  });
+
+  it("applyReorder is a no-op when the element already sits at the slot", () => {
+    const { doc } = makeFakeDom();
+    const { el } = withSiblings(doc, "div"); // el index 1
+    const { session, panel } = mount({ el, doc });
+    // "before" the sibling at index 2 == where index-1 already is → nothing recorded.
+    panel.applyReorder({ from: 1, to: 2, referenceIndex: 2, position: "before" });
+    expect(session.list().some((o) => o.type === "moveNode")).toBe(false);
   });
 });
 

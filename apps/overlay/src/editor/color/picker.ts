@@ -80,8 +80,10 @@ export interface ColorPickerOptions {
   palette: string[];
   /** Session recents as hex8, most-recent first. */
   recents: string[];
-  /** Fires on every adjustment with the CSS value to write (rgba/rgb). */
-  onChange(css: string): void;
+  /** Fires on every adjustment with the CSS value to write + any matched token (U11). */
+  onChange(css: string, valueToken?: string | null): void;
+  /** Resolve a css value to a page design-token name, or null (U11). */
+  matchToken?: (css: string) => string | null;
   /** The popover closed (commit / Escape / outside) — return focus + drop ref. */
   onClose(): void;
   /** A color was committed (hex8), for the session recents. */
@@ -180,8 +182,25 @@ export class ColorPicker {
 
   private emit(): void {
     this.dirty = true;
-    this.opts.onChange(rgbaToCss(this.rgba()));
+    const css = rgbaToCss(this.rgba());
+    const token = this.opts.matchToken?.(css) ?? null;
+    this.opts.onChange(css, token);
+    this.renderTokenChip(token);
     this.syncControls();
+  }
+
+  /** Show / clear the "matches --token" chip when a pick lands on a design token. */
+  private renderTokenChip(token: string | null): void {
+    if (!this.root) return;
+    const existing = this.root.querySelector?.(".sc-ep-token-chip") as HTMLElement | null;
+    if (!token) {
+      existing?.remove?.();
+      return;
+    }
+    const chip = existing ?? this.create("div", "sc-ep-token-chip");
+    chip.setAttribute("role", "status");
+    chip.textContent = `Matches ${token}`;
+    if (!existing) this.root.appendChild(chip);
   }
 
   // --- DOM ------------------------------------------------------------------

@@ -14,6 +14,7 @@ import type {
   CommentLane,
   ElementAnchor,
   DeviceSurface,
+  VisualChangeSet,
 } from "@supercomment/shared";
 import type { ThreadClient } from "../submit/thread.js";
 import type { ReviewComment } from "../read/load-comments.js";
@@ -81,6 +82,12 @@ export interface MarkerComment {
    * in_review; shown to the reviewer on the Ready-for-review pin. Absent when none.
    */
   reviewSummary?: string;
+  /**
+   * The recorded visual change-set for a `template` comment, carried so selecting
+   * the pin can RE-APPLY the edits live on the page (the modified-view preview).
+   * Present iff `kind === "template"`.
+   */
+  changeSet?: VisualChangeSet;
   /**
    * Reviewer-uploaded reference images ("what I want", R19) — `captures` bucket
    * object PATHS, signed on demand for the popover (U12 read). Carried from
@@ -371,6 +378,18 @@ export interface OverlayConfig {
    * filtered to this surface so a mobile comment never shows on desktop.
    */
   surface?: DeviceSurface;
+  /**
+   * U14: a human label for the current device surface (e.g. "Mobile · 375px"),
+   * shown as the edit-panel chip so a reviewer always knows which breakpoint
+   * their edits are tagged to. Set only for a device-mode child; absent = base.
+   */
+  surfaceLabel?: string;
+  /**
+   * U14: a device-mode CHILD forwards its own pointer/keyboard activity to the
+   * PARENT session lifecycle through this callback (the child has no keepalive of
+   * its own), so editing inside the iframe keeps the review session alive.
+   */
+  onChildActivity?: () => void;
   /**
    * Called after a comment is successfully submitted, with the controller's
    * surface. The top-level controller uses this to keep the device-toolbar

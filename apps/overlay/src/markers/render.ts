@@ -93,6 +93,12 @@ export class MarkerLayer {
      * Absent (guest / tunnel / tests) → no lane control is rendered.
      */
     private readonly laneClient?: LaneClient,
+    /**
+     * Fired when the comment popover opens (with its comments) or closes (null),
+     * so the controller can re-apply a template's visual edits live while its pin
+     * is selected (the modified-view preview) and revert them on close.
+     */
+    private readonly onPopoverComments?: (comments: MarkerComment[] | null) => void,
   ) {
     this.container = doc.createElement("div");
     this.container.className = "sc-marker-container";
@@ -104,9 +110,22 @@ export class MarkerLayer {
     this.container.addEventListener("click", (e) => this.handlePinClick(e));
   }
 
-  /** Register a new marker and repaint (the new pin pops in once). */
+  /**
+   * Register a new marker and repaint (the new pin pops in once). Idempotent by
+   * comment number: if a re-read has ALREADY placed this comment, update that pin
+   * in place instead of stacking a duplicate. (Belt to the controller's braces —
+   * a just-submitted comment is registered in the tracked set so a live re-read
+   * reconciles rather than re-adds it.)
+   */
   add(marker: PlacedMarker): void {
-    this.markers.push(marker);
+    const existing = this.markers.find((m) => m.number === marker.number);
+    if (existing) {
+      existing.rect = marker.rect;
+      existing.content = marker.content;
+      existing.isStale = marker.isStale;
+    } else {
+      this.markers.push(marker);
+    }
     this.justAdded = marker.number;
     this.render();
     this.justAdded = null;
@@ -331,13 +350,19 @@ export class MarkerLayer {
     this.popover = pop;
     this.popoverNumbers = numbers.slice();
     this.positionPopover(anchorPoint);
+    // Let the controller preview any template edits for the just-opened comments.
+    this.onPopoverComments?.(
+      entries.map((mk) => mk.content).filter((c): c is MarkerComment => !!c),
+    );
   }
 
   /** Public close — remove the popover element and clear refs. */
   closePopover(): void {
+    const wasOpen = this.popover !== null;
     this.popover?.remove();
     this.popover = null;
     this.popoverNumbers = null;
+    if (wasOpen) this.onPopoverComments?.(null); // revert any live template preview
   }
 
   /** The popover's top bar: a "Comment(s)" title on the left, close on the right. */

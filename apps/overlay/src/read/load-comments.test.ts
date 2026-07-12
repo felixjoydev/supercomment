@@ -353,6 +353,69 @@ describe("toExistingMarkers", () => {
     expect(markers[1]!.content.authorDisplayName).toBe("Grace");
     // No reference images on these two → the field is omitted (undefined).
     expect(markers[0]!.content.referenceImages).toBeUndefined();
+    // Neither carries a change-set → neither is a template.
+    expect(markers[0]!.content.kind).toBeUndefined();
+    expect(markers[0]!.content.changeSet).toBeUndefined();
+  });
+
+  it("derives kind='template' + carries the change-set from context (reload fix)", () => {
+    // list_review_comments drops the `kind` column but returns the full context;
+    // a comment IS a template exactly when its context carries change-set ops, so a
+    // reloaded visual-edit comment must regain its template treatment + edit data.
+    const changeSet = {
+      ops: [
+        {
+          opId: "o1",
+          type: "setStyle" as const,
+          target: { selector: "h1", anchors: [] },
+          property: "border-radius",
+          before: "0px",
+          after: "12px",
+        },
+      ],
+    };
+    const [marker] = toExistingMarkers([
+      {
+        id: "t1",
+        number: 5,
+        intent: "fix",
+        severity: "important",
+        note: "rounder",
+        status: "open",
+        isStale: false,
+        context: { boundingBox: { x: 0, y: 0, width: 10, height: 10 }, changeSet },
+        createdAt: "",
+        authorDisplayName: "Ada",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
+      },
+    ]);
+    expect(marker!.content.kind).toBe("template");
+    expect(marker!.content.changeSet).toEqual(changeSet);
+  });
+
+  it("does NOT treat an empty change-set (no ops) as a template", () => {
+    const [marker] = toExistingMarkers([
+      {
+        id: "e1",
+        number: 6,
+        intent: "fix",
+        severity: "minor",
+        note: "n",
+        status: "open",
+        isStale: false,
+        context: { changeSet: { ops: [] } },
+        createdAt: "",
+        authorDisplayName: "Grace",
+        path: null,
+        unread: false,
+        latestReplyAt: null,
+        lastReadAt: null,
+      },
+    ]);
+    expect(marker!.content.kind).toBeUndefined();
   });
 
   it("carries reviewer reference-image refs into the popover content (R19)", () => {

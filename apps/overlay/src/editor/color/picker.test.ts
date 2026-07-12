@@ -131,6 +131,27 @@ describe("ColorPicker (U10)", () => {
     expect(h.q(".sc-ep-eyedropper")).toBeNull();
   });
 
+  it("shows a token chip and forwards the token when a pick matches a design token (U11)", () => {
+    const tokens: string[] = [];
+    const h = setup({
+      initial: "#ff0000",
+      matchToken: (css) => (css === "rgb(0, 0, 255)" ? "--brand" : null),
+      onChange: (_css, token) => tokens.push(token ?? "none"),
+    });
+    h.picker.open();
+    const hex = h.q(".sc-ep-colorhex") as FakeElement;
+    hex.value = "#0000ff";
+    hex.dispatch("change", {});
+    expect(tokens.at(-1)).toBe("--brand");
+    expect((h.q(".sc-ep-token-chip") as FakeElement).textContent).toContain("--brand");
+
+    // Moving off the token clears the chip.
+    hex.value = "#00ff00";
+    hex.dispatch("change", {});
+    expect(tokens.at(-1)).toBe("none");
+    expect(h.q(".sc-ep-token-chip")).toBeNull();
+  });
+
   it("shows the eyedropper and preserves the current alpha on pick", async () => {
     const h = setup({
       initial: "rgba(255, 0, 0, 0.5)",

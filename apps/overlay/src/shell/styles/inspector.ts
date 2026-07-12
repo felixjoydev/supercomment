@@ -78,18 +78,96 @@ export const INSPECTOR_STYLES = `/* In-page element inspector (requirement D) --
   z-index: 3;
 }
 /* U4/U6: a collapsed ghost at a hidden element's vacated slot. */
+/* A hidden element's collapsed slot: a clickable "Show <tag>" placeholder so the
+   reviewer can un-hide it without Cmd+Z (interactive, unlike the rest of the
+   chrome). Minimum tap target so a thin/short hidden element is still clickable. */
 .sc-inspect-ghost {
   position: fixed;
-  pointer-events: none;
-  border: 1.5px dashed rgba(232, 56, 196, 0.7);
+  box-sizing: border-box;
+  min-width: 64px;
+  min-height: 24px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1.5px dashed rgba(232, 56, 196, 0.75);
   background: repeating-linear-gradient(
     45deg,
-    rgba(232, 56, 196, 0.06),
-    rgba(232, 56, 196, 0.06) 6px,
+    rgba(232, 56, 196, 0.08),
+    rgba(232, 56, 196, 0.08) 6px,
     transparent 6px,
     transparent 12px
   );
+  border-radius: 4px;
+  color: #e838c4;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 3;
+  transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+.sc-inspect-ghost:hover { background: rgba(232, 56, 196, 0.16); }
+
+/* U12: the 8-point resize handles. Unlike the rest of the inspector chrome these
+   ARE interactive (pointer-events: auto) so they can be grabbed; they render only
+   while editing (a panel is open) and for a single-fragment resizable box. */
+.sc-inspect-handle {
+  position: fixed;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1.5px solid var(--ep-accent, #8b6dff);
   border-radius: 2px;
-  z-index: 1;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 3;
+}
+.sc-inspect-handle-n,
+.sc-inspect-handle-s { cursor: ns-resize; }
+.sc-inspect-handle-e,
+.sc-inspect-handle-w { cursor: ew-resize; }
+.sc-inspect-handle-nw,
+.sc-inspect-handle-se { cursor: nwse-resize; }
+.sc-inspect-handle-ne,
+.sc-inspect-handle-sw { cursor: nesw-resize; }
+
+/* U13: the drag-to-reorder grip (top-left of the box) + the live insertion line. */
+.sc-inspect-reorder-grip {
+  position: fixed;
+  margin: -11px 0 0 0;
+  padding: 0 5px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--ep-accent, #8b6dff);
+  border-radius: 4px;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  z-index: 4;
+}
+.sc-inspect-reorder-grip:active { cursor: grabbing; }
+.sc-inspect-insertion {
+  position: fixed;
+  background: var(--ep-accent, #8b6dff);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  z-index: 4;
+  /* U16: the line glides between discrete drop slots (interruptible transition,
+     specific properties only — never the box, which must track the pointer 1:1). */
+  transition: left 90ms cubic-bezier(0.2, 0, 0, 1), top 90ms cubic-bezier(0.2, 0, 0, 1),
+    width 90ms cubic-bezier(0.2, 0, 0, 1), height 90ms cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-inspect-insertion { transition: none; }
 }
 `;

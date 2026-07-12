@@ -794,6 +794,44 @@ describe("MCP template delivery (U16, R14)", () => {
     expect(out.comments[0]?.changeSetSummary).toContain("font-size");
   });
 
+  it("renders font-upload provenance, breakpoint, and swap-URL caveat in the prose (U15)", async () => {
+    const comment = makeComment({ number: 1, trustLevel: "member" });
+    const rich = {
+      ...comment,
+      context: {
+        ...comment.context,
+        changeSet: {
+          ops: [
+            {
+              opId: "o1",
+              type: "setStyle",
+              target: { selector: "h1", anchors: [] },
+              property: "font-family",
+              before: "sans-serif",
+              after: "Grifter, sans-serif",
+              font: { family: "Grifter", source: "upload" },
+              responsive: "mobile",
+            },
+            {
+              opId: "o2",
+              type: "setAttr",
+              target: { selector: "img", anchors: [] },
+              property: "src",
+              before: "/a.png",
+              after: "https://cdn.example/b.png",
+            },
+          ],
+        },
+      },
+    } as McpComment;
+    const store = new InMemoryCommentStore([rich]);
+    const out = await handleGetComment(store, { number: 1 });
+    const prose = out.comment?.changeSetSummary ?? "";
+    expect(prose).toContain("uploaded file, unverified");
+    expect(prose).toContain("@mobile");
+    expect(prose).toContain("reviewer-entered URL, unverified");
+  });
+
   it("extends the untrusted-input notice to cover change-sets", () => {
     expect(UNTRUSTED_INPUT_NOTICE).toMatch(/change_set/i);
     expect(UNTRUSTED_INPUT_NOTICE.toLowerCase()).toContain("proposed");

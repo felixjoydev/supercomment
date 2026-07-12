@@ -25,7 +25,7 @@
  * ("Add element") control is intentionally gone (requirement G). Original,
  * clean-room design; every listener is tracked and removed in {@link destroy}.
  */
-import type { ChangeOp, EditTarget, InsertionPoint } from "@supercomment/shared";
+import type { ChangeOp, DeviceSurface, EditTarget, InsertionPoint } from "@supercomment/shared";
 
 import {
   applyStyleVerified,
@@ -65,10 +65,23 @@ import {
   rgbaToHex6,
   rgbaToHex8,
   rgbaToCss,
+  canonicalColor,
   type ColorProbe,
 } from "./color/normalize.js";
 import { ColorPicker } from "./color/picker.js";
 import { extractPalette } from "./color/palette.js";
+import { buildTokenIndex, matchToken, type TokenDecl } from "./tokens.js";
+import { opKey } from "./op-key.js";
+import { Gesture, type Point } from "./interact/gesture.js";
+
+/** Pointer px moved per value-step while scrubbing a numeric label (U16). */
+const SCRUB_PX_PER_STEP = 4;
+
+/** A pointer event → a gesture Point (viewport coords). */
+function pointOf(e: unknown): Point {
+  const ev = e as { clientX?: number; clientY?: number };
+  return { x: ev.clientX ?? 0, y: ev.clientY ?? 0 };
+}
 
 /** How the controller records edits into (and drives) its history engine (U3). */
 export interface PanelCallbacks {
@@ -131,7 +144,12 @@ export interface PanelCallbacks {
    */
   onSwapImageFile?(dataUrl: string): void;
   /** U6: an element was hidden — its pre-hide rect, so the controller can ghost the slot (U4). */
-  onElementHidden?(rect: { x: number; y: number; width: number; height: number }): void;
+  onElementHidden?(info: {
+    el: Element;
+    rect: { x: number; y: number; width: number; height: number };
+    /** The hide edit's history key, so the controller can restore it later. */
+    key: string;
+  }): void;
   /**
    * U8: the font-picker catalog + loader environment (catalog fetch from our
    * origin + Google font loading). Null / absent → the picker runs offline,
@@ -163,6 +181,19 @@ export interface PanelCallbacks {
   colorRecents?(): string[];
   /** U10: a color was committed; the controller records it into its recents. */
   onColorPicked?(hex8: string): void;
+  /** U12: open a history gesture so a resize drag's records coalesce to one step. */
+  beginGesture?(): void;
+  /** U12: commit the history gesture opened by {@link beginGesture}. */
+  commitGesture?(): void;
+  /**
+   * U14: the device surface these edits are tagged to. Non-"web" surfaces stamp
+   * every recorded op's `responsive` field (opKey namespaces by breakpoint, so an
+   * edit made at mobile is a distinct op from the same edit at base) and render a
+   * surface chip. Absent / "web" → base edits, no tag, no chip.
+   */
+  surface?: DeviceSurface;
+  /** U14: the surface chip label (e.g. "Mobile · 375px"); shown when non-base. */
+  surfaceLabel?: string;
 }
 
 /** A minimal listener target (both DOM `EventTarget`s and the test doubles). */
@@ -343,6 +374,14 @@ export class PropertiesPanel {
 
     const left = this.create("div", "sc-ep-header-left");
     left.append(handle, tag);
+    // U14: a device-surface chip so the reviewer always knows their edits are
+    // tagged to this breakpoint (only shown off the base "web" surface).
+    if (this.surfaceTag()) {
+      const chip = this.create("div", "sc-ep-surface-chip");
+      chip.textContent = `Editing ${this.cb.surfaceLabel ?? this.surfaceTag()}`;
+      chip.setAttribute("aria-label", `Editing on ${this.surfaceTag()}`);
+      left.append(chip);
+    }
     header.append(left, close);
     this.root.appendChild(header);
   }
@@ -668,8 +707,9 @@ export class PropertiesPanel {
       initial: this.currentColorCss(property),
       palette: extractPalette(this.doc, { probe: this.colorProbe }),
       recents: this.cb.colorRecents?.() ?? [],
-      onChange: (css) => {
-        this.recordStyle(property, css);
+      matchToken: (css) => this.matchColorToken(css),
+      onChange: (css, valueToken) => {
+        this.recordStyle(property, css, valueToken ? { valueToken } : {});
         this.refreshColorButton(property);
       },
       onClose: () => {
@@ -872,9 +912,9 @@ export class PropertiesPanel {
 
   private recordHide(): void {
     const op = buildSetVisibilityOp(this.target, true);
-    // Ghost the vacated slot (U4) using the rect captured BEFORE the element
-    // collapses to display:none.
-    this.cb.onElementHidden?.(this.rectOf());
+    // Capture the rect BEFORE the element collapses to display:none — it anchors
+    // the clickable "Show" placeholder the reviewer uses to un-hide (recovery).
+    const rect = this.rectOf();
     const priorDisplay = previewHide(this.el); // apply now (author clicked)
     const dom: EditDom = {
       apply: () => {
@@ -884,6 +924,7 @@ export class PropertiesPanel {
       revertToBuild: () => previewShow(this.el, priorDisplay),
     };
     this.cb.record(op, dom);
+    this.cb.onElementHidden?.({ el: this.el, rect, key: opKey(op) });
     this.refreshCount();
   }
 
@@ -1006,7 +1047,13 @@ export class PropertiesPanel {
 
   // --- Recording -----------------------------------------------------------
 
-  private recordStyle(property: string, after: string): void {
+  /** U14: the responsive tag for the current surface, or undefined at base ("web"). */
+  private surfaceTag(): DeviceSurface | undefined {
+    const s = this.cb.surface;
+    return s && s !== "web" ? s : undefined;
+  }
+
+  private recordStyle(property: string, after: string, opts: { valueToken?: string } = {}): void {
     const before = this.beforeFor(property);
     const revertToBuild = this.revertFor(property); // first-write-wins build snapshot
     const prevSnap = readInlineSnapshot(this.el, property); // state before THIS write
@@ -1024,11 +1071,46 @@ export class PropertiesPanel {
       revertToBuild,
     };
     this.cb.record(
-      buildStyleOp({ target: this.target, property, before, after, previewUnavailable }),
+      buildStyleOp({
+        target: this.target,
+        property,
+        before,
+        after,
+        previewUnavailable,
+        ...(opts.valueToken ? { valueToken: opts.valueToken } : {}),
+        ...(this.surfaceTag() ? { responsive: this.surfaceTag() } : {}),
+      }),
       dom,
     );
     this.markDegraded(property, previewUnavailable);
     this.refreshCount();
+  }
+
+  // --- Design tokens (U11) --------------------------------------------------
+
+  /** The page's custom-property index, built lazily on first color pick. */
+  private tokenIndex: TokenDecl[] | null = null;
+
+  /** Match a color value to a page design token resolved ON this element, or null. */
+  private matchColorToken(css: string): string | null {
+    this.tokenIndex ??= buildTokenIndex(this.doc);
+    if (this.tokenIndex.length === 0) return null;
+    return matchToken(this.tokenIndex, css, {
+      normalize: (v) => canonicalColor(v, this.colorProbe),
+      resolveOnElement: (name) => this.resolveCustomProp(name),
+    });
+  }
+
+  /** The element-scoped resolved value of a custom property (theme-correct). */
+  private resolveCustomProp(name: string): string {
+    try {
+      const win = this.doc.defaultView as
+        | { getComputedStyle?: (e: Element) => { getPropertyValue?: (p: string) => string } }
+        | undefined;
+      return win?.getComputedStyle?.(this.el)?.getPropertyValue?.(name)?.trim() ?? "";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -1161,6 +1243,7 @@ export class PropertiesPanel {
       after: sel.css,
       previewUnavailable: pu,
       font,
+      ...(this.surfaceTag() ? { responsive: this.surfaceTag() } : {}),
     });
     this.cb.record(op, dom);
     this.markDegraded(property, pu);
@@ -1241,6 +1324,9 @@ export class PropertiesPanel {
     );
     wrap.append(input, stepper);
     row.append(lab, wrap);
+    // U16: the label is a horizontal scrub handle (drag to adjust, Shift = coarse),
+    // committing one history entry per scrub via the U12 gesture core.
+    this.enableScrub(lab, input, step, allowNegative, commit);
 
     this.initializers.push(() => {
       input.value = meta.displayFrom(readComputedValue(this.el, property), this.dirCtx());
@@ -1357,6 +1443,78 @@ export class PropertiesPanel {
     commit(input.value);
   }
 
+  /** Make a numeric row's LABEL a drag-to-scrub handle (U16). */
+  private enableScrub(
+    label: HTMLElement,
+    input: HTMLInputElement,
+    step: number,
+    allowNegative: boolean,
+    commit: (raw: string) => void,
+  ): void {
+    label.classList?.add?.("sc-ep-scrub");
+    this.on(label, "pointerdown", (e) =>
+      this.beginScrub(e as PointerEvent, input, step, allowNegative, commit),
+    );
+  }
+
+  /**
+   * Drive a value scrub from a label press: each pointer-px past the activation
+   * distance nudges the value by `step` (Shift = 10x), all coalesced into ONE
+   * history entry (begin/commitGesture). Document listeners are attached per scrub
+   * and removed on release, so nothing leaks.
+   */
+  private beginScrub(
+    e: PointerEvent,
+    input: HTMLInputElement,
+    step: number,
+    allowNegative: boolean,
+    commit: (raw: string) => void,
+  ): void {
+    const startVal = parseFloat(input.value) || 0;
+    const doc = this.doc as unknown as {
+      addEventListener?: (t: string, cb: (e: unknown) => void) => void;
+      removeEventListener?: (t: string, cb: (e: unknown) => void) => void;
+    };
+    let shift = false;
+    let onMove: ((ev: unknown) => void) | null = null;
+    let onUp: ((ev: unknown) => void) | null = null;
+    const detach = (): void => {
+      if (onMove) doc.removeEventListener?.("pointermove", onMove);
+      if (onUp) doc.removeEventListener?.("pointerup", onUp);
+    };
+    const gesture = new Gesture(
+      {
+        onStart: () => this.cb.beginGesture?.(),
+        onMove: (_p, delta) => {
+          const per = shift ? step * 10 : step;
+          const steps = Math.round(delta.x / SCRUB_PX_PER_STEP);
+          let next = startVal + steps * per;
+          if (!allowNegative && next < 0) next = 0;
+          next = Math.round(next * 1000) / 1000;
+          input.value = String(next);
+          commit(input.value);
+        },
+        onCommit: () => this.cb.commitGesture?.(),
+      },
+      { activationDistance: 3 },
+    );
+    (e as { preventDefault?: () => void }).preventDefault?.();
+    onMove = (ev) => {
+      shift = !!(ev as { shiftKey?: boolean }).shiftKey;
+      gesture.move(pointOf(ev));
+    };
+    onUp = (ev) => {
+      gesture.up(pointOf(ev));
+      detach();
+    };
+    doc.addEventListener?.("pointermove", onMove);
+    doc.addEventListener?.("pointerup", onUp);
+    (e.target as { setPointerCapture?: (id: number) => void } | null)?.setPointerCapture?.(
+      (e as { pointerId?: number }).pointerId ?? 0,
+    );
+    gesture.down(pointOf(e));
+  }
+
   /**
    * A layout edit (align/justify/gap/direction) implies the element is a flex
    * container. Record `display: flex` too so the change-set is coherent; when the
@@ -1401,6 +1559,57 @@ export class PropertiesPanel {
   /** Re-read every control from the live DOM and refresh the footer (post undo/redo). */
   resync(): void {
     this.syncControls();
+    this.refreshCount();
+  }
+
+  /**
+   * U12: record a committed drag-resize (explicit px width + height) as ONE undo
+   * step. The inspector owns the live gesture + preview and restores the
+   * pre-gesture inline before calling this, so recordStyle re-applies from the
+   * developer build; the gesture wrapper coalesces both records into one step.
+   */
+  applyResize(width: number, height: number): void {
+    this.cb.beginGesture?.();
+    this.recordStyle("width", `${width}px`);
+    this.recordStyle("height", `${height}px`);
+    this.cb.commitGesture?.();
+    this.syncControls();
+  }
+
+  /**
+   * U13: record a committed drag-reorder as a `moveNode` (the same anchored op the
+   * Arrange buttons produce). The inspector resolves the drop slot to a reference
+   * sibling + before/after + true DOM indices; this moves the node in the DOM
+   * (ephemeral preview) and records the intent, no-op-guarded so a drop where the
+   * element already sits records nothing.
+   */
+  applyReorder(c: {
+    from: number;
+    to: number;
+    referenceIndex: number;
+    position: "before" | "after";
+  }): void {
+    const parent = this.el.parentElement;
+    if (!parent) return;
+    const reference = parent.children[c.referenceIndex] ?? null;
+    if (!reference || reference === this.el || c.referenceIndex === c.from) return;
+    // Already adjacent on the requested side (true-index) → no move to record.
+    if (c.position === "before" && c.referenceIndex === c.from + 1) return;
+    if (c.position === "after" && c.referenceIndex === c.from - 1) return;
+    const insertion: InsertionPoint = {
+      parent: buildEditTarget(parent, this.doc),
+      reference: buildEditTarget(reference, this.doc),
+      position: c.position,
+    };
+    const revert = previewMove(this.el, reference, c.position);
+    const dom: EditDom = {
+      apply: () => {
+        previewMove(this.el, reference, c.position);
+      },
+      invert: revert,
+      revertToBuild: revert,
+    };
+    this.cb.record(buildMoveOp(this.target, insertion, c.from, c.to), dom);
     this.refreshCount();
   }
 

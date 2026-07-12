@@ -95,6 +95,9 @@ function makeController(opts?: {
   agentPromptWriter?: AgentPromptWriter;
   currentUser?: { displayName: string; role: string };
   threadClient?: unknown;
+  deviceChild?: boolean;
+  surface?: OverlayConfig["surface"];
+  onChildActivity?: () => void;
 }) {
   const { doc, win } = makeFakeDom();
   const submitter = opts?.submitter ?? new StubSubmitter();
@@ -103,6 +106,9 @@ function makeController(opts?: {
     previewKey: "preview-a",
     capturer: opts?.capturer ?? new StubCapturer(),
     submitter,
+    ...(opts?.deviceChild ? { deviceChild: true } : {}),
+    ...(opts?.surface ? { surface: opts.surface } : {}),
+    ...(opts?.onChildActivity ? { onChildActivity: opts.onChildActivity } : {}),
     ...(opts?.uploader ? { uploader: opts.uploader } : {}),
     ...(opts?.readFile ? { readFile: opts.readFile } : {}),
     ...(opts?.onExit ? { onExit: opts.onExit } : {}),
@@ -726,6 +732,43 @@ describe("OverlayController — template submit (U13)", () => {
     expect(q(".sc-marker.sc-template")).not.toBeNull();
   });
 
+  it("measures the pin from the element's BUILD box (reverts edits first) so a geometry-changing edit's pin appears instantly, not off-screen", async () => {
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({ submitter });
+    const el = hostEl(doc, "h1", "Hero");
+
+    // Simulate a geometry-changing edit (e.g. a big font-size): while the edit
+    // buffer is applied THIS element measures as a huge box far down the document;
+    // once reset to build it measures at its small box near the top. The optimistic
+    // pin must be measured AFTER the revert — otherwise it anchors to the enlarged
+    // box, lands off-screen, and renders only as an easy-to-miss `.sc-edge` dot
+    // (the "no pin appears until refresh" bug). Opacity-only edits didn't move the
+    // box, which is why only those pins showed instantly.
+    setRectProvider((e) => {
+      if (e === el) {
+        return controller.editSession.isEmpty()
+          ? makeRect(20, 30, 120, 40) // build box (reverted) — on-screen
+          : makeRect(20, 5000, 120, 900); // enlarged edited box — far off-screen
+      }
+      const r = e.getAttribute("data-rect");
+      if (r) {
+        const [x, y, w, h] = r.split(",").map(Number) as [number, number, number, number];
+        return makeRect(x, y, w, h);
+      }
+      return makeRect(0, 0, 10, 10);
+    });
+
+    editAndOpenTemplateForm(controller, el, q);
+    q("textarea")!.value = "Bigger hero";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // A real on-element template pin renders (an off-screen marker would instead
+    // be a `.sc-edge` indicator, so this would be null).
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    expect(q(".sc-edge")).toBeNull();
+  });
+
   it("does NOT absorb the buffer into an ordinary comment made mid-edit", async () => {
     const submitter = new StubSubmitter();
     const { controller, doc, q } = makeController({ submitter });
@@ -819,6 +862,31 @@ describe("OverlayController — template submit (U13)", () => {
     expect(shot).not.toBe("data:image/png;base64,AAAA");
     // ...but the before-artifact is NOT lost — it falls back to the DOM snapshot.
     expect(shot?.startsWith("data:application/json")).toBe(true);
+  });
+});
+
+describe("OverlayController — device-mode surface (U14)", () => {
+  it("a device-mode child forwards its activity to the parent keepalive", () => {
+    let activity = 0;
+    const { q } = makeController({
+      deviceChild: true,
+      surface: "mobile",
+      onChildActivity: () => {
+        activity += 1;
+      },
+    });
+    q(".sc-layer")!.dispatch("pointerdown", {});
+    expect(activity).toBe(1);
+  });
+
+  it("tags a child-surface edit as responsive:mobile through the panel", () => {
+    const { controller, doc, q } = makeController({ deviceChild: true, surface: "mobile" });
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("edit");
+    controller.handleEditClick(el as unknown as Element);
+    q(".sc-ep-ctl-font-size")!.value = "48";
+    q(".sc-ep-ctl-font-size")!.dispatch("input", {});
+    expect(controller.editSession.list()[0]!.responsive).toBe("mobile");
   });
 });
 
@@ -1005,6 +1073,65 @@ describe("OverlayController — live comment sync", () => {
     controller.scheduleLiveRefresh();
     await new Promise((r) => setTimeout(r, 320));
     expect(calls).toBe(1);
+    controller.destroy();
+  });
+
+  function templateReviewComment(number: number): ReviewComment {
+    return {
+      ...reviewComment(number),
+      note: "Make the hero heading bigger",
+      context: {
+        boundingBox: { x: 100, y: 100, width: 80, height: 24 },
+        changeSet: {
+          ops: [
+            {
+              opId: "o1",
+              type: "setStyle",
+              target: { selector: "h1", anchors: [] },
+              property: "font-size",
+              before: "16px",
+              after: "64px",
+            },
+          ],
+        },
+      } as unknown as ReviewComment["context"],
+    };
+  }
+
+  it("a live re-read that echoes the reviewer's own just-submitted template back must not drop its optimistic pin", async () => {
+    const { doc } = makeFakeDom();
+    const controller = new OverlayController({
+      previewId: "11111111-1111-4111-8111-111111111111",
+      previewKey: "preview-a",
+      capturer: new StubCapturer(),
+      submitter: new StubSubmitter(), // first submit → number 1
+      loadComments: async () => [templateReviewComment(1)],
+      doc: doc as unknown as Document,
+      storage: memoryStorage({ "supercomment:guest-name:preview-a": "Alex" }),
+    });
+    const shadow = () => doc.getElementById(HOST_ELEMENT_ID)!.shadowRoot!;
+    const q = (sel: string) => shadow().querySelector(sel);
+    const markerCount = () => shadow().querySelectorAll(".sc-marker").length;
+
+    // 1) The reviewer posts the template → the optimistic pin appears instantly.
+    const el = hostEl(doc, "h1", "Hero");
+    editAndOpenTemplateForm(controller, el, q as unknown as (s: string) => FakeElement | null);
+    q("textarea")!.value = "Make the hero heading bigger";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(markerCount()).toBe(1);
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    // The reviewer's own comment is registered in the tracked set immediately,
+    // so a re-read reconciles it in place instead of re-adding it.
+    expect(controller.loadedCommentCount).toBe(1);
+
+    // 2) The broadcast/poll echoes the SAME comment back — the pin must survive
+    // (reconciled as an UPDATE, not dropped or doubled), and stay a template.
+    await controller.reloadComments();
+    expect(markerCount()).toBe(1);
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    expect(controller.loadedCommentCount).toBe(1);
+
     controller.destroy();
   });
 });

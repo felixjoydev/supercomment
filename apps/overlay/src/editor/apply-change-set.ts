@@ -22,7 +22,14 @@ import type { ChangeOp, EditTarget, VisualChangeSet } from "@supercomment/shared
 import { isInsertableTag, isSafeAttr } from "@supercomment/shared";
 
 import { resolveAnchors } from "../capture/reanchor.js";
-import { applyStylePreview, applyTextPreview } from "./style-edits.js";
+import {
+  applyStylePreview,
+  applyStyleVerified,
+  applyTextPreview,
+  readInlineSnapshot,
+  restoreInlineSnapshot,
+} from "./style-edits.js";
+import { basicProbe, type ColorProbe } from "./color/normalize.js";
 import {
   isReapplicableMediaSrc,
   previewHide,
@@ -57,6 +64,12 @@ export interface ApplyOptions {
   pageCommit?: string;
   /** Resolve an op target to a live element; defaults to the reanchor resolver. */
   resolve?: (target: EditTarget, doc: Document) => Element | null;
+  /**
+   * Colour probe for the verified re-apply's canonical comparison (setStyle
+   * escalation). Defaults to {@link basicProbe} (string-only) — the controller
+   * passes a canvas-backed probe so colour ops compare faithfully.
+   */
+  probe?: ColorProbe;
 }
 
 /** The per-op outcome of a re-apply, for the applied/skipped summary (R9). */
@@ -154,7 +167,7 @@ export function applyChangeSet(
       results.push({ opId: op.opId, type: op.type, applied: false, reason: "unresolved" });
       continue;
     }
-    const binding = bindOp(op, el, doc, resolve);
+    const binding = bindOp(op, el, doc, resolve, options.probe ?? basicProbe);
     if (!binding) {
       skipped++;
       results.push({ opId: op.opId, type: op.type, applied: false, reason: "inapplicable" });
@@ -203,6 +216,7 @@ function bindOp(
   el: Element,
   doc: Document,
   resolve: (target: EditTarget, doc: Document) => Element | null,
+  probe: ColorProbe,
 ): OpBinding | null {
   const style = (el as HTMLElement).style as
     | (CSSStyleDeclaration & {
@@ -215,11 +229,18 @@ function bindOp(
     case "setStyle": {
       const prop = op.property;
       if (!prop || op.after == null) return null;
-      const prev = style?.getPropertyValue?.(prop) ?? "";
+      // Re-apply with the SAME `!important` escalation the editor used (U2). A
+      // plain inline write loses to a site `!important` / high-specificity rule,
+      // so a font-size / text-align / italic edit that only took at edit time
+      // via escalation would silently no-op here (the "some changes don't preview"
+      // bug). Snapshot the full inline declaration (value + priority) so revert
+      // restores it byte-exact.
+      const snap = readInlineSnapshot(el, prop);
       return {
-        apply: () => applyStylePreview(el, prop, op.after as string),
-        revert: () =>
-          prev ? applyStylePreview(el, prop, prev) : style?.removeProperty?.(prop),
+        apply: () => {
+          applyStyleVerified(el, prop, op.after as string, { probe });
+        },
+        revert: () => restoreInlineSnapshot(el, prop, snap),
       };
     }
     case "setText": {

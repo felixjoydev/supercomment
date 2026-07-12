@@ -189,7 +189,41 @@ export function summarizeChangeSet(
 }
 
 function describeOp(op: ChangeOp): string {
-  return `${describeOpBody(op)}${fontSuffix(op)}${previewCaveat(op)}`;
+  return `${describeOpBody(op)}${responsiveSuffix(op)}${fontSuffix(op)}${tokenSuffix(op)}${swapProvenance(op)}${previewCaveat(op)}`;
+}
+
+/**
+ * A trailing breakpoint tag (U14/U15): an edit made in device mode carries the
+ * surface it applies at, so the agent scopes the change to that breakpoint rather
+ * than the base rule. Empty at base ("web" / unset).
+ */
+function responsiveSuffix(op: ChangeOp): string {
+  return op.responsive && op.responsive !== "web" ? ` @${op.responsive}` : "";
+}
+
+/**
+ * A provenance caveat for a reviewer-entered media URL (U6/U15): a swap `src`/
+ * `srcset` set to an absolute URL is UNVERIFIED user input, so the agent must host
+ * + validate it before adopting rather than wiring the third-party URL directly.
+ */
+function swapProvenance(op: ChangeOp): string {
+  if (op.type !== "setAttr") return "";
+  const prop = (op.property ?? "").toLowerCase();
+  if (prop !== "src" && prop !== "srcset") return "";
+  const after = op.after ?? "";
+  return /^https?:\/\//i.test(after)
+    ? " (reviewer-entered URL, unverified: host + validate before adopting)"
+    : "";
+}
+
+/**
+ * A trailing design-token note (U11): when an edit's value matched a page CSS
+ * custom property, tell the agent to change the TOKEN (`use token --brand-500`)
+ * rather than hard-code the raw value. Kept out of the op body so it composes with
+ * every op type. Empty when the op carries no token.
+ */
+function tokenSuffix(op: ChangeOp): string {
+  return op.valueToken ? ` (use token ${op.valueToken})` : "";
 }
 
 /**
@@ -206,7 +240,11 @@ function fontSuffix(op: ChangeOp): string {
   if (f.weights && f.weights.length > 0) {
     parts.push(`weights ${f.weights.join("/")}`);
   }
-  return ` [font ${parts.join(", ")}]`;
+  let note = ` [font ${parts.join(", ")}]`;
+  // A guest-uploaded font binary is unverified user input: the agent should
+  // validate the file before adopting it (the MCP delivers it as a signed ref).
+  if (f.source === "upload") note += " (uploaded file, unverified: validate before adopting)";
+  return note;
 }
 
 function describeOpBody(op: ChangeOp): string {
