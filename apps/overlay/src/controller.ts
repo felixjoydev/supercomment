@@ -825,6 +825,18 @@ export class OverlayController {
       return;
     }
 
+    // The edits are now saved as a comment (R7): reset the history to the
+    // developer build (U3) BEFORE we measure the pin's box. A geometry-changing
+    // edit (font-size, etc.) leaves the element enlarged while its previews are
+    // applied, so measuring here would anchor the pin to the EDITED box — after
+    // the revert below the element is back to its build size and the pin would
+    // sit off the element (often off-screen), invisible until a refresh
+    // re-anchored it. Opacity and other non-geometry edits didn't move the box,
+    // which is why only those pins showed instantly. Reverting first makes the
+    // measured box match what the reviewer sees post-save. (The change-set +
+    // screenshot were already captured above, so the reset loses nothing.)
+    if (changeSet) this.restoreToBuild();
+
     // Store in DOCUMENT space (element box, or the drawn region for area/text)
     // so the pin tracks the page as it scrolls.
     const markerRect = element
@@ -874,10 +886,8 @@ export class OverlayController {
     // top-level) and notify the parent (if this is the device-iframe child).
     this.bumpSurfaceCount(this.surface);
     this.config.onCommentSubmitted?.(this.surface);
-    // The edits are now saved as a comment (R7): reset the history to the
-    // developer build (U3 — the modified state is captured in the comment's
-    // screenshot + change-set, so the live DOM resets; non-undoable).
-    if (changeSet) this.restoreToBuild();
+    // (restoreToBuild ran above, before the pin was measured, so the pin anchors
+    // to the element's build box rather than the still-enlarged edited box.)
 
     // U5 (R1-R3/R6): a member may have typed a private prompt for the agent
     // while editing. Gated on `changeSet` (a TEMPLATE comment, i.e. this really

@@ -732,6 +732,43 @@ describe("OverlayController — template submit (U13)", () => {
     expect(q(".sc-marker.sc-template")).not.toBeNull();
   });
 
+  it("measures the pin from the element's BUILD box (reverts edits first) so a geometry-changing edit's pin appears instantly, not off-screen", async () => {
+    const submitter = new StubSubmitter();
+    const { controller, doc, q } = makeController({ submitter });
+    const el = hostEl(doc, "h1", "Hero");
+
+    // Simulate a geometry-changing edit (e.g. a big font-size): while the edit
+    // buffer is applied THIS element measures as a huge box far down the document;
+    // once reset to build it measures at its small box near the top. The optimistic
+    // pin must be measured AFTER the revert — otherwise it anchors to the enlarged
+    // box, lands off-screen, and renders only as an easy-to-miss `.sc-edge` dot
+    // (the "no pin appears until refresh" bug). Opacity-only edits didn't move the
+    // box, which is why only those pins showed instantly.
+    setRectProvider((e) => {
+      if (e === el) {
+        return controller.editSession.isEmpty()
+          ? makeRect(20, 30, 120, 40) // build box (reverted) — on-screen
+          : makeRect(20, 5000, 120, 900); // enlarged edited box — far off-screen
+      }
+      const r = e.getAttribute("data-rect");
+      if (r) {
+        const [x, y, w, h] = r.split(",").map(Number) as [number, number, number, number];
+        return makeRect(x, y, w, h);
+      }
+      return makeRect(0, 0, 10, 10);
+    });
+
+    editAndOpenTemplateForm(controller, el, q);
+    q("textarea")!.value = "Bigger hero";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // A real on-element template pin renders (an off-screen marker would instead
+    // be a `.sc-edge` indicator, so this would be null).
+    expect(q(".sc-marker.sc-template")).not.toBeNull();
+    expect(q(".sc-edge")).toBeNull();
+  });
+
   it("does NOT absorb the buffer into an ordinary comment made mid-edit", async () => {
     const submitter = new StubSubmitter();
     const { controller, doc, q } = makeController({ submitter });
