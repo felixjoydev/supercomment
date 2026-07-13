@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   DndContext,
@@ -12,6 +13,8 @@ import {
   useDraggable,
   useDroppable,
   closestCorners,
+  pointerWithin,
+  type CollisionDetection,
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core';
@@ -26,6 +29,22 @@ const spring = { type: 'spring', duration: 0.4, bounce: 0.15 } as const;
 /** The board columns, in pipeline order. Dismissed is NOT a column (§7/§11). */
 type BoardColumn = 'backlog' | 'ready_for_agent' | 'in_review' | 'done';
 const COLUMNS: BoardColumn[] = ['backlog', 'ready_for_agent', 'in_review', 'done'];
+
+/**
+ * Collision detection keyed off the POINTER, not the dragged card's rect.
+ *
+ * With a DragOverlay, `closestCorners` resolves against the source card's
+ * translated rect, which (for these tall, full-column droppables) can stay
+ * "closest" to the column the drag STARTED in — so dropping onto Backlog kept
+ * highlighting Ready for agent and the card could not move back. The pointer is
+ * the intuitive, correct reference for large column targets: whichever column
+ * the cursor is inside is the drop target. `closestCorners` remains the
+ * fallback for the KeyboardSensor, which has no pointer (pointerWithin → []).
+ */
+const boardCollision: CollisionDetection = (args) => {
+  const byPointer = pointerWithin(args);
+  return byPointer.length > 0 ? byPointer : closestCorners(args);
+};
 
 /**
  * Whether the current member may DROP a card into a column (§4 permission
@@ -191,7 +210,7 @@ export function CommentBoardKanban({
     <>
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={boardCollision}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onDragCancel={() => setActiveId(null)}
@@ -208,13 +227,28 @@ export function CommentBoardKanban({
           ))}
         </div>
 
-        <DragOverlay dropAnimation={{ duration: 220, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
-          {activeComment ? (
-            <div className="kanban-card is-overlay">
-              <KanbanCardContent comment={activeComment} />
-            </div>
-          ) : null}
-        </DragOverlay>
+        {/*
+         * The DragOverlay is `position: fixed`, so it is positioned against its
+         * containing block. A parent StaggerItem rests at `filter: blur(0px)`
+         * (its reveal animation's end state), and ANY non-`none` filter makes
+         * that ancestor the containing block instead of the viewport — which
+         * offset the overlay AND corrupted dnd-kit's collision transform (wrong
+         * column highlighted, could not drop back to Backlog). Portaling the
+         * overlay to <body> escapes every such ancestor; React context (the
+         * DndContext) is preserved through the portal.
+         */}
+        {typeof document !== 'undefined'
+          ? createPortal(
+              <DragOverlay dropAnimation={{ duration: 220, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
+                {activeComment ? (
+                  <div className="kanban-card is-overlay">
+                    <KanbanCardContent comment={activeComment} />
+                  </div>
+                ) : null}
+              </DragOverlay>,
+              document.body,
+            )
+          : null}
       </DndContext>
 
       <AnimatePresence>
@@ -291,17 +325,22 @@ function DraggableCard({ comment }: { comment: CommentView }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: comment.id,
   });
+  // Plain <article>, NOT motion.article with `layout`. framer-motion's layout
+  // animation drives reflow with a CSS transform; a card still mid-animation
+  // when a drag begins would hand dnd-kit a transformed rect and skew its
+  // measurement. Dropping the reflow animation keeps the draggable's rect exact
+  // for the duration of a drag. (The large offset the board originally showed
+  // came from a `filter`-induced containing block on an ancestor, fixed by
+  // portaling the DragOverlay to <body>; this is a separate, defensive change.)
   return (
-    <motion.article
-      layout
-      transition={spring}
+    <article
       ref={setNodeRef}
       className={isDragging ? 'kanban-card is-dragging' : 'kanban-card'}
       {...listeners}
       {...attributes}
     >
       <KanbanCardContent comment={comment} />
-    </motion.article>
+    </article>
   );
 }
 
