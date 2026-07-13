@@ -145,6 +145,49 @@ describe("PropertiesPanel — contextual sections (requirement A + user note)", 
     expect(parent.querySelector(".sc-ep-cross")).toBeNull();
   });
 
+  it("does NOT offer box-effects (radius/border/shadow) on plain text, but keeps opacity", () => {
+    const { doc } = makeFakeDom();
+    const { parent } = mount({ el: makeEl(doc, "h2", "Heading"), doc });
+    expect(parent.querySelector(".sc-ep-ctl-border-radius")).toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-border-width")).toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-box-shadow")).toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-opacity")).not.toBeNull(); // opacity applies to any element
+  });
+
+  it("offers box-effects on a button (inherently a box) though it is text-category", () => {
+    const { doc } = makeFakeDom();
+    const { parent } = mount({ el: makeEl(doc, "button", "Buy"), doc });
+    expect(parent.querySelector(".sc-ep-ctl-border-radius")).not.toBeNull();
+    expect(parent.querySelector(".sc-ep-ctl-font-size")).not.toBeNull(); // still gets Type (it has a label)
+  });
+
+  it("offers box-effects on a text element that PAINTS a box (a badge with a background)", () => {
+    const { doc } = makeFakeDom();
+    (doc.defaultView as unknown as { getComputedStyle: (e: Element) => unknown }).getComputedStyle =
+      () => ({
+        backgroundColor: "rgb(0, 0, 255)",
+        backgroundImage: "none",
+        overflow: "visible",
+        getPropertyValue: () => "",
+      });
+    const { parent } = mount({ el: makeEl(doc, "span", "New"), doc });
+    expect(parent.querySelector(".sc-ep-ctl-border-radius")).not.toBeNull();
+  });
+
+  it("hides box-effects on a text element whose background is fully transparent", () => {
+    const { doc } = makeFakeDom();
+    (doc.defaultView as unknown as { getComputedStyle: (e: Element) => unknown }).getComputedStyle =
+      () => ({
+        backgroundColor: "rgba(0, 0, 0, 0)",
+        backgroundImage: "none",
+        overflow: "visible",
+        getPropertyValue: (p: string) =>
+          p.endsWith("width") ? "0px" : p.startsWith("border-") ? "none" : "visible",
+      });
+    const { parent } = mount({ el: makeEl(doc, "span", "plain"), doc });
+    expect(parent.querySelector(".sc-ep-ctl-border-radius")).toBeNull();
+  });
+
   it("a CONTAINER element shows Layout/Spacing/Size/Position/Colour, not Type", () => {
     const { doc } = makeFakeDom();
     const { parent } = mount({ el: makeEl(doc, "div", "box"), doc });
@@ -613,6 +656,25 @@ describe("PropertiesPanel — Arrange (functional reorder, requirement F)", () =
     const { el } = withSiblings(doc2, "div");
     const withArrange = mount({ el, doc: doc2 });
     expect(withArrange.maybe(".sc-ep-move-up")).not.toBeNull();
+  });
+
+  it("hides Arrange when the only siblings are out-of-flow / not displayed", () => {
+    const { doc } = makeFakeDom();
+    const { el, parent: box } = withSiblings(doc, "div"); // el = middle of 3
+    const others = Array.from(box.children).filter((c) => c !== el);
+    // Both other siblings are display:none → nothing in-flow to reorder against.
+    (doc.defaultView as unknown as { getComputedStyle: (e: Element) => unknown }).getComputedStyle =
+      (e: Element) => ({
+        getPropertyValue: (p: string) => {
+          if (p === "position") return "static";
+          if (p === "display") {
+            return others.includes(e as unknown as FakeElement) ? "none" : "block";
+          }
+          return "";
+        },
+      });
+    const out = mount({ el, doc });
+    expect(out.maybe(".sc-ep-move-up")).toBeNull();
   });
 
   it("records a moveNode with a parent anchor, reference neighbour, and before/after", () => {

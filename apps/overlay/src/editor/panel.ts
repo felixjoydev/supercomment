@@ -231,6 +231,64 @@ function categoryOf(el: Element): Category {
   return "other";
 }
 
+/** Text-category tags that are inherently boxes (a button wants corner radius). */
+const BOX_TEXT_TAGS = new Set(["button", "summary"]);
+
+/**
+ * Whether the box-effects (border-radius / border / box-shadow) are meaningful
+ * for this element, so the panel only offers them where they'd actually do
+ * something (Felix: corner radius is noise on plain text). True for any
+ * structural (non-text) box, for inherently-boxy text (button/summary), and for
+ * a text element that actually PAINTS a box on the page — a background, a border,
+ * or a clipped overflow (e.g. a rounded badge or a styled link). A plain run of
+ * text (heading, paragraph, link) gets only its type + colour controls.
+ * Defensive: with no computed-style access (test doubles) a plain text element
+ * reads as no-box.
+ */
+function rendersAsBox(el: Element, category: Category, doc: Document): boolean {
+  if (category !== "text") return true; // structural boxes always
+  if (BOX_TEXT_TAGS.has((el.tagName || "").toLowerCase())) return true;
+  return paintsBoxComputed(el, doc);
+}
+
+/** True when the element's computed style paints a visible box (bg/border/clip). */
+function paintsBoxComputed(el: Element, doc: Document): boolean {
+  const win = doc.defaultView as
+    | { getComputedStyle?: (e: Element) => CSSStyleDeclaration }
+    | undefined;
+  const cs = win?.getComputedStyle?.(el);
+  if (!cs) return false; // no CSSOM (test doubles) → treat plain text as no-box
+  // A painted background: an image, or a colour with a non-zero alpha.
+  const bgImage = cs.backgroundImage ?? "";
+  if (bgImage && bgImage !== "none") return true;
+  const bg = cs.backgroundColor ?? "";
+  if (bg && bg !== "transparent" && !isTransparentColor(bg)) return true;
+  // A visible border on any side.
+  const hasBorder = (["top", "right", "bottom", "left"] as const).some((side) => {
+    const width = parseFloat(cs.getPropertyValue(`border-${side}-width`)) || 0;
+    const style = cs.getPropertyValue(`border-${side}-style`);
+    return width > 0 && style !== "" && style !== "none";
+  });
+  if (hasBorder) return true;
+  // A clipped overflow — radius rounds the clip even without a bg or border.
+  const clips = (v: string): boolean =>
+    v.includes("hidden") || v.includes("clip") || v.includes("scroll") || v.includes("auto");
+  return (
+    clips(cs.overflow ?? "") ||
+    clips(cs.getPropertyValue("overflow-x") ?? "") ||
+    clips(cs.getPropertyValue("overflow-y") ?? "")
+  );
+}
+
+/** Whether a CSS colour string is fully transparent (`transparent` or alpha 0). */
+function isTransparentColor(color: string): boolean {
+  if (color === "transparent") return true;
+  const m = /rgba?\(([^)]+)\)/.exec(color);
+  if (!m?.[1]) return false;
+  const parts = m[1].split(",").map((s) => s.trim());
+  return parts.length >= 4 && parseFloat(parts[3]!) === 0;
+}
+
 /** The control matrix (R6): which sections render for each element kind. */
 interface SectionMatrix {
   type: boolean;
@@ -318,8 +376,10 @@ export class PropertiesPanel {
     if (m.size) this.buildSizeSection();
     if (m.position) this.buildPositionSection();
     if (m.colour) this.buildColourSection(m.colour);
-    this.buildEffectsSection(); // radius / border / shadow — applies to any box (R13)
-    this.buildArrangeSection();
+    // Opacity is offered on every element; the box-effects (radius/border/shadow)
+    // only where they'd render — not on plain text (R6/R13).
+    this.buildEffectsSection(rendersAsBox(el, this.category, doc));
+    this.buildArrangeSection(); // self-gates on having in-flow siblings to reorder
     this.buildVisibilitySection();
     this.buildFooter();
 
@@ -752,12 +812,16 @@ export class PropertiesPanel {
 
   // --- Effects (radius / border / shadow) — R13/U18 ------------------------
 
-  private buildEffectsSection(): void {
+  private buildEffectsSection(includeBoxEffects: boolean): void {
     const body = this.section("Effects");
 
     // U10: element opacity is its OWN control (distinct from a color's alpha),
-    // and applies to any element, so it lives here rather than in Colour.
+    // and applies to ANY element, so it lives here rather than in Colour.
     body.appendChild(this.opacityRow());
+
+    // The box-effects below (radius / border / shadow) only render where the
+    // element actually paints a box — skip them on plain text (Felix, R6/R13).
+    if (!includeBoxEffects) return;
 
     // Border radius: uniform, plus an expand-to-per-corner mode.
     body.appendChild(this.numberRow("Radius", "border-radius", { unit: "px" }));
@@ -941,10 +1005,34 @@ export class PropertiesPanel {
 
   // --- Arrange (functional reorder, requirement F) -------------------------
 
-  private buildArrangeSection(): void {
+  /**
+   * True when the element has at least one in-flow sibling to reorder around.
+   * Mirrors the drag-reorder grip's eligibility (out-of-flow / undisplayed
+   * siblings are not reorder targets); DOM-order based, so it needs no rects.
+   */
+  private hasMovableSiblings(): boolean {
     const parent = this.el.parentElement;
-    const siblings = parent ? Array.from(parent.children) : [];
-    if (siblings.length < 2) return; // nothing to reorder → contextual hide
+    if (!parent) return false;
+    const win = this.doc.defaultView as
+      | { getComputedStyle?: (e: Element) => { getPropertyValue?: (p: string) => string } }
+      | undefined;
+    const read = (child: Element, prop: string): string =>
+      (win?.getComputedStyle?.(child)?.getPropertyValue?.(prop) ?? "").toLowerCase();
+    return Array.from(parent.children).some((child) => {
+      if (child === this.el) return false;
+      const pos = read(child, "position") || "static";
+      if (pos === "absolute" || pos === "fixed") return false;
+      const disp = read(child, "display") || "block";
+      return disp !== "none" && disp !== "contents";
+    });
+  }
+
+  private buildArrangeSection(): void {
+    // Only offer Arrange when there is an in-flow sibling to move around — an
+    // element alone in its parent, or whose only siblings are out-of-flow
+    // (absolute/fixed) or not rendered (display:none/contents), has nothing to
+    // reorder against (Felix: keep the controls contextual).
+    if (!this.hasMovableSiblings()) return;
 
     const body = this.section("Arrange");
     const actions = this.create("div", "sc-ep-arrange");
