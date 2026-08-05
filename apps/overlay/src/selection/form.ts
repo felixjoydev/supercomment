@@ -27,7 +27,12 @@ export interface CommentFormOptions {
 }
 
 export interface CommentFormCallbacks {
-  onSubmit(draft: CommentDraft): void;
+  /**
+   * Runs the submission. MUST resolve only once the attempt is finished (saved,
+   * rejected, or deferred to a modal) — the form keeps the button in its
+   * "Sending…" state for exactly as long as this promise is pending.
+   */
+  onSubmit(draft: CommentDraft): void | Promise<void>;
   onCancel(): void;
 }
 
@@ -39,6 +44,8 @@ export class CommentForm {
   private severity: Severity = "important";
   private flippedAbove = false;
   private destroyed = false;
+  /** True while an `onSubmit` attempt is in flight (see {@link trySubmit}). */
+  private submitting = false;
 
   /** Reference-image data URLs the reviewer attached (uploaded out-of-band at submit, U17). */
   private readonly referenceDataUrls: string[] = [];
@@ -94,7 +101,7 @@ export class CommentForm {
     this.submitBtn.className = "sc-btn-primary";
     this.submitBtn.textContent = "Comment";
     this.submitBtn.disabled = true;
-    this.submitBtn.addEventListener("click", () => this.trySubmit());
+    this.submitBtn.addEventListener("click", () => void this.trySubmit());
 
     actions.append(cancel, this.submitBtn);
 
@@ -232,13 +239,41 @@ export class CommentForm {
     else this.el.remove();
   }
 
-  private trySubmit(): void {
+  /**
+   * Submit, at most once at a time.
+   *
+   * The controller's submit chain (capture → element raster → Storage upload →
+   * RPC) takes SECONDS on a real page. The button used to stay enabled and the
+   * form stayed open for that whole window with no feedback, so a reviewer who
+   * saw nothing happen pressed again — and every press ran a fresh submit,
+   * creating duplicate comments. The in-flight flag makes extra presses no-ops
+   * and the "Sending…" label makes the wait legible.
+   */
+  private async trySubmit(): Promise<void> {
+    if (this.submitting || this.destroyed) return;
     const draft = this.getDraft();
     if (draft.note.trim().length === 0) return;
-    this.callbacks.onSubmit(draft);
+    this.setSubmitting(true);
+    try {
+      await this.callbacks.onSubmit(draft);
+    } finally {
+      // A saved comment destroys the form; only a rejected or deferred attempt
+      // (a guest identity modal opened over it) gets the button back.
+      if (!this.destroyed) this.setSubmitting(false);
+    }
+  }
+
+  /** Toggle the pending state on the primary button. */
+  private setSubmitting(active: boolean): void {
+    this.submitting = active;
+    this.submitBtn.textContent = active ? "Sending…" : "Comment";
+    if (active) this.submitBtn.disabled = true;
+    else this.syncSubmitState();
   }
 
   private syncSubmitState(): void {
+    // Never re-enable mid-flight: `input` still fires while a submit is running.
+    if (this.submitting) return;
     this.submitBtn.disabled = this.textarea.value.trim().length === 0;
   }
 

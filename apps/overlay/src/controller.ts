@@ -692,29 +692,35 @@ export class OverlayController {
     if (opts.seedNote) this.form.setNote(opts.seedNote);
   }
 
-  private handleSubmit(
+  /**
+   * Awaited by {@link CommentForm}, which keeps its button in the "Sending…"
+   * state until this settles — so it must resolve on EVERY exit, including the
+   * two deferred-to-a-modal paths (the modal is the reviewer's next step, and
+   * the button has to come back for when they finish or dismiss it).
+   */
+  private async handleSubmit(
     target: SelectionTarget,
     draft: CommentDraft,
     asTemplate = false,
     enqueueToAgent = false,
-  ): void {
+  ): Promise<void> {
     // Guests give an (unverified) email once, before their first comment, so
     // per-viewer unread + "pages I commented on" key to it (0036/U11). Members skip.
     if (this.isGuest() && !this.guestEmailStore.has()) {
-      this.promptForEmail(() =>
-        this.handleSubmit(target, draft, asTemplate, enqueueToAgent),
-      );
+      this.promptForEmail(() => {
+        void this.handleSubmit(target, draft, asTemplate, enqueueToAgent);
+      });
       return;
     }
     if (!this.guestStore.has()) {
       // Defer the submission until a name is provided (the pending target/draft
       // are captured by the callback closure below).
-      this.promptForName(() =>
-        this.completeSubmit(target, draft, asTemplate, enqueueToAgent),
-      );
+      this.promptForName(() => {
+        void this.completeSubmit(target, draft, asTemplate, enqueueToAgent);
+      });
       return;
     }
-    void this.completeSubmit(target, draft, asTemplate, enqueueToAgent);
+    await this.completeSubmit(target, draft, asTemplate, enqueueToAgent);
   }
 
   private async completeSubmit(
@@ -862,6 +868,13 @@ export class OverlayController {
         : {}),
     };
     this.markers.add({ number: result.number, rect: markerRect, content: markerContent });
+
+    // Always acknowledge the save. A fresh pin is its own confirmation ONLY
+    // when it lands on its own — near existing comments it silently folds into
+    // a cluster badge (6 → 7 on a pin that was already there), which reads as
+    // "nothing happened" and is exactly what drove reviewers to press Comment
+    // again and duplicate the comment.
+    this.showDeviceNotice(`Comment #${result.number} added.`);
 
     // Register the reviewer's OWN comment in the tracked set immediately. The
     // overlay was write-only about its own pins: the just-submitted comment lived
@@ -1048,7 +1061,17 @@ export class OverlayController {
           this.dismissModal();
           if (onDone) onDone();
         },
-        onCancel: () => this.dismissModal(),
+        // Same silent-drop fix as the email modal, but only when a submission
+        // was actually waiting on the name (`onDone`). A bare "change name"
+        // from the toolbar chip has nothing pending, so it stays quiet.
+        onCancel: () => {
+          this.dismissModal();
+          if (onDone) {
+            this.showDeviceNotice(
+              "Add your name to post this comment. Your note is still here.",
+            );
+          }
+        },
       },
       this.guestStore.get() ?? "",
     );
@@ -1087,7 +1110,16 @@ export class OverlayController {
           void this.config.captureGuestEmail?.(email);
           onDone();
         },
-        onCancel: () => this.dismissModal(),
+        // Dismissing used to swallow the press outright: the modal closed, the
+        // pending comment was dropped, nothing was recorded — so the next press
+        // re-opened the same modal, forever, with no explanation. Say why the
+        // comment did not go out; the draft is still sitting in the open form.
+        onCancel: () => {
+          this.dismissModal();
+          this.showDeviceNotice(
+            "Add your email to post this comment. Your note is still here.",
+          );
+        },
       },
       this.guestEmailStore.get() ?? "",
     );

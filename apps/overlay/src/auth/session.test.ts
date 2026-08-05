@@ -466,6 +466,36 @@ describe("getTurnstileToken (U4, injected DOM seams)", () => {
     expect(token).toBe("tok-123");
   });
 
+  it("renders with a valid appearance and never the rejected `size` value", async () => {
+    // REGRESSION: we used to pass `size: "invisible"`. Turnstile only accepts
+    // "normal" | "flexible" | "compact" and THROWS on anything else, so every
+    // activation logged a TurnstileError and no token was ever produced (the
+    // exchange silently ran unverified). There was also a follow-up execute()
+    // against a widget never rendered in execute mode.
+    const { doc } = fakeDoc();
+    let params: Record<string, unknown> | undefined;
+    const turnstile = {
+      render: (_c: unknown, p: Record<string, unknown>) => {
+        params = p;
+        (p.callback as (t: string) => void)("tok-ok");
+      },
+      execute: () => {
+        throw new Error("execute() must not be called");
+      },
+    };
+    const token = await call({
+      siteKey: "site",
+      doc,
+      win: fakeWin(turnstile),
+      loadScript: async () => {},
+    });
+
+    expect(token).toBe("tok-ok");
+    expect(params).toBeDefined();
+    expect(params).not.toHaveProperty("size");
+    expect(params?.appearance).toBe("interaction-only");
+  });
+
   it("resolves null when the turnstile global never appears after load", async () => {
     const { doc } = fakeDoc();
     expect(

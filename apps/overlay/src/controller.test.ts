@@ -813,6 +813,62 @@ describe("OverlayController — template submit (U13)", () => {
     expect(controller.editSession.size).toBe(1);
   });
 
+  it("confirms a saved comment even when its pin folds into a cluster", async () => {
+    // A new pin is only self-evident when it lands alone; next to existing
+    // comments it merges into a cluster badge, which reads as "nothing
+    // happened" and is what drove reviewers to press Comment again.
+    const { controller, doc, q, shadow } = makeController();
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    q("textarea")!.value = "Tighten this heading";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    const notice = shadow().querySelector(".sc-device-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain("#1");
+    expect(q(".sc-form")).toBeNull(); // and the form closed
+  });
+
+  it("tells a guest why dismissing the email modal did not post the comment", async () => {
+    // REGRESSION: `onCancel` used to just close the modal. The pending comment
+    // was dropped and nothing was recorded, so the next press re-opened the
+    // same modal with no explanation — Comment looked permanently broken.
+    const submitter = new StubSubmitter();
+    const { controller, doc, q, shadow } = makeController({
+      submitter,
+      currentUser: { displayName: "Gus", role: "guest" },
+    });
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    q("textarea")!.value = "Guest note";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // The email modal is up and nothing has been submitted yet.
+    expect(shadow().querySelector(".sc-modal")).not.toBeNull();
+    expect(submitter.payloads).toHaveLength(0);
+
+    // "Not now" -> explain, keep the draft, and leave the button usable.
+    const secondaries = shadow().querySelectorAll(".sc-btn-secondary");
+    secondaries[secondaries.length - 1]!.dispatch("click", {});
+    await flush();
+
+    const notice = shadow().querySelector(".sc-device-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent.toLowerCase()).toContain("email");
+    expect(q(".sc-form")).not.toBeNull();
+    expect(q(".sc-btn-primary")!.disabled).toBe(false);
+    expect(q(".sc-btn-primary")!.textContent).toBe("Comment");
+
+    // A second press re-opens the modal rather than doing nothing at all.
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+    expect(shadow().querySelector(".sc-modal")).not.toBeNull();
+  });
+
   it("uploads a real image screenshot out-of-band and stores the ref (U13/U7)", async () => {
     const uploaded: string[] = [];
     const uploader: ScreenshotUploader = {

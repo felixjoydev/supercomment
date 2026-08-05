@@ -13,7 +13,12 @@
 /** The subset of the Turnstile render API we use. */
 interface TurnstileRenderParams {
   sitekey: string;
-  size?: string;
+  /**
+   * How visible the widget is. NOT the same thing as `size`, which only accepts
+   * "normal" | "flexible" | "compact" — passing anything else (we used to pass
+   * "invisible") makes Turnstile throw a TurnstileError and never solve.
+   */
+  appearance?: "always" | "execute" | "interaction-only";
   callback?: (token: string) => void;
   "error-callback"?: () => void;
   "timeout-callback"?: () => void;
@@ -21,7 +26,6 @@ interface TurnstileRenderParams {
 
 interface TurnstileApi {
   render(container: unknown, params: TurnstileRenderParams): string | undefined;
-  execute?(container: unknown, params?: { sitekey?: string }): void;
 }
 
 /** Minimal window surface (injectable) so timers + the global are testable. */
@@ -98,21 +102,22 @@ export async function getTurnstileToken(
       container = doc.createElement("div");
       container.style.display = "none";
       doc.body.appendChild(container);
+      // REAL-ENV FIX: we used to pass `size: "invisible"` plus a follow-up
+      // execute(). Turnstile rejects that `size` value outright ("expected
+      // compact, flexible, or normal"), so every activation threw a
+      // TurnstileError, the widget never solved, and the only exit was the
+      // timeout below — i.e. NO token was ever produced and the exchange always
+      // ran unverified. The execute() call then targeted a widget that was
+      // never rendered in execute mode, logging "already executing" / "cannot
+      // find widget". `appearance: "interaction-only"` is the supported way to
+      // keep the widget out of sight unless Cloudflare genuinely needs input.
       turnstile.render(container, {
         sitekey: siteKey,
-        size: "invisible",
+        appearance: "interaction-only",
         callback: (token) => finish(token || null),
         "error-callback": () => finish(null),
         "timeout-callback": () => finish(null),
       });
-      // Some invisible configurations require an explicit execute().
-      if (typeof turnstile.execute === "function") {
-        try {
-          turnstile.execute(container, { sitekey: siteKey });
-        } catch {
-          // render's callback path still applies; ignore execute errors.
-        }
-      }
     } catch {
       finish(null);
     }

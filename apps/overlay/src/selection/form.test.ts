@@ -9,7 +9,10 @@ const flush = (): Promise<void> =>
 
 const OK_READER: FileReaderFn = async () => "data:image/png;base64,AAAA";
 
-function mountForm(readFile: FileReaderFn = OK_READER) {
+function mountForm(
+  readFile: FileReaderFn = OK_READER,
+  onSubmitImpl?: (draft: unknown) => void | Promise<void>,
+) {
   const { doc } = makeFakeDom();
   const parent = doc.createElement("div");
   const submits: unknown[] = [];
@@ -17,7 +20,13 @@ function mountForm(readFile: FileReaderFn = OK_READER) {
     doc as unknown as Document,
     parent as unknown as HTMLElement,
     makeRect(0, 0, 10, 10),
-    { onSubmit: (d) => submits.push(d), onCancel: () => {} },
+    {
+      onSubmit: (d) => {
+        submits.push(d);
+        return onSubmitImpl?.(d);
+      },
+      onCancel: () => {},
+    },
     { readFile },
   );
   const q = (sel: string): FakeElement => {
@@ -74,6 +83,66 @@ describe("CommentForm — reference images (U17/R19)", () => {
     textarea.value = "Comment without the failed image";
     textarea.dispatch("input", {});
     parent.querySelectorAll(".sc-btn-primary")[0]!.dispatch("click", {});
+    expect(submits.length).toBe(1);
+  });
+
+  it("submits once for a burst of clicks and marks the button pending", async () => {
+    // A real submit is capture -> raster -> upload -> RPC, i.e. seconds long.
+    // Every click used to start its own, so an impatient reviewer created
+    // duplicate comments. Hold the promise open and hammer the button.
+    let release: (() => void) | undefined;
+    const inFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { parent, submits } = mountForm(OK_READER, () => inFlight);
+
+    const textarea = parent.querySelector("textarea")!;
+    textarea.value = "Only once, please";
+    textarea.dispatch("input", {});
+
+    const btn = parent.querySelectorAll(".sc-btn-primary")[0]!;
+    btn.dispatch("click", {});
+    btn.dispatch("click", {});
+    btn.dispatch("click", {});
+    await flush();
+
+    expect(submits.length).toBe(1);
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toBe("Sending…");
+
+    release?.();
+    await flush();
+
+    // Settled without the form being destroyed (a rejection or a modal): the
+    // reviewer gets the button back so they can retry.
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toBe("Comment");
+
+    btn.dispatch("click", {});
+    await flush();
+    expect(submits.length).toBe(2);
+  });
+
+  it("stays pending even if the note is edited mid-flight", async () => {
+    const inFlight = new Promise<void>(() => {
+      /* never settles */
+    });
+    const { parent, submits } = mountForm(OK_READER, () => inFlight);
+
+    const textarea = parent.querySelector("textarea")!;
+    textarea.value = "first";
+    textarea.dispatch("input", {});
+    const btn = parent.querySelectorAll(".sc-btn-primary")[0]!;
+    btn.dispatch("click", {});
+    await flush();
+
+    // `input` re-runs syncSubmitState; it must not undo the pending state.
+    textarea.value = "first edited";
+    textarea.dispatch("input", {});
+    expect(btn.disabled).toBe(true);
+
+    btn.dispatch("click", {});
+    await flush();
     expect(submits.length).toBe(1);
   });
 
