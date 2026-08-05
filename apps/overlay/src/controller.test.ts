@@ -831,6 +831,40 @@ describe("OverlayController — template submit (U13)", () => {
     expect(q(".sc-form")).toBeNull(); // and the form closed
   });
 
+  it("does not double-submit when a press races the guest-modal continuation", async () => {
+    // REGRESSION (caught live, post-deploy): the form's own in-flight flag only
+    // covers presses through its button. The email modal's `onDone` re-enters
+    // the submit chain directly, so confirming the modal and then pressing
+    // Comment produced TWO comments. The guard belongs in the controller.
+    const submitter = new StubSubmitter();
+    const { controller, doc, q, shadow } = makeController({
+      submitter,
+      currentUser: { displayName: "Gus", role: "guest" },
+    });
+    const el = hostEl(doc, "h1", "Hero");
+    controller.changeMode("element");
+    controller.handleElementClick(el as unknown as Element);
+    q("textarea")!.value = "Guest note";
+    q(".sc-btn-primary")!.dispatch("click", {});
+    await flush();
+
+    // Confirm the email modal, which continues the deferred submit...
+    // (".sc-modal input", not "input" — the form's hidden file input comes first.)
+    const modalInput = shadow().querySelector(".sc-modal input")!;
+    modalInput.value = "gus@example.com";
+    modalInput.dispatch("input", {});
+    const primaries = shadow().querySelectorAll(".sc-btn-primary");
+    primaries[primaries.length - 1]!.dispatch("click", {});
+
+    // ...and hammer Comment while that submit is still running.
+    const formBtn = q(".sc-btn-primary")!;
+    formBtn.dispatch("click", {});
+    formBtn.dispatch("click", {});
+    await flush();
+
+    expect(submitter.payloads).toHaveLength(1);
+  });
+
   it("tells a guest why dismissing the email modal did not post the comment", async () => {
     // REGRESSION: `onCancel` used to just close the modal. The pending comment
     // was dropped and nothing was recorded, so the next press re-opened the

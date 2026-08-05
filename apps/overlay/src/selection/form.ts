@@ -263,8 +263,13 @@ export class CommentForm {
     }
   }
 
-  /** Toggle the pending state on the primary button. */
-  private setSubmitting(active: boolean): void {
+  /**
+   * Toggle the pending state on the primary button. Public because the
+   * controller owns the authoritative in-flight guard and drives this for
+   * submissions that did NOT start at this button (a guest identity modal
+   * confirming and continuing a deferred submit).
+   */
+  setSubmitting(active: boolean): void {
     this.submitting = active;
     this.submitBtn.textContent = active ? "Sending…" : "Comment";
     if (active) this.submitBtn.disabled = true;

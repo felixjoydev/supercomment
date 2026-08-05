@@ -26,6 +26,8 @@ interface TurnstileRenderParams {
 
 interface TurnstileApi {
   render(container: unknown, params: TurnstileRenderParams): string | undefined;
+  /** Tear a widget down by id, so removing its container doesn't orphan it. */
+  remove?(widgetId: string): void;
 }
 
 /** Minimal window surface (injectable) so timers + the global are testable. */
@@ -86,10 +88,20 @@ export async function getTurnstileToken(
   return new Promise<string | null>((resolve) => {
     let settled = false;
     let container: TurnstileElementLike | null = null;
+    let widgetId: string | undefined;
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
       win.clearTimeout(timer);
+      try {
+        // Tear the WIDGET down before its container, otherwise Turnstile keeps
+        // an internal reference and warns "Cannot find Widget ..." on cleanup.
+        if (widgetId && typeof turnstile.remove === "function") {
+          turnstile.remove(widgetId);
+        }
+      } catch {
+        // ignore widget cleanup failures
+      }
       try {
         container?.remove?.();
       } catch {
@@ -111,7 +123,7 @@ export async function getTurnstileToken(
       // never rendered in execute mode, logging "already executing" / "cannot
       // find widget". `appearance: "interaction-only"` is the supported way to
       // keep the widget out of sight unless Cloudflare genuinely needs input.
-      turnstile.render(container, {
+      widgetId = turnstile.render(container, {
         sitekey: siteKey,
         appearance: "interaction-only",
         callback: (token) => finish(token || null),

@@ -142,6 +142,8 @@ export class OverlayController {
   private readonly listeners = createListenerBag();
 
   private form: CommentForm | null = null;
+  /** Forms with a submission in flight (see {@link completeSubmit}). */
+  private readonly submittingForms = new Set<CommentForm>();
   private modal: GuestModal | null = null;
   private emailModal: GuestEmailModal | null = null;
   private pagesPopover: PageIndexPopover | null = null;
@@ -723,7 +725,50 @@ export class OverlayController {
     await this.completeSubmit(target, draft, asTemplate, enqueueToAgent);
   }
 
+  /**
+   * THE authoritative one-submit-at-a-time guard.
+   *
+   * CommentForm has its own in-flight flag, but it only covers presses that go
+   * through its button. The two guest-modal continuations re-enter here
+   * directly (`onDone` fires from the modal, outside any form callback), so a
+   * reviewer who confirmed the email modal and then pressed Comment while that
+   * submit was still running got TWO comments — which is most of the original
+   * duplicate bug. Guarding here covers every entry point, and drives the
+   * form's pending state so the button always agrees with reality.
+   *
+   * Scoped PER FORM, not globally: two different selections saving at once is
+   * legitimate (a slow save overlapping the next one — see the prompt-race
+   * tests), whereas two presses against the SAME open form is the bug.
+   */
   private async completeSubmit(
+    target: SelectionTarget,
+    draft: CommentDraft,
+    asTemplate = false,
+    enqueueToAgent = false,
+  ): Promise<void> {
+    const form = this.form;
+    if (form && this.submittingForms.has(form)) {
+      // Never silently drop it — a swallowed submit is the failure we're fixing.
+      this.showDeviceNotice("Still saving this comment. One moment.");
+      return;
+    }
+    if (form) {
+      this.submittingForms.add(form);
+      form.setSubmitting(true);
+    }
+    try {
+      await this.runSubmit(target, draft, asTemplate, enqueueToAgent);
+    } finally {
+      if (form) {
+        this.submittingForms.delete(form);
+        // A saved comment already destroyed the form (cancelSelection); this
+        // only matters on the rejected paths, where the button comes back.
+        form.setSubmitting(false);
+      }
+    }
+  }
+
+  private async runSubmit(
     target: SelectionTarget,
     draft: CommentDraft,
     asTemplate = false,
